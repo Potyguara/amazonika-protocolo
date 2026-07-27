@@ -1,0 +1,783 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  CLIENTE
+  ATENDENTE
+  GERENTE
+  PROGRAMADOR
+}
+
+enum ProtocolStatus {
+  NOVO
+  AGENDADO
+  REUNIAO_REALIZADA
+  PROPOSTA_ENVIADA
+  ACORDO_FECHADO
+  CONTRATO_ENVIADO
+  AGUARDANDO_ASSINATURA
+  CONTRATO_ASSINADO
+  EM_EXECUCAO
+  AGUARDANDO_DOCUMENTOS
+  AGUARDANDO_ORGAO_PUBLICO
+  FINALIZADO
+  CANCELADO
+}
+
+enum AppointmentStatus {
+  AGENDADO
+  REAGENDADO
+  REALIZADO
+  CLIENTE_NAO_COMPARECEU
+  CANCELADO
+}
+
+enum ContractStatus {
+  GERADO
+  ENVIADO
+  AGUARDANDO_ASSINATURA
+  ASSINADO
+  CANCELADO
+  SUBSTITUIDO
+}
+
+enum PaymentStatus {
+  PENDENTE
+  PAGO
+  ATRASADO
+  CANCELADO
+}
+
+enum BillingStatus {
+  RASCUNHO
+  AGUARDANDO_DOCUMENTO_FISCAL
+  PRONTA_PARA_EMISSAO
+  EMITIDA
+  ENVIADA
+  PAGA
+  VENCIDA
+  CANCELADA
+  ERRO
+}
+
+enum BillingProvider {
+  BANCO_DO_BRASIL
+  MANUAL
+}
+
+enum BillingChargeType {
+  ENTRADA
+  PARCELA
+  AVULSA
+}
+
+enum BillingFiscalMode {
+  NOTA_FISCAL_ANTES
+  RECIBO_POSTERIOR
+}
+
+enum FiscalDocumentType {
+  NOTA_FISCAL
+  RECIBO
+  COMPROVANTE
+  OUTRO
+}
+
+enum FiscalDocumentMoment {
+  PRE_COBRANCA
+  POS_PAGAMENTO
+}
+
+enum FiscalDocumentStatus {
+  ANEXADO
+  CANCELADO
+}
+
+enum PublicRequestStatus {
+  NOVA
+  EM_ANALISE
+  CONVERTIDA_EM_PROTOCOLO
+  DESCARTADA
+}
+
+enum ProposalStatus {
+  RASCUNHO
+  ENVIADA
+  ACEITA
+  RECUSADA
+  AJUSTE_SOLICITADO
+  EXPIRADA
+  CONVERTIDA_EM_CONTRATO
+  CANCELADA
+}
+
+enum ProposalPaymentMode {
+  A_VISTA
+  ENTRADA_PARCELAS
+  PARCELADO
+  PERSONALIZADO
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         UserRole
+  active       Boolean  @default(true)
+
+  lastLoginAt DateTime?
+  lastLoginIp String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  createdProtocols     Protocol[]    @relation("CreatedProtocols")
+  responsibleProtocols Protocol[]    @relation("ResponsibleProtocols")
+  managedAppointments  Appointment[] @relation("ManagerAppointments")
+
+  financialTransactionsCreated FinancialTransaction[] @relation("FinancialTransactionCreatedBy")
+  fixedCostsCreated            FixedCost[]            @relation("FixedCostCreatedBy")
+  employeeSalariesCreated      EmployeeSalary[]       @relation("EmployeeSalaryCreatedBy")
+
+  managementCashSettingsCreated ManagementCashSetting[] @relation("ManagementCashSettingCreatedBy")
+  proLaboreAdvancesCreated      ProLaboreAdvance[]      @relation("ProLaboreAdvanceCreatedBy")
+  managerProLaboreAdvances      ProLaboreAdvance[]      @relation("ManagerProLaboreAdvances")
+  proposalsCreated              Proposal[]              @relation("ProposalCreatedBy")
+  contractsCreated              Contract[]              @relation("ContractCreatedBy")
+  billingChargesCreated         BillingCharge[]         @relation("BillingChargeCreatedBy")
+  fiscalDocumentsCreated        FiscalDocument[]        @relation("FiscalDocumentCreatedBy")
+}
+
+model Client {
+  id         Int     @id @default(autoincrement())
+  name       String
+  personType String?
+  cpfCnpj    String?
+  phone      String?
+  whatsapp   String?
+  email      String?
+  address    String?
+  city       String?
+  state      String?
+  notes      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  protocols       Protocol[]
+  appointments    Appointment[]
+  documents       Document[]
+  contracts       Contract[]
+  payments        Payment[]
+  proposals       Proposal[]
+  billingCharges  BillingCharge[]
+  fiscalDocuments FiscalDocument[]
+}
+
+model ServiceType {
+  id          Int     @id @default(autoincrement())
+  name        String
+  description String?
+  active      Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  protocols      Protocol[]
+  publicRequests PublicRequest[]
+}
+
+model Protocol {
+  id                Int    @id @default(autoincrement())
+  protocolNumber    String @unique
+  clientId          Int
+  serviceTypeId     Int
+  createdByUserId   Int?
+  responsibleUserId Int?
+
+  status         ProtocolStatus @default(NOVO)
+  description    String?
+  priority       String?
+  estimatedValue Float?
+  finalValue     Float?
+  deadlineDate   DateTime?
+  closedAt       DateTime?
+  finishedAt     DateTime?
+  cancelReason   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client      Client      @relation(fields: [clientId], references: [id])
+  serviceType ServiceType @relation(fields: [serviceTypeId], references: [id])
+
+  createdByUser   User? @relation("CreatedProtocols", fields: [createdByUserId], references: [id])
+  responsibleUser User? @relation("ResponsibleProtocols", fields: [responsibleUserId], references: [id])
+
+  appointments Appointment[]
+  documents    Document[]
+  contracts    Contract[]
+  payments     Payment[]
+
+  financialTransactions FinancialTransaction[]
+  proposals             Proposal[]
+  proposalHistories     ProposalHistory[]
+  billingCharges        BillingCharge[]
+  fiscalDocuments       FiscalDocument[]
+}
+
+model Appointment {
+  id            Int  @id @default(autoincrement())
+  protocolId    Int
+  clientId      Int
+  managerUserId Int?
+
+  scheduledAt    DateTime
+  scheduledEndAt DateTime
+  timezone       String            @default("America/Belem")
+  meetingType    String?
+  location       String?
+  meetingLink    String?
+  status         AppointmentStatus @default(AGENDADO)
+  notes          String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  protocol Protocol @relation(fields: [protocolId], references: [id])
+  client   Client   @relation(fields: [clientId], references: [id])
+  manager  User?    @relation("ManagerAppointments", fields: [managerUserId], references: [id])
+}
+
+model Document {
+  id               Int     @id @default(autoincrement())
+  protocolId       Int?
+  clientId         Int?
+  uploadedByUserId Int?
+  documentType     String
+  fileName         String
+  filePath         String
+  mimeType         String?
+  size             Int?
+  notes            String?
+
+  createdAt DateTime @default(now())
+
+  protocol Protocol? @relation(fields: [protocolId], references: [id])
+  client   Client?   @relation(fields: [clientId], references: [id])
+}
+
+model Contract {
+  id Int @id @default(autoincrement())
+
+  protocolId  Int
+  clientId    Int
+  proposalId  Int?
+  createdById Int?
+
+  contractNumber String @unique
+  publicToken    String @unique
+
+  templateType String?
+  status       ContractStatus @default(GERADO)
+
+  contractValue Float?
+  entryAmount   Int?
+  paymentMode   String?
+
+  title           String?
+  objectText      String?
+  obligationsText String?
+  paymentText     String?
+  deadlineText    String?
+  legalText       String?
+
+  htmlSnapshot     String?
+  generatedPdfPath String?
+  signedPdfPath    String?
+
+  sentToClientAt DateTime?
+  signedAt       DateTime?
+
+  signerName      String?
+  signerCpfCnpj   String?
+  signerEmail     String?
+  signerIp        String?
+  signerUserAgent String?
+
+  startDate    DateTime?
+  deadlineDate DateTime?
+  notes        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  protocol  Protocol  @relation(fields: [protocolId], references: [id])
+  client    Client    @relation(fields: [clientId], references: [id])
+  proposal  Proposal? @relation(fields: [proposalId], references: [id])
+  createdBy User?     @relation("ContractCreatedBy", fields: [createdById], references: [id])
+
+  payments        Payment[]
+  billingCharges  BillingCharge[]
+  fiscalDocuments FiscalDocument[]
+}
+
+model BillingCharge {
+  id Int @id @default(autoincrement())
+
+  protocolId  Int
+  clientId    Int
+  contractId  Int?
+  createdById Int?
+
+  provider BillingProvider @default(BANCO_DO_BRASIL)
+  status   BillingStatus   @default(AGUARDANDO_DOCUMENTO_FISCAL)
+  chargeType BillingChargeType @default(ENTRADA)
+
+  fiscalMode BillingFiscalMode @default(NOTA_FISCAL_ANTES)
+
+  description String
+  amount      Int
+  dueDate     DateTime
+
+  installmentNumber Int?
+  totalInstallments Int?
+
+  externalId     String?
+  nossoNumero    String?
+  txid           String?
+  pixKey         String?
+  pixCopyPaste   String?
+  pixQrCode      String?
+  boletoUrl      String?
+  linhaDigitavel String?
+  barcode        String?
+
+  paidAt     DateTime?
+  paidAmount Int?
+
+  sentToClientAt DateTime?
+
+  rawRequest  String?
+  rawResponse String?
+  rawWebhook  String?
+
+  errorMessage String?
+  notes        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  protocol  Protocol  @relation(fields: [protocolId], references: [id])
+  client    Client    @relation(fields: [clientId], references: [id])
+  contract  Contract? @relation(fields: [contractId], references: [id])
+  createdBy User?     @relation("BillingChargeCreatedBy", fields: [createdById], references: [id])
+
+  fiscalDocuments FiscalDocument[]
+
+  @@index([protocolId])
+  @@index([clientId])
+  @@index([contractId])
+  @@index([status])
+  @@index([provider])
+  @@index([txid])
+  @@index([externalId])
+
+}
+
+model FiscalDocument {
+  id Int @id @default(autoincrement())
+
+  protocolId      Int
+  clientId        Int
+  contractId      Int?
+  billingChargeId Int?
+  createdById     Int?
+
+  type   FiscalDocumentType
+  moment FiscalDocumentMoment
+  status FiscalDocumentStatus @default(ANEXADO)
+
+  number   String?
+  issuedAt DateTime?
+  amount   Int?
+
+  fileName String
+  filePath String
+  mimeType String?
+  size     Int?
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  protocol      Protocol       @relation(fields: [protocolId], references: [id])
+  client        Client         @relation(fields: [clientId], references: [id])
+  contract      Contract?      @relation(fields: [contractId], references: [id])
+  billingCharge BillingCharge? @relation(fields: [billingChargeId], references: [id])
+  createdBy     User?          @relation("FiscalDocumentCreatedBy", fields: [createdById], references: [id])
+
+  @@index([protocolId])
+  @@index([clientId])
+  @@index([contractId])
+  @@index([billingChargeId])
+  @@index([type])
+  @@index([moment])
+}
+
+model Payment {
+  id                Int           @id @default(autoincrement())
+  contractId        Int?
+  protocolId        Int
+  clientId          Int
+  description       String
+  amount            Float
+  dueDate           DateTime
+  paidDate          DateTime?
+  status            PaymentStatus @default(PENDENTE)
+  paymentMethod     String?
+  installmentNumber Int?
+  totalInstallments Int?
+  notes             String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contract Contract? @relation(fields: [contractId], references: [id])
+  protocol Protocol  @relation(fields: [protocolId], references: [id])
+  client   Client    @relation(fields: [clientId], references: [id])
+
+  publicToken       String? @unique
+  provider          String?
+  providerEnv       String?
+  providerChargeId  String?
+  txid              String?
+  pixCopiaECola     String?
+  pixQrCode         String?
+  boletoLinhaDigitavel String?
+  boletoUrl         String?
+  fiscalDocumentId  Int?
+  fiscalMode        String?
+  providerRaw       String?
+  sentToClientAt    DateTime?
+}
+
+model PublicRequest {
+  id                  Int                 @id @default(autoincrement())
+  name                String
+  phone               String?
+  email               String?
+  serviceTypeId       Int?
+  message             String?
+  status              PublicRequestStatus @default(NOVA)
+  convertedToClient   Boolean             @default(false)
+  convertedToProtocol Boolean             @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  serviceType ServiceType? @relation(fields: [serviceTypeId], references: [id])
+}
+
+model NotificationLog {
+  id            Int       @id @default(autoincrement())
+  protocolId    Int?
+  appointmentId Int?
+  clientId      Int?
+  type          String
+  recipient     String
+  subject       String?
+  message       String?
+  status        String
+  sentAt        DateTime?
+  errorMessage  String?
+
+  createdAt DateTime @default(now())
+}
+
+model CompanySettings {
+  id          Int     @id @default(autoincrement())
+  companyName String  @default("AMAZONIKA Engenharia & Meio Ambiente")
+  systemName  String  @default("SIS Amazonika")
+  subtitle    String  @default("Gestão de Serviços Ambientais")
+  email       String?
+  alertEmail  String?
+  phone       String?
+  whatsapp    String?
+  address     String?
+  city        String?
+  state       String?
+  logoPath    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model AuditLog {
+  id          Int     @id @default(autoincrement())
+  userId      Int?
+  userName    String?
+  userEmail   String?
+  userRole    String?
+  action      String
+  entity      String?
+  entityId    String?
+  description String?
+  ipAddress   String?
+  metadata    String?
+
+  createdAt DateTime @default(now())
+}
+
+model SystemSetting {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     String?
+  group     String   @default("GENERAL")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model FinancialCategory {
+  id        Int                   @id @default(autoincrement())
+  name      String
+  type      FinancialCategoryType
+  color     String?
+  active    Boolean               @default(true)
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+
+  transactions FinancialTransaction[]
+  fixedCosts   FixedCost[]
+  salaries     EmployeeSalary[]
+
+  @@unique([name, type])
+}
+
+model FinancialTransaction {
+  id Int @id @default(autoincrement())
+
+  type   FinancialTransactionType
+  source FinancialTransactionSource
+  status FinancialTransactionStatus
+
+  description String
+  amount      Int
+
+  dueDate         DateTime?
+  paidAt          DateTime?
+  competenceMonth String?
+
+  clientName String?
+  notes      String?
+
+  protocolId Int?
+  protocol   Protocol? @relation(fields: [protocolId], references: [id])
+
+  categoryId Int?
+  category   FinancialCategory? @relation(fields: [categoryId], references: [id])
+
+  createdById Int?
+  createdBy   User? @relation("FinancialTransactionCreatedBy", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model EmployeeSalary {
+  id              Int     @id @default(autoincrement())
+  employeeName    String
+  roleDescription String?
+  amount          Int
+
+  categoryId Int?
+  category   FinancialCategory? @relation(fields: [categoryId], references: [id])
+
+  dueDay Int     @default(5)
+  active Boolean @default(true)
+
+  notes String?
+
+  createdById Int?
+  createdBy   User? @relation("EmployeeSalaryCreatedBy", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model FixedCost {
+  id          Int    @id @default(autoincrement())
+  description String
+  amount      Int
+
+  categoryId Int?
+  category   FinancialCategory? @relation(fields: [categoryId], references: [id])
+
+  dueDay Int
+  active Boolean @default(true)
+
+  notes String?
+
+  createdById Int?
+  createdBy   User? @relation("FixedCostCreatedBy", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum FinancialCategoryType {
+  RECEITA
+  DESPESA
+}
+
+enum FinancialTransactionType {
+  ENTRADA
+  SAIDA
+}
+
+enum FinancialTransactionSource {
+  CONTRATO
+  SERVICO_AVULSO
+  CUSTO_FIXO
+  SALARIO
+  IMPOSTO
+  TAXA
+  OUTRO
+}
+
+enum FinancialTransactionStatus {
+  PENDENTE
+  PAGO
+  CANCELADO
+}
+
+model ManagementCashSetting {
+  id              Int     @id @default(autoincrement())
+  competenceMonth String  @unique
+  cashPercent     Float   @default(10)
+  notes           String?
+
+  createdById Int?
+  createdBy   User? @relation("ManagementCashSettingCreatedBy", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ProLaboreAdvance {
+  id              Int    @id @default(autoincrement())
+  managerUserId   Int
+  competenceMonth String
+
+  amount      Int
+  paidAt      DateTime
+  description String?
+  notes       String?
+
+  createdById Int?
+  createdBy   User? @relation("ProLaboreAdvanceCreatedBy", fields: [createdById], references: [id])
+
+  manager User @relation("ManagerProLaboreAdvances", fields: [managerUserId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Proposal {
+  id             Int    @id @default(autoincrement())
+  proposalNumber String @unique
+
+  protocolId  Int
+  clientId    Int
+  createdById Int?
+
+  status ProposalStatus @default(RASCUNHO)
+
+  title          String
+  description    String?
+  technicalScope String?
+
+  paymentMode ProposalPaymentMode @default(ENTRADA_PARCELAS)
+
+  totalAmount       Int  @default(0)
+  entryAmount       Int  @default(0)
+  installmentQty    Int?
+  installmentAmount Int?
+
+  executionDays Int?
+  validUntil    DateTime?
+
+  sentAt                DateTime?
+  acceptedAt            DateTime?
+  refusedAt             DateTime?
+  adjustmentRequestedAt DateTime?
+
+  clientMessage String?
+  internalNotes String?
+
+  publicToken String @unique
+
+  rawSnapshot String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  protocol  Protocol @relation(fields: [protocolId], references: [id])
+  client    Client   @relation(fields: [clientId], references: [id])
+  createdBy User?    @relation("ProposalCreatedBy", fields: [createdById], references: [id])
+
+  items     ProposalItem[]
+  contracts Contract[]
+}
+
+model ProposalItem {
+  id Int @id @default(autoincrement())
+
+  proposalId Int
+
+  serviceName String
+  description String?
+  quantity    Int     @default(1)
+  unitAmount  Int
+  totalAmount Int
+
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  proposal Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+}
+
+model ProposalHistory {
+  id Int @id @default(autoincrement())
+
+  protocolId Int
+  proposalId Int?
+
+  eventType   String
+  title       String
+  description String?
+  recipient   String?
+  senderName  String?
+  senderEmail String?
+
+  metadata String?
+
+  createdById Int?
+  createdAt   DateTime @default(now())
+
+  protocol Protocol @relation(fields: [protocolId], references: [id])
+
+  @@index([protocolId])
+  @@index([proposalId])
+  @@index([eventType])
+}

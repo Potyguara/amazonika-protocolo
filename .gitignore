@@ -1,0 +1,47 @@
+# Node
+node_modules/
+
+# Builds
+dist/
+build/
+
+# Logs
+.devlogs/
+logs/
+
+# Ambiente
+.env
+.env.*
+!.env.example
+
+# Uploads
+uploads/
+backend/uploads/
+
+# macOS
+.DS_Store
+
+# VSCode
+.vscode/settings.json
+# Cloudflare
+.cloudflare/
+cloudflared/
+*.pem
+*.key
+*.crt
+*.json
+
+# Ambiente
+backend/.env
+backend/.env.*
+src/.env
+src/.env.*
+
+# SQLite
+*.db
+*.sqlite
+*.sqlite3
+
+# Uploads
+backend/uploads/**
+uploads/documents/**
