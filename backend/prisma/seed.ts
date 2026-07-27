@@ -120,7 +120,7 @@ async function main() {
   await prisma.companySettings.upsert({
     where: { id: 1 },
     update: {
-      companyName: "AMAZONIKA Engenharia & Meio Ambiente",
+      companyName: "AMAZONIKA Engenharia",
       systemName: "SIS Amazonika",
       subtitle: "Gestão de Serviços Ambientais",
       alertEmail: "amazonika.protocolo@xxxxx.com",
@@ -132,7 +132,7 @@ async function main() {
     },
     create: {
       id: 1,
-      companyName: "AMAZONIKA Engenharia & Meio Ambiente",
+      companyName: "AMAZONIKA Engenharia",
       systemName: "SIS Amazonika",
       subtitle: "Gestão de Serviços Ambientais",
       alertEmail: "amazonika.protocolo@xxxxx.com",
@@ -269,14 +269,23 @@ async function main() {
     });
   }
 
-  const smtpSettings = [
-    ["SMTP_HOST", "smtp.gmail.com", "SMTP"],
-    ["SMTP_PORT", "587", "SMTP"],
-    ["SMTP_USER", "pliniopotyguara@gmail.com", "SMTP"],
-    ["SMTP_FROM", "SIS Amazonika <pliniopotyguara@gmail.com>", "SMTP"],
-    ["SMTP_SECURE", "false", "SMTP"],
-    ["COMPANY_ALERT_EMAIL", "pliniopotyguara@gmail.com", "SMTP"],
-  ];
+const smtpSettings = [
+  ["SMTP_HOST", "smtp.hostinger.com", "SMTP"],
+  ["SMTP_PORT", "465", "SMTP"],
+  ["SMTP_USER", "amazonika@amazonikaengenharia.com.br", "SMTP"],
+  ["SMTP_PASS", "@m@zoniK@2026", "SMTP"],
+  [
+    "SMTP_FROM",
+    "SIS Amazonika <amazonika@amazonikaengenharia.com.br>",
+    "SMTP",
+  ],
+  ["SMTP_SECURE", "true", "SMTP"],
+  [
+    "COMPANY_ALERT_EMAIL",
+    "amazonika@amazonikaengenharia.com.br",
+    "SMTP",
+  ],
+];
 
   for (const [key, value, group] of smtpSettings) {
     await prisma.systemSetting.upsert({

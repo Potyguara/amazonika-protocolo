@@ -10600,17 +10600,17 @@ function SmtpSettingsPanel() {
 
   const [smtpHost, setSmtpHost] = useState("smtp.gmail.com");
   const [smtpPort, setSmtpPort] = useState("587");
-  const [smtpUser, setSmtpUser] = useState("pliniopotyguara@gmail.com");
+  const [smtpUser, setSmtpUser] = useState("amazonika@amazonikaengenharia.com.br");
   const [smtpPass, setSmtpPass] = useState("");
   const [smtpPassConfigured, setSmtpPassConfigured] = useState(false);
   const [smtpFrom, setSmtpFrom] = useState(
-    "SIS Amazonika <pliniopotyguara@gmail.com>"
+    "SIS Amazonika <amazonika@amazonikaengenharia.com.br>"
   );
   const [smtpSecure, setSmtpSecure] = useState(false);
   const [companyAlertEmail, setCompanyAlertEmail] = useState(
-    "pliniopotyguara@gmail.com"
+    "amazonika@amazonikaengenharia.com.br"
   );
-  const [testEmail, setTestEmail] = useState("pliniopotyguara@gmail.com");
+  const [testEmail, setTestEmail] = useState("amazonika@amazonikaengenharia.com.br");
 
   async function loadSmtp() {
     try {
@@ -10621,16 +10621,16 @@ function SmtpSettingsPanel() {
 
       setSmtpHost(data.smtpHost || "smtp.gmail.com");
       setSmtpPort(String(data.smtpPort || 587));
-      setSmtpUser(data.smtpUser || "pliniopotyguara@gmail.com");
+      setSmtpUser(data.smtpUser || "amazonika@amazonikaengenharia.com.br");
       setSmtpFrom(
-        data.smtpFrom || "SIS Amazonika <pliniopotyguara@gmail.com>"
+        data.smtpFrom || "SIS Amazonika <amazonika@amazonikaengenharia.com.br>"
       );
       setSmtpSecure(Boolean(data.smtpSecure));
       setCompanyAlertEmail(
-        data.companyAlertEmail || "pliniopotyguara@gmail.com"
+        data.companyAlertEmail || "amazonika@amazonikaengenharia.com.br"
       );
       setSmtpPassConfigured(Boolean(data.smtpPassConfigured));
-      setTestEmail(data.companyAlertEmail || "pliniopotyguara@gmail.com");
+      setTestEmail(data.companyAlertEmail || "amazonika@amazonikaengenharia.com.br");
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Erro ao carregar SMTP."
@@ -10768,7 +10768,7 @@ function SmtpSettingsPanel() {
             <input
               value={smtpUser}
               onChange={(event) => setSmtpUser(event.target.value)}
-              placeholder="pliniopotyguara@gmail.com"
+              placeholder="amazonika@amazonikaengenharia.com.br"
             />
           </label>
 
@@ -10791,7 +10791,7 @@ function SmtpSettingsPanel() {
             <input
               value={smtpFrom}
               onChange={(event) => setSmtpFrom(event.target.value)}
-              placeholder="SIS Amazonika <pliniopotyguara@gmail.com>"
+              placeholder="SIS Amazonika <amazonika@amazonikaengenharia.com.br>"
             />
           </label>
 
@@ -10800,7 +10800,7 @@ function SmtpSettingsPanel() {
             <input
               value={companyAlertEmail}
               onChange={(event) => setCompanyAlertEmail(event.target.value)}
-              placeholder="pliniopotyguara@gmail.com"
+              placeholder="amazonika@amazonikaengenharia.com.br"
             />
           </label>
 
@@ -10852,7 +10852,7 @@ function SmtpSettingsPanel() {
             <input
               value={testEmail}
               onChange={(event) => setTestEmail(event.target.value)}
-              placeholder="pliniopotyguara@gmail.com"
+              placeholder="amazonika@amazonikaengenharia.com.br"
             />
           </label>
 
