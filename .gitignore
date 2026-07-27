@@ -29,7 +29,6 @@ cloudflared/
 *.pem
 *.key
 *.crt
-*.json
 
 # Ambiente
 backend/.env
