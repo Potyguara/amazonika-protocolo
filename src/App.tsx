@@ -1,4 +1,5 @@
 import "./App.css";
+import PartnersFinanceTab from "./components/finance/PartnersFinanceTab";
 import { api, setAuth, clearAuth } from "./services/api";
 import {
   BarChart3,
@@ -8415,7 +8416,7 @@ function FinancePage() {
   const currentMonth = new Date().toISOString().slice(0, 7);
 
   const [activeTab, setActiveTab] = useState<
-    "OVERVIEW" | "TRANSACTIONS" | "FIXED_COSTS" | "SALARIES" | "CATEGORIES"
+    "OVERVIEW" | "TRANSACTIONS" | "FIXED_COSTS" | "SALARIES" | "CATEGORIES" | "PARTNERS"
   >("OVERVIEW");
 
   const [month, setMonth] = useState(currentMonth);
@@ -9036,9 +9037,20 @@ async function handleDeleteSalary(id: number) {
         >
           Categorias
         </button>
+
+        <button
+          className={activeTab === "PARTNERS" ? "active" : ""}
+          onClick={() => setActiveTab("PARTNERS")}
+        >
+          Parceiros
+        </button>
       </div>
 
       {loading && <div className="panel">Carregando financeiro...</div>}
+
+      {!loading && activeTab === "PARTNERS" && (
+        <PartnersFinanceTab />
+      )}
 
       {!loading && summary && activeTab === "OVERVIEW" && (
         <>

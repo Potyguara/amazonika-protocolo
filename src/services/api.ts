@@ -160,6 +160,7 @@ financeTransactions(params?: {
     | "SERVICO_AVULSO"
     | "CUSTO_FIXO"
     | "SALARIO"
+    | "COMISSAO_PARCEIRO"
     | "IMPOSTO"
     | "TAXA"
     | "OUTRO";
@@ -187,6 +188,7 @@ createFinanceTransaction(data: {
     | "SERVICO_AVULSO"
     | "CUSTO_FIXO"
     | "SALARIO"
+    | "COMISSAO_PARCEIRO"
     | "IMPOSTO"
     | "TAXA"
     | "OUTRO";
@@ -983,5 +985,70 @@ generateInstallmentCharges(
     body: JSON.stringify(data || {}),
   });
 },
+
+
+// ================================
+// PARCEIROS
+// ================================
+
+partners(includeInactive = false) {
+  const query = includeInactive
+    ? "?includeInactive=true"
+    : "";
+
+  return request(`/partners${query}`);
+},
+
+partnerRanking(
+  period: "all" | "month" | "last3months" | "year" | string = "all"
+) {
+  return request(
+    `/partners/ranking?period=${encodeURIComponent(period)}`
+  );
+},
+
+createPartner(data: {
+  name: string;
+  cpfCnpj?: string | null;
+  phone?: string | null;
+  whatsapp?: string | null;
+  email?: string | null;
+  pixKey?: string | null;
+  defaultPercent: number;
+  active?: boolean;
+  notes?: string | null;
+}) {
+  return request("/partners", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+},
+
+updatePartner(
+  id: number,
+  data: {
+    name: string;
+    cpfCnpj?: string | null;
+    phone?: string | null;
+    whatsapp?: string | null;
+    email?: string | null;
+    pixKey?: string | null;
+    defaultPercent: number;
+    active?: boolean;
+    notes?: string | null;
+  }
+) {
+  return request(`/partners/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+},
+
+togglePartnerActive(id: number) {
+  return request(`/partners/${id}/toggle-active`, {
+    method: "PATCH",
+  });
+},
+
 
 };
