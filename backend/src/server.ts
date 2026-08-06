@@ -11,6 +11,7 @@ import nodemailer from "nodemailer";
 import PDFDocument from "pdfkit";
 import crypto from "crypto";
 import { registerPartnerRoutes } from "./modules/partners/partners.routes";
+import { registerPartnerReferralRoutes } from "./modules/partners/partner-referrals.routes";
 
 
 import {
@@ -10513,6 +10514,13 @@ app.post(
 // ------------------------------------------------------
 
 registerPartnerRoutes({
+  app,
+  prisma,
+  authMiddleware,
+  requireRoles,
+});
+
+registerPartnerReferralRoutes({
   app,
   prisma,
   authMiddleware,

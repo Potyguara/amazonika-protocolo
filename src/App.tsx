@@ -1,4 +1,5 @@
 import "./App.css";
+import PartnerReferralPanel from "./components/partners/PartnerReferralPanel";
 import PartnersFinanceTab from "./components/finance/PartnersFinanceTab";
 import { api, setAuth, clearAuth } from "./services/api";
 import {
@@ -7886,6 +7887,14 @@ return (
 
 {!editing && (
   <>
+    <PartnerReferralPanel
+      protocol={protocol}
+      onReload={async () => {
+        await loadDetails();
+        setProposalHistoryRefreshKey((value) => value + 1);
+      }}
+    />
+
     <ProposalPanel
       protocol={protocol}
       onReload={async () => {

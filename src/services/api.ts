@@ -999,6 +999,38 @@ partners(includeInactive = false) {
   return request(`/partners${query}`);
 },
 
+
+partnerReferral(protocolId: number) {
+  return request(
+    `/protocols/${protocolId}/partner-referral`
+  );
+},
+
+savePartnerReferral(
+  protocolId: number,
+  data: {
+    partnerId: number;
+    percent?: number;
+  }
+) {
+  return request(
+    `/protocols/${protocolId}/partner-referral`,
+    {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }
+  );
+},
+
+removePartnerReferral(protocolId: number) {
+  return request(
+    `/protocols/${protocolId}/partner-referral`,
+    {
+      method: "DELETE",
+    }
+  );
+},
+
 partnerRanking(
   period: "all" | "month" | "last3months" | "year" | string = "all"
 ) {
