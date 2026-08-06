@@ -211,6 +211,7 @@ model Protocol {
   closedAt       DateTime?
   finishedAt     DateTime?
   cancelReason   String?
+  partnerCommissions PartnerCommission[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -287,6 +288,7 @@ model Contract {
 
   templateType String?
   status       ContractStatus @default(GERADO)
+  partnerCommissions PartnerCommission[]
 
   contractValue Float?
   entryAmount   Int?
@@ -648,6 +650,7 @@ enum FinancialTransactionSource {
   SERVICO_AVULSO
   CUSTO_FIXO
   SALARIO
+  COMISSAO_PARCEIRO
   IMPOSTO
   TAXA
   OUTRO
@@ -780,4 +783,68 @@ model ProposalHistory {
   @@index([protocolId])
   @@index([proposalId])
   @@index([eventType])
+}
+enum PartnerCommissionStatus {
+  PREVISTA
+  DISPONIVEL_PARA_PAGAMENTO
+  PAGA
+  CANCELADA
+}
+
+model Partner {
+  id Int @id @default(autoincrement())
+
+  name     String
+  cpfCnpj  String?
+  phone    String?
+  whatsapp String?
+  email    String?
+  pixKey   String?
+
+  defaultPercent Float
+  active         Boolean @default(true)
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  commissions PartnerCommission[]
+
+  @@index([name])
+  @@index([active])
+}
+
+model PartnerCommission {
+  id Int @id @default(autoincrement())
+
+  partnerId  Int
+  protocolId Int
+  contractId Int?
+
+  percent Float
+
+  // Valores sempre em centavos.
+  baseAmount       Int @default(0)
+  commissionAmount Int @default(0)
+
+  status PartnerCommissionStatus @default(PREVISTA)
+
+  dueDate DateTime?
+  paidAt  DateTime?
+
+  notes String?
+
+  partner  Partner   @relation(fields: [partnerId], references: [id])
+  protocol Protocol  @relation(fields: [protocolId], references: [id])
+  contract Contract? @relation(fields: [contractId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([partnerId, contractId])
+  @@index([partnerId])
+  @@index([protocolId])
+  @@index([contractId])
+  @@index([status])
 }

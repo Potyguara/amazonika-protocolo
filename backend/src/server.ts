@@ -10,6 +10,7 @@ import fs from "fs";
 import nodemailer from "nodemailer";
 import PDFDocument from "pdfkit";
 import crypto from "crypto";
+import { registerPartnerRoutes } from "./modules/partners/partners.routes";
 
 
 import {
@@ -10506,6 +10507,17 @@ app.post(
   }
 );
 
+
+// ------------------------------------------------------
+// MÓDULO DE PARCEIROS
+// ------------------------------------------------------
+
+registerPartnerRoutes({
+  app,
+  prisma,
+  authMiddleware,
+  requireRoles,
+});
 
 app.get("/health", (_req, res) => {
   return res.json({
