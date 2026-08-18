@@ -298,6 +298,33 @@ model User {
   billingChargesCreated         BillingCharge[]         @relation("BillingChargeCreatedBy")
   fiscalDocumentsCreated        FiscalDocument[]        @relation("FiscalDocumentCreatedBy")
   standaloneProposalsCreated    StandaloneProposal[]    @relation("StandaloneProposalCreatedBy")
+  passwordResetTokens           PasswordResetToken[]
+}
+
+model PasswordResetToken {
+  id Int @id @default(autoincrement())
+
+  userId Int
+
+  // Nunca armazenamos o token puro.
+  tokenHash String @unique
+
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  requestIp        String?
+  requestUserAgent String?
+
+  usedIp        String?
+  usedUserAgent String?
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([usedAt])
 }
 
 model Client {

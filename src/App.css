@@ -5582,3 +5582,491 @@ a {
     align-self: end;
   }
 }
+
+
+/* ==========================================================
+   LOGIN PRODUCAO 2026
+   ========================================================== */
+
+.amazonika-login-page {
+  min-height: 100vh;
+  min-height: 100svh;
+
+  position: relative;
+
+  background-image:
+    url("/hero/amazonia-bg.png");
+
+  background-repeat:
+    no-repeat;
+
+  background-size:
+    cover;
+
+  /*
+   * Mantém a copa/parte superior da fotografia visível.
+   * Evita o enquadramento excessivamente centralizado
+   * que cortava a imagem no topo.
+   */
+  background-position:
+    center 28%;
+
+  background-attachment:
+    fixed;
+}
+
+.amazonika-login-overlay {
+  position: absolute;
+  inset: 0;
+
+  background:
+    linear-gradient(
+      90deg,
+      rgba(5, 18, 12, .48) 0%,
+      rgba(5, 18, 12, .34) 44%,
+      rgba(5, 18, 12, .28) 100%
+    );
+}
+
+.amazonika-login-shell {
+  position: relative;
+  z-index: 1;
+
+  width:
+    min(
+      1240px,
+      calc(100% - 64px)
+    );
+
+  min-height:
+    100vh;
+
+  min-height:
+    100svh;
+
+  margin:
+    0 auto;
+
+  padding:
+    48px 0;
+
+  box-sizing:
+    border-box;
+
+  display:
+    grid;
+
+  grid-template-columns:
+    minmax(0, 1.05fr)
+    minmax(420px, .8fr);
+
+  gap:
+    72px;
+
+  align-items:
+    center;
+}
+
+.amazonika-login-card {
+  width:
+    100%;
+
+  max-width:
+    520px;
+
+  justify-self:
+    end;
+}
+
+@media (max-width: 980px) {
+  .amazonika-login-page {
+    background-position:
+      center top;
+    background-attachment:
+      scroll;
+  }
+
+  .amazonika-login-shell {
+    width:
+      min(
+        100% - 32px,
+        760px
+      );
+
+    grid-template-columns:
+      1fr;
+
+    gap:
+      28px;
+
+    padding:
+      32px 0;
+  }
+
+  .amazonika-login-card {
+    max-width:
+      none;
+
+    justify-self:
+      stretch;
+  }
+}
+
+@media (max-width: 620px) {
+  .amazonika-login-page {
+    background-position:
+      52% top;
+  }
+
+  .amazonika-login-shell {
+    width:
+      calc(100% - 22px);
+
+    padding:
+      20px 0;
+  }
+}
+
+
+/* ==========================================================
+   LOGIN PRODUCAO 2026
+   ========================================================== */
+
+.amazonika-login-page {
+  min-height: 100vh;
+  min-height: 100svh;
+
+  position: relative;
+
+  background-image:
+    url("/hero/amazonia-bg.png");
+
+  background-repeat:
+    no-repeat;
+
+  background-size:
+    cover;
+
+  /*
+   * Mantém a copa/parte superior da fotografia visível.
+   * Evita o enquadramento excessivamente centralizado
+   * que cortava a imagem no topo.
+   */
+  background-position:
+    center 28%;
+
+  background-attachment:
+    fixed;
+}
+
+.amazonika-login-overlay {
+  position: absolute;
+  inset: 0;
+
+  background:
+    linear-gradient(
+      90deg,
+      rgba(5, 18, 12, .48) 0%,
+      rgba(5, 18, 12, .34) 44%,
+      rgba(5, 18, 12, .28) 100%
+    );
+}
+
+.amazonika-login-shell {
+  position: relative;
+  z-index: 1;
+
+  width:
+    min(
+      1240px,
+      calc(100% - 64px)
+    );
+
+  min-height:
+    100vh;
+
+  min-height:
+    100svh;
+
+  margin:
+    0 auto;
+
+  padding:
+    48px 0;
+
+  box-sizing:
+    border-box;
+
+  display:
+    grid;
+
+  grid-template-columns:
+    minmax(0, 1.05fr)
+    minmax(420px, .8fr);
+
+  gap:
+    72px;
+
+  align-items:
+    center;
+}
+
+.amazonika-login-card {
+  width:
+    100%;
+
+  max-width:
+    520px;
+
+  justify-self:
+    end;
+}
+
+@media (max-width: 980px) {
+  .amazonika-login-page {
+    background-position:
+      center top;
+    background-attachment:
+      scroll;
+  }
+
+  .amazonika-login-shell {
+    width:
+      min(
+        100% - 32px,
+        760px
+      );
+
+    grid-template-columns:
+      1fr;
+
+    gap:
+      28px;
+
+    padding:
+      32px 0;
+  }
+
+  .amazonika-login-card {
+    max-width:
+      none;
+
+    justify-self:
+      stretch;
+  }
+}
+
+@media (max-width: 620px) {
+  .amazonika-login-page {
+    background-position:
+      52% top;
+  }
+
+  .amazonika-login-shell {
+    width:
+      calc(100% - 22px);
+
+    padding:
+      20px 0;
+  }
+}
+
+/* =====================================================
+   LOGIN — CAMPO DE SENHA / RECUPERAÇÃO
+===================================================== */
+
+.amazonika-login-password-field {
+  position: relative;
+
+  display: flex;
+  align-items: center;
+
+  width: 100%;
+}
+
+.amazonika-login-password-field > input {
+  width: 100%;
+
+  padding-right: 48px;
+}
+
+.amazonika-login-password-eye {
+  position: absolute;
+
+  right: 8px;
+  top: 50%;
+
+  transform: translateY(-50%);
+
+  width: 36px;
+  height: 36px;
+
+  display: grid;
+  place-items: center;
+
+  padding: 0;
+
+  color: rgba(255,255,255,.78);
+  background: transparent;
+
+  border: 0;
+  border-radius: 9px;
+
+  cursor: pointer;
+}
+
+.amazonika-login-password-eye:hover {
+  color: #ffffff;
+
+  background:
+    rgba(255,255,255,.10);
+}
+
+.amazonika-forgot-row {
+  display: flex;
+  justify-content: flex-end;
+
+  margin-top: -4px;
+  margin-bottom: 4px;
+}
+
+.amazonika-forgot-password {
+  color:
+    rgba(255,255,255,.90);
+
+  font-size: 12px;
+  font-weight: 700;
+
+  text-decoration: none;
+}
+
+.amazonika-forgot-password:hover {
+  color: #ffffff;
+  text-decoration: underline;
+}
+
+/* =========================================================
+   LOGIN — CORREÇÃO DEFINITIVA DO OLHO DA SENHA
+   ========================================================= */
+
+.amazonika-login-card .amazonika-login-password-field {
+  position: relative !important;
+  display: block !important;
+  width: 100% !important;
+}
+
+.amazonika-login-card .amazonika-login-password-field > input {
+  display: block !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+
+  padding-right: 52px !important;
+
+  margin: 0 !important;
+}
+
+.amazonika-login-card
+.amazonika-login-password-field
+.amazonika-login-password-eye {
+  position: absolute !important;
+
+  top: 50% !important;
+  right: 10px !important;
+  left: auto !important;
+  bottom: auto !important;
+
+  transform: translateY(-50%) !important;
+
+  width: 36px !important;
+  min-width: 36px !important;
+  max-width: 36px !important;
+
+  height: 36px !important;
+  min-height: 36px !important;
+  max-height: 36px !important;
+
+  margin: 0 !important;
+  padding: 0 !important;
+
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+
+  color: #52655e !important;
+  background: transparent !important;
+
+  border: 0 !important;
+  border-radius: 9px !important;
+
+  box-shadow: none !important;
+
+  cursor: pointer !important;
+
+  z-index: 5 !important;
+}
+
+.amazonika-login-card
+.amazonika-login-password-field
+.amazonika-login-password-eye:hover {
+  color: #155e49 !important;
+
+  background:
+    rgba(21, 94, 73, .08) !important;
+}
+
+.amazonika-login-card
+.amazonika-login-password-field
+.amazonika-login-password-eye svg {
+  width: 19px !important;
+  height: 19px !important;
+
+  display: block !important;
+
+  margin: 0 !important;
+  padding: 0 !important;
+
+  pointer-events: none;
+}
+
+/* Esqueci minha senha */
+.amazonika-login-card .amazonika-forgot-row {
+  display: flex !important;
+  justify-content: flex-end !important;
+  align-items: center !important;
+
+  width: 100% !important;
+
+  margin:
+    8px
+    2px
+    4px !important;
+}
+
+.amazonika-login-card .amazonika-forgot-password {
+  display: inline-block !important;
+
+  width: auto !important;
+
+  color:
+    rgba(255,255,255,.92) !important;
+
+  background: transparent !important;
+
+  font-size: 12px !important;
+  font-weight: 700 !important;
+
+  line-height: 1.35 !important;
+
+  text-decoration: none !important;
+
+  border: 0 !important;
+
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.amazonika-login-card .amazonika-forgot-password:hover {
+  color: #ffffff !important;
+  text-decoration: underline !important;
+}
+

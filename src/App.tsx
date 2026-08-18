@@ -12,6 +12,10 @@ import PartnersFinanceTab from "./components/finance/PartnersFinanceTab";
 import { api, setAuth, clearAuth } from "./services/api";
 import CatalogPage from "./pages/CatalogPage";
 import {
+  ForgotPasswordPage,
+  ResetPasswordPage,
+} from "./pages/PasswordRecoveryPage";
+import {
   BarChart3,
   BookOpen,
   CalendarDays,
@@ -1853,33 +1857,15 @@ function PublicContractPage() {
 }
 
 function LoginPage() {
-  const [role, setRole] = useState<Role>("GERENTE");
-  const [email, setEmail] = useState("gerente@amazonika.com.br");
-  const [password, setPassword] = useState("123456");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  const [showPassword, setShowPassword] =
+    useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   const navigate = useNavigate();
-
-  function updateEmailByRole(nextRole: Role) {
-    setRole(nextRole);
-
-    if (nextRole === "GERENTE") {
-      setEmail("gerente@amazonika.com.br");
-    }
-
-    if (nextRole === "ATENDENTE") {
-      setEmail("atendente@amazonika.com.br");
-    }
-
-    if (nextRole === "PROGRAMADOR") {
-      setEmail("programador@amazonika.com.br");
-    }
-
-    if (nextRole === "CLIENTE") {
-      setEmail("cliente@teste.com");
-    }
-  }
 
 async function login() {
   try {
@@ -1964,18 +1950,6 @@ async function login() {
 
           {error && <div className="login-error">{error}</div>}
 
-          <label>
-            Atalho de Perfil para Testes
-            <select
-              value={role}
-              onChange={(event) => updateEmailByRole(event.target.value as Role)}
-            >
-              <option value="CLIENTE">Cliente</option>
-              <option value="ATENDENTE">Atendente</option>
-              <option value="GERENTE">Gerente</option>
-              <option value="PROGRAMADOR">Programador</option>
-            </select>
-          </label>
 
           <label>
             E-mail
@@ -1984,12 +1958,60 @@ async function login() {
 
           <label>
             Senha
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
+
+            <div className="amazonika-login-password-field">
+              <input
+                type={
+                  showPassword
+                    ? "text"
+                    : "password"
+                }
+                value={password}
+                autoComplete="current-password"
+                onChange={(event) =>
+                  setPassword(
+                    event.target.value
+                  )
+                }
+              />
+
+              <button
+                type="button"
+                className="amazonika-login-password-eye"
+                onClick={() =>
+                  setShowPassword(
+                    (current) =>
+                      !current
+                  )
+                }
+                aria-label={
+                  showPassword
+                    ? "Ocultar senha"
+                    : "Mostrar senha"
+                }
+                title={
+                  showPassword
+                    ? "Ocultar senha"
+                    : "Mostrar senha"
+                }
+              >
+                {showPassword ? (
+                  <EyeOff size={19} />
+                ) : (
+                  <Eye size={19} />
+                )}
+              </button>
+            </div>
           </label>
+
+<div className="amazonika-forgot-row">
+            <Link
+              to="/esqueci-senha"
+              className="amazonika-forgot-password"
+            >
+              Esqueci minha senha
+            </Link>
+          </div>
 
 <button className="hero-btn primary full" onClick={login} disabled={loading}>
   {loading ? "Entrando..." : "Entrar no sistema"}
@@ -10480,7 +10502,7 @@ function UsersPermissionsPanel() {
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("123456");
+  const [password, setPassword] = useState("");
   const [role, setRole] = useState<Role>("ATENDENTE");
   const [active, setActive] = useState(true);
 
@@ -11777,6 +11799,16 @@ function App() {
     <Routes>
       <Route path="/" element={<PublicHome />} />
       <Route path="/login" element={<LoginPage />} />
+
+        <Route
+          path="/esqueci-senha"
+          element={<ForgotPasswordPage />}
+        />
+
+        <Route
+          path="/redefinir-senha"
+          element={<ResetPasswordPage />}
+        />
       <Route path="/proposta/:token" element={<PublicProposalPage />} />
       <Route path="/contrato/:token" element={<PublicContractPage />} />
       <Route path="/cobranca/:id" element={<PublicBillingChargePage />} />

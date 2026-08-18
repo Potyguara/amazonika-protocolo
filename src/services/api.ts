@@ -176,6 +176,44 @@ login(email: string, password: string) {
   });
 },
 
+  forgotPassword(email: string) {
+    return request("/auth/forgot-password", {
+      method: "POST",
+      body: JSON.stringify({
+        email,
+      }),
+    });
+  },
+
+  validatePasswordResetToken(
+    token: string
+  ) {
+    const query =
+      new URLSearchParams({
+        token,
+      });
+
+    return request(
+      `/auth/reset-password/validate?${query.toString()}`
+    );
+  },
+
+  resetPassword(
+    token: string,
+    password: string
+  ) {
+    return request(
+      "/auth/reset-password",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          token,
+          password,
+        }),
+      }
+    );
+  },
+
   me() {
     return request("/auth/me");
   },

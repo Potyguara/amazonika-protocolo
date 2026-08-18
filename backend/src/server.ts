@@ -296,7 +296,7 @@ function buildEmailLayout(
             <table role="presentation" width="760" cellspacing="0" cellpadding="0" style="width:760px;max-width:96%;background:#ffffff;border-radius:18px;overflow:hidden;border:1px solid #dbe7e1;">
               <tr>
                 <td>
-                  <img src="cid:amazonika-header" alt="AMAZONIKA Engenharia & Meio Ambiente" style="display:block;width:100%;max-width:760px;height:auto;border:0;" />
+                  <img src="cid:amazonika-header" alt="AMAZONIKA Engenharia & Meio Ambiente" style="display:block;width:100%;max-width:760px;height:auto !important;border:0;object-fit:contain;" />
                 </td>
               </tr>
 
@@ -310,7 +310,7 @@ function buildEmailLayout(
 
               <tr>
                 <td>
-                  <img src="cid:amazonika-footer" alt="AMAZONIKA Engenharia & Meio Ambiente" style="display:block;width:100%;max-width:760px;height:auto;border:0;" />
+                  <img src="cid:amazonika-footer" alt="AMAZONIKA Engenharia & Meio Ambiente" style="display:block;width:100%;max-width:760px;height:auto !important;border:0;object-fit:contain;" />
                 </td>
               </tr>
             </table>
@@ -3057,6 +3057,521 @@ app.get("/", (_req, res) => {
     port: PORT,
   });
 });
+
+
+// ======================================================
+// RECUPERAÇÃO DE SENHA
+// ======================================================
+
+app.post(
+  "/auth/forgot-password",
+  async (req, res) => {
+    try {
+      const email =
+        String(req.body?.email || "")
+          .trim()
+          .toLowerCase();
+
+      /*
+       * Resposta deliberadamente genérica:
+       * não revela se determinado e-mail possui conta.
+       */
+      const genericResponse = {
+        message:
+          "Se o e-mail estiver cadastrado e ativo, enviaremos as instruções para redefinição da senha.",
+      };
+
+      if (!email) {
+        return res.status(400).json({
+          message: "Informe o e-mail.",
+        });
+      }
+
+      const user =
+        await prisma.user.findUnique({
+          where: {
+            email,
+          },
+        });
+
+      if (
+        !user ||
+        !user.active
+      ) {
+        return res.json(
+          genericResponse
+        );
+      }
+
+      /*
+       * Invalida tokens anteriores ainda não usados.
+       */
+      await prisma.passwordResetToken.updateMany({
+        where: {
+          userId:
+            user.id,
+
+          usedAt:
+            null,
+        },
+
+        data: {
+          usedAt:
+            new Date(),
+        },
+      });
+
+      const rawToken =
+        crypto
+          .randomBytes(32)
+          .toString("hex");
+
+      const tokenHash =
+        crypto
+          .createHash("sha256")
+          .update(rawToken)
+          .digest("hex");
+
+      const expiresAt =
+        new Date(
+          Date.now() +
+          30 * 60 * 1000
+        );
+
+      const ip =
+        req.headers[
+          "x-forwarded-for"
+        ]
+          ?.toString()
+          .split(",")[0]
+          ?.trim() ||
+        req.socket.remoteAddress ||
+        null;
+
+      await prisma.passwordResetToken.create({
+        data: {
+          userId:
+            user.id,
+
+          tokenHash,
+
+          expiresAt,
+
+          requestIp:
+            ip,
+
+          requestUserAgent:
+            req.headers[
+              "user-agent"
+            ] || null,
+        },
+      });
+
+      const frontendUrl =
+        String(
+          process.env.FRONTEND_URL ||
+          "http://localhost:5173"
+        ).replace(/\/$/, "");
+
+      const resetUrl =
+        `${frontendUrl}/redefinir-senha?token=${encodeURIComponent(
+          rawToken
+        )}`;
+
+      const transporter =
+        await createTransporterFromSettings();
+
+      if (!transporter) {
+        console.error(
+          "SMTP não configurado para recuperação de senha."
+        );
+
+        return res.status(503).json({
+          message:
+            "O serviço de recuperação de senha ainda não está configurado. Procure o administrador do sistema.",
+        });
+      }
+
+      const smtp =
+        await getSmtpSettings();
+
+      const html =
+        buildEmailLayout(
+          `
+            <p style="font-size:17px;margin:0 0 18px;">
+              Olá, <strong>${escapeHtml(
+                user.name
+              )}</strong>.
+            </p>
+
+            <p style="font-size:16px;line-height:1.65;margin:0 0 22px;">
+              Recebemos uma solicitação para redefinir a senha
+              da sua conta no SIS Amazonika.
+            </p>
+
+            <div
+              style="
+                padding:18px 20px;
+                background:#f4f8f6;
+                border:1px solid #d9e7df;
+                border-radius:14px;
+                margin-bottom:24px;
+              "
+            >
+              <strong style="color:#155e49;">
+                Este link é válido por 30 minutos.
+              </strong>
+            </div>
+
+            <div
+              style="
+                text-align:center;
+                margin:28px 0;
+              "
+            >
+              <a
+                href="${resetUrl}"
+                style="
+                  display:inline-block;
+                  padding:14px 24px;
+                  background:#155e49;
+                  color:#ffffff;
+                  text-decoration:none;
+                  border-radius:999px;
+                  font-weight:700;
+                "
+              >
+                Redefinir minha senha
+              </a>
+            </div>
+
+            <p style="font-size:13px;color:#64736c;line-height:1.6;">
+              Se você não solicitou a redefinição, ignore este e-mail.
+              Sua senha atual continuará válida.
+            </p>
+
+            <p style="font-size:12px;color:#84928c;line-height:1.5;">
+              Caso o botão não funcione, copie e cole este endereço
+              no navegador:<br/>
+              ${escapeHtml(resetUrl)}
+            </p>
+          `,
+          {
+            eyebrow:
+              "SEGURANÇA DA CONTA",
+
+            title:
+              "Redefinição de senha",
+
+            subtitle:
+              "SIS Amazonika",
+          }
+        );
+
+      await transporter.sendMail({
+        from:
+          smtp.smtpFrom,
+
+        to:
+          user.email,
+
+        subject:
+          "Redefinição de senha — SIS Amazonika",
+
+        html,
+
+        attachments:
+          getEmailImageAttachments(),
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          userId:
+            user.id,
+
+          userName:
+            user.name,
+
+          userEmail:
+            user.email,
+
+          userRole:
+            user.role,
+
+          action:
+            "PASSWORD_RESET_REQUESTED",
+
+          entity:
+            "User",
+
+          entityId:
+            String(user.id),
+
+          description:
+            `Recuperação de senha solicitada para ${user.email}.`,
+
+          ipAddress:
+            ip,
+        },
+      });
+
+      return res.json(
+        genericResponse
+      );
+    } catch (error) {
+      console.error(
+        "Erro ao solicitar recuperação de senha:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Não foi possível processar a recuperação de senha.",
+      });
+    }
+  }
+);
+
+app.get(
+  "/auth/reset-password/validate",
+  async (req, res) => {
+    try {
+      const token =
+        String(
+          req.query?.token || ""
+        ).trim();
+
+      if (!token) {
+        return res.status(400).json({
+          valid: false,
+          message:
+            "Token não informado.",
+        });
+      }
+
+      const tokenHash =
+        crypto
+          .createHash("sha256")
+          .update(token)
+          .digest("hex");
+
+      const resetToken =
+        await prisma.passwordResetToken.findUnique({
+          where: {
+            tokenHash,
+          },
+
+          include: {
+            user: {
+              select: {
+                email: true,
+                active: true,
+              },
+            },
+          },
+        });
+
+      const valid =
+        Boolean(
+          resetToken &&
+          !resetToken.usedAt &&
+          resetToken.expiresAt >
+            new Date() &&
+          resetToken.user.active
+        );
+
+      if (!valid) {
+        return res.status(400).json({
+          valid: false,
+          message:
+            "Este link é inválido, expirou ou já foi utilizado.",
+        });
+      }
+
+      return res.json({
+        valid: true,
+
+        email:
+          resetToken.user.email,
+      });
+    } catch (error) {
+      console.error(
+        "Erro ao validar recuperação:",
+        error
+      );
+
+      return res.status(500).json({
+        valid: false,
+        message:
+          "Não foi possível validar o link.",
+      });
+    }
+  }
+);
+
+app.post(
+  "/auth/reset-password",
+  async (req, res) => {
+    try {
+      const token =
+        String(
+          req.body?.token || ""
+        ).trim();
+
+      const password =
+        String(
+          req.body?.password || ""
+        );
+
+      if (
+        !token ||
+        !password
+      ) {
+        return res.status(400).json({
+          message:
+            "Token e nova senha são obrigatórios.",
+        });
+      }
+
+      if (
+        password.length < 8
+      ) {
+        return res.status(400).json({
+          message:
+            "A nova senha deve possuir pelo menos 8 caracteres.",
+        });
+      }
+
+      const tokenHash =
+        crypto
+          .createHash("sha256")
+          .update(token)
+          .digest("hex");
+
+      const resetToken =
+        await prisma.passwordResetToken.findUnique({
+          where: {
+            tokenHash,
+          },
+
+          include: {
+            user: true,
+          },
+        });
+
+      if (
+        !resetToken ||
+        resetToken.usedAt ||
+        resetToken.expiresAt <=
+          new Date() ||
+        !resetToken.user.active
+      ) {
+        return res.status(400).json({
+          message:
+            "Este link é inválido, expirou ou já foi utilizado.",
+        });
+      }
+
+      const passwordHash =
+        await bcrypt.hash(
+          password,
+          12
+        );
+
+      const ip =
+        req.headers[
+          "x-forwarded-for"
+        ]
+          ?.toString()
+          .split(",")[0]
+          ?.trim() ||
+        req.socket.remoteAddress ||
+        null;
+
+      await prisma.$transaction([
+        prisma.user.update({
+          where: {
+            id:
+              resetToken.userId,
+          },
+
+          data: {
+            passwordHash,
+          },
+        }),
+
+        prisma.passwordResetToken.update({
+          where: {
+            id:
+              resetToken.id,
+          },
+
+          data: {
+            usedAt:
+              new Date(),
+
+            usedIp:
+              ip,
+
+            usedUserAgent:
+              req.headers[
+                "user-agent"
+              ] || null,
+          },
+        }),
+      ]);
+
+      await prisma.auditLog.create({
+        data: {
+          userId:
+            resetToken.user.id,
+
+          userName:
+            resetToken.user.name,
+
+          userEmail:
+            resetToken.user.email,
+
+          userRole:
+            resetToken.user.role,
+
+          action:
+            "PASSWORD_RESET_COMPLETED",
+
+          entity:
+            "User",
+
+          entityId:
+            String(
+              resetToken.user.id
+            ),
+
+          description:
+            "Senha redefinida por fluxo de recuperação.",
+
+          ipAddress:
+            ip,
+        },
+      });
+
+      return res.json({
+        message:
+          "Senha redefinida com sucesso. Você já pode acessar o sistema.",
+      });
+    } catch (error) {
+      console.error(
+        "Erro ao redefinir senha:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Não foi possível redefinir a senha.",
+      });
+    }
+  }
+);
+
 
 app.post("/auth/login", async (req, res) => {
   try {
