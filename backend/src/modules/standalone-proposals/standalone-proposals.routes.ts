@@ -10,6 +10,10 @@ type RegisterStandaloneProposalRoutesParams = {
   authMiddleware: any;
   requireRoles: (roles: any[]) => any;
   upload: any;
+
+  createTransporterFromSettings: () => Promise<any>;
+  getSmtpSettings: () => Promise<any>;
+  getEmailImageAttachments: () => any[];
 };
 
 const COMMERCIAL_ROLES = ["GERENTE", "PROGRAMADOR"];
@@ -20,6 +24,55 @@ const PAYMENT_MODES = new Set([
   "PARCELADO",
   "PERSONALIZADO",
 ]);
+
+function escapeHtml(
+  value?: string | null
+) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function moneyBr(
+  value?: number | null
+) {
+  return (
+    Number(value || 0) / 100
+  ).toLocaleString(
+    "pt-BR",
+    {
+      style: "currency",
+      currency: "BRL",
+    }
+  );
+}
+
+function paymentModeLabel(
+  value?: string | null
+) {
+  const labels:
+    Record<string, string> = {
+      A_VISTA:
+        "Pagamento à vista",
+
+      ENTRADA_PARCELAS:
+        "Entrada + parcelas",
+
+      PARCELADO:
+        "Pagamento parcelado",
+
+      PERSONALIZADO:
+        "Condição personalizada",
+    };
+
+  return (
+    labels[String(value || "")] ||
+    "Conforme condições da proposta"
+  );
+}
 
 function textOrNull(value: unknown) {
   const text = String(value ?? "").trim();
@@ -260,6 +313,9 @@ export function registerStandaloneProposalRoutes({
   authMiddleware,
   requireRoles,
   upload,
+  createTransporterFromSettings,
+  getSmtpSettings,
+  getEmailImageAttachments,
 }: RegisterStandaloneProposalRoutesParams) {
 
   // =====================================================
@@ -2732,6 +2788,837 @@ export function registerStandaloneProposalRoutes({
       }
     }
   );
+
+  // =====================================================
+  // ENVIAR PROPOSTA POR E-MAIL
+  // =====================================================
+
+  app.post(
+    "/standalone-proposals/:id/send-email",
+    authMiddleware,
+    requireRoles(COMMERCIAL_ROLES),
+    async (req: any, res) => {
+      try {
+        const id =
+          Number(req.params.id);
+
+        if (
+          !Number.isInteger(id) ||
+          id <= 0
+        ) {
+          return res.status(400).json({
+            message:
+              "ID da proposta inválido.",
+          });
+        }
+
+        const proposal =
+          await prisma.standaloneProposal.findUnique({
+            where: {
+              id,
+            },
+
+            include: proposalInclude,
+          });
+
+        if (!proposal) {
+          return res.status(404).json({
+            message:
+              "Proposta não encontrada.",
+          });
+        }
+
+        if (
+          proposal.status ===
+          "CANCELADA"
+        ) {
+          return res.status(409).json({
+            message:
+              "Uma proposta cancelada não pode ser enviada.",
+          });
+        }
+
+        if (
+          proposal.status ===
+          "VINCULADA_PROTOCOLO"
+        ) {
+          return res.status(409).json({
+            message:
+              "Esta proposta já está vinculada a um protocolo.",
+          });
+        }
+
+        const recipientEmail =
+          String(
+            req.body?.email ||
+            proposal.clientEmail ||
+            ""
+          )
+            .trim()
+            .toLowerCase();
+
+        if (
+          !recipientEmail ||
+          !recipientEmail.includes("@")
+        ) {
+          return res.status(400).json({
+            message:
+              "Informe um e-mail válido para o cliente.",
+          });
+        }
+
+        if (
+          !proposal.items ||
+          proposal.items.length === 0
+        ) {
+          return res.status(400).json({
+            message:
+              "Adicione pelo menos um serviço antes de enviar a proposta.",
+          });
+        }
+
+        /*
+         * Sempre geramos novamente antes do envio.
+         *
+         * Isso garante que preço, condições,
+         * cliente, anexos e textos do PDF sejam
+         * exatamente os dados atuais da proposta.
+         */
+        const pdf =
+          await generateStandaloneProposalPdf(
+            prisma,
+            id
+          );
+
+        if (
+          !pdf.filePath ||
+          !fs.existsSync(pdf.filePath)
+        ) {
+          return res.status(500).json({
+            message:
+              "O PDF da proposta não foi encontrado após a geração.",
+          });
+        }
+
+        const transporter =
+          await createTransporterFromSettings();
+
+        if (!transporter) {
+          return res.status(503).json({
+            message:
+              "O servidor SMTP não está configurado corretamente.",
+          });
+        }
+
+        const settings =
+          await getSmtpSettings();
+
+        const itemRows =
+          proposal.items
+            .map(
+              (item, index) => `
+                <tr>
+                  <td
+                    style="
+                      padding:12px 10px;
+                      border-bottom:1px solid #e6ece9;
+                      color:#26352e;
+                      vertical-align:top;
+                    "
+                  >
+                    ${index + 1}
+                  </td>
+
+                  <td
+                    style="
+                      padding:12px 10px;
+                      border-bottom:1px solid #e6ece9;
+                      color:#26352e;
+                      vertical-align:top;
+                    "
+                  >
+                    <strong>
+                      ${escapeHtml(
+                        item.serviceName
+                      )}
+                    </strong>
+
+                    ${
+                      item.description
+                        ? `
+                          <div
+                            style="
+                              margin-top:4px;
+                              color:#6b7972;
+                              font-size:12px;
+                              line-height:1.45;
+                            "
+                          >
+                            ${escapeHtml(
+                              item.description
+                            )}
+                          </div>
+                        `
+                        : ""
+                    }
+                  </td>
+
+                  <td
+                    style="
+                      padding:12px 10px;
+                      border-bottom:1px solid #e6ece9;
+                      color:#26352e;
+                      text-align:center;
+                      vertical-align:top;
+                    "
+                  >
+                    ${Number(
+                      item.quantity || 0
+                    ).toLocaleString(
+                      "pt-BR",
+                      {
+                        maximumFractionDigits: 4,
+                      }
+                    )}
+                  </td>
+
+                  <td
+                    style="
+                      padding:12px 10px;
+                      border-bottom:1px solid #e6ece9;
+                      color:#26352e;
+                      text-align:right;
+                      vertical-align:top;
+                      white-space:nowrap;
+                    "
+                  >
+                    ${moneyBr(
+                      item.totalAmount
+                    )}
+                  </td>
+                </tr>
+              `
+            )
+            .join("");
+
+        const paymentDescription =
+          proposal.paymentText ||
+          paymentModeLabel(
+            proposal.paymentMode
+          );
+
+        const content = `
+          <div
+            style="
+              margin:0;
+              padding:0;
+              background:#f3f6f4;
+              font-family:Arial,Helvetica,sans-serif;
+              color:#17231f;
+            "
+          >
+            <table
+              role="presentation"
+              width="100%"
+              cellspacing="0"
+              cellpadding="0"
+              style="
+                background:#f3f6f4;
+                padding:28px 0;
+              "
+            >
+              <tr>
+                <td align="center">
+
+                  <table
+                    role="presentation"
+                    width="760"
+                    cellspacing="0"
+                    cellpadding="0"
+                    style="
+                      width:760px;
+                      max-width:96%;
+                      background:#ffffff;
+                      border:1px solid #dfe8e3;
+                      border-radius:18px;
+                      overflow:hidden;
+                    "
+                  >
+
+                    <tr>
+                      <td>
+                        <img
+                          src="cid:amazonika-header"
+                          alt="AMAZÔNIKA Engenharia & Meio Ambiente"
+                          style="
+                            display:block;
+                            width:100%;
+                            max-width:760px;
+                            height:auto;
+                            border:0;
+                          "
+                        />
+                      </td>
+                    </tr>
+
+                    <tr>
+                      <td
+                        style="
+                          padding:34px 42px 38px;
+                        "
+                      >
+
+                        <div
+                          style="
+                            color:#155e49;
+                            font-size:11px;
+                            font-weight:bold;
+                            letter-spacing:2px;
+                            text-transform:uppercase;
+                            margin-bottom:8px;
+                          "
+                        >
+                          Proposta comercial
+                        </div>
+
+                        <h1
+                          style="
+                            margin:0 0 8px;
+                            color:#17231f;
+                            font-size:28px;
+                            line-height:1.15;
+                          "
+                        >
+                          ${escapeHtml(
+                            proposal.proposalNumber
+                          )}
+                        </h1>
+
+                        <p
+                          style="
+                            margin:0 0 28px;
+                            color:#63726b;
+                            font-size:15px;
+                          "
+                        >
+                          ${escapeHtml(
+                            proposal.title
+                          )}
+                        </p>
+
+                        <p
+                          style="
+                            margin:0 0 16px;
+                            font-size:16px;
+                            line-height:1.65;
+                          "
+                        >
+                          Prezado(a)
+                          <strong>
+                            ${escapeHtml(
+                              proposal.clientName
+                            )}
+                          </strong>,
+                        </p>
+
+                        <p
+                          style="
+                            margin:0 0 26px;
+                            font-size:16px;
+                            line-height:1.65;
+                          "
+                        >
+                          Encaminhamos a proposta comercial
+                          referente aos serviços técnicos
+                          apresentados abaixo. O documento
+                          oficial completo segue anexado a
+                          este e-mail em formato PDF.
+                        </p>
+
+                        <div
+                          style="
+                            padding:18px 20px;
+                            margin-bottom:24px;
+                            background:#f5f9f7;
+                            border:1px solid #dfe9e4;
+                            border-radius:14px;
+                          "
+                        >
+                          <div
+                            style="
+                              font-size:11px;
+                              color:#748179;
+                              text-transform:uppercase;
+                              letter-spacing:1px;
+                              margin-bottom:6px;
+                            "
+                          >
+                            Objeto da proposta
+                          </div>
+
+                          <strong
+                            style="
+                              font-size:17px;
+                              color:#173d31;
+                            "
+                          >
+                            ${escapeHtml(
+                              proposal.title
+                            )}
+                          </strong>
+
+                          ${
+                            proposal.objectText
+                              ? `
+                                <p
+                                  style="
+                                    margin:8px 0 0;
+                                    color:#5d6c65;
+                                    font-size:13px;
+                                    line-height:1.55;
+                                  "
+                                >
+                                  ${escapeHtml(
+                                    proposal.objectText
+                                  )}
+                                </p>
+                              `
+                              : ""
+                          }
+                        </div>
+
+                        <table
+                          role="presentation"
+                          width="100%"
+                          cellspacing="0"
+                          cellpadding="0"
+                          style="
+                            width:100%;
+                            border-collapse:collapse;
+                            margin:0 0 24px;
+                            border:1px solid #e3ebe7;
+                            border-radius:12px;
+                            overflow:hidden;
+                          "
+                        >
+                          <thead>
+                            <tr
+                              style="
+                                background:#155e49;
+                                color:#ffffff;
+                              "
+                            >
+                              <th
+                                style="
+                                  padding:11px 10px;
+                                  text-align:left;
+                                  font-size:12px;
+                                "
+                              >
+                                Item
+                              </th>
+
+                              <th
+                                style="
+                                  padding:11px 10px;
+                                  text-align:left;
+                                  font-size:12px;
+                                "
+                              >
+                                Serviço
+                              </th>
+
+                              <th
+                                style="
+                                  padding:11px 10px;
+                                  text-align:center;
+                                  font-size:12px;
+                                "
+                              >
+                                Qtd.
+                              </th>
+
+                              <th
+                                style="
+                                  padding:11px 10px;
+                                  text-align:right;
+                                  font-size:12px;
+                                "
+                              >
+                                Total
+                              </th>
+                            </tr>
+                          </thead>
+
+                          <tbody>
+                            ${itemRows}
+                          </tbody>
+                        </table>
+
+                        <table
+                          role="presentation"
+                          width="100%"
+                          cellspacing="0"
+                          cellpadding="0"
+                          style="
+                            margin-top:6px;
+                          "
+                        >
+                          <tr>
+                            <td
+                              style="
+                                padding:9px 14px;
+                                color:#68766f;
+                              "
+                            >
+                              Subtotal
+                            </td>
+
+                            <td
+                              align="right"
+                              style="
+                                padding:9px 14px;
+                                font-weight:bold;
+                                color:#293a33;
+                              "
+                            >
+                              ${moneyBr(
+                                proposal.subtotalAmount
+                              )}
+                            </td>
+                          </tr>
+
+                          ${
+                            proposal.discountAmount > 0
+                              ? `
+                                <tr>
+                                  <td
+                                    style="
+                                      padding:9px 14px;
+                                      color:#68766f;
+                                    "
+                                  >
+                                    Desconto
+                                  </td>
+
+                                  <td
+                                    align="right"
+                                    style="
+                                      padding:9px 14px;
+                                      font-weight:bold;
+                                      color:#293a33;
+                                    "
+                                  >
+                                    - ${moneyBr(
+                                      proposal.discountAmount
+                                    )}
+                                  </td>
+                                </tr>
+                              `
+                              : ""
+                          }
+
+                          ${
+                            proposal.additionAmount > 0
+                              ? `
+                                <tr>
+                                  <td
+                                    style="
+                                      padding:9px 14px;
+                                      color:#68766f;
+                                    "
+                                  >
+                                    Acréscimos
+                                  </td>
+
+                                  <td
+                                    align="right"
+                                    style="
+                                      padding:9px 14px;
+                                      font-weight:bold;
+                                      color:#293a33;
+                                    "
+                                  >
+                                    ${moneyBr(
+                                      proposal.additionAmount
+                                    )}
+                                  </td>
+                                </tr>
+                              `
+                              : ""
+                          }
+
+                          <tr>
+                            <td
+                              style="
+                                padding:15px 14px;
+                                background:#eaf4ef;
+                                color:#155e49;
+                                font-weight:bold;
+                                font-size:15px;
+                              "
+                            >
+                              Valor total
+                            </td>
+
+                            <td
+                              align="right"
+                              style="
+                                padding:15px 14px;
+                                background:#eaf4ef;
+                                color:#155e49;
+                                font-weight:bold;
+                                font-size:20px;
+                              "
+                            >
+                              ${moneyBr(
+                                proposal.totalAmount
+                              )}
+                            </td>
+                          </tr>
+                        </table>
+
+                        <div
+                          style="
+                            margin-top:25px;
+                            padding:17px 19px;
+                            border-left:4px solid #155e49;
+                            background:#f7faf8;
+                          "
+                        >
+                          <div
+                            style="
+                              font-size:11px;
+                              text-transform:uppercase;
+                              letter-spacing:1px;
+                              color:#718078;
+                              margin-bottom:6px;
+                            "
+                          >
+                            Condição de pagamento
+                          </div>
+
+                          <div
+                            style="
+                              font-size:14px;
+                              color:#25372f;
+                              line-height:1.55;
+                            "
+                          >
+                            ${escapeHtml(
+                              paymentDescription
+                            )}
+                          </div>
+                        </div>
+
+                        <p
+                          style="
+                            margin:28px 0 0;
+                            color:#5e6e66;
+                            font-size:13px;
+                            line-height:1.6;
+                          "
+                        >
+                          O PDF anexado constitui a versão
+                          oficial desta proposta comercial.
+                          Em caso de dúvidas ou necessidade
+                          de ajustes, nossa equipe permanece
+                          à disposição.
+                        </p>
+
+                        <p
+                          style="
+                            margin:28px 0 0;
+                            font-size:14px;
+                            line-height:1.6;
+                          "
+                        >
+                          Atenciosamente,<br/>
+                          <strong
+                            style="
+                              color:#155e49;
+                            "
+                          >
+                            AMAZÔNIKA Engenharia & Meio Ambiente
+                          </strong>
+                        </p>
+
+                      </td>
+                    </tr>
+
+                    <tr>
+                      <td>
+                        <img
+                          src="cid:amazonika-footer"
+                          alt="AMAZÔNIKA Engenharia & Meio Ambiente"
+                          style="
+                            display:block;
+                            width:100%;
+                            max-width:760px;
+                            height:auto;
+                            border:0;
+                          "
+                        />
+                      </td>
+                    </tr>
+
+                  </table>
+
+                </td>
+              </tr>
+            </table>
+          </div>
+        `;
+
+        const info =
+          await transporter.sendMail({
+            from:
+              settings.smtpFrom,
+
+            to:
+              recipientEmail,
+
+            subject:
+              `Proposta Comercial ${proposal.proposalNumber} — ${proposal.title}`,
+
+            html:
+              content,
+
+            attachments: [
+              ...getEmailImageAttachments(),
+
+              {
+                filename:
+                  pdf.fileName,
+
+                path:
+                  pdf.filePath,
+
+                contentType:
+                  "application/pdf",
+              },
+            ],
+          });
+
+        /*
+         * O e-mail só é considerado enviado
+         * depois do sendMail concluir.
+         */
+        const updated =
+          await prisma.standaloneProposal.update({
+            where: {
+              id,
+            },
+
+            data: {
+              status:
+                "ENVIADA",
+
+              sentAt:
+                new Date(),
+
+              /*
+               * Mantemos também o e-mail
+               * efetivamente utilizado.
+               */
+              clientEmail:
+                recipientEmail,
+            },
+
+            include:
+              proposalInclude,
+          });
+
+        await createEvent(
+          prisma,
+          {
+            proposalId:
+              id,
+
+            eventType:
+              "PROPOSTA_ENVIADA",
+
+            title:
+              "Proposta enviada por e-mail",
+
+            description:
+              `Proposta ${proposal.proposalNumber} enviada para ${recipientEmail}.`,
+
+            recipient:
+              recipientEmail,
+
+            user:
+              req.user,
+
+            req,
+
+            metadata: {
+              messageId:
+                info.messageId,
+
+              accepted:
+                info.accepted,
+
+              rejected:
+                info.rejected,
+
+              response:
+                info.response,
+
+              fileName:
+                pdf.fileName,
+
+              sha256:
+                pdf.hash,
+            },
+          }
+        );
+
+        return res.json({
+          message:
+            "Proposta enviada por e-mail com sucesso.",
+
+          proposal:
+            updated,
+
+          email: {
+            recipient:
+              recipientEmail,
+
+            messageId:
+              info.messageId,
+
+            accepted:
+              info.accepted,
+
+            rejected:
+              info.rejected,
+          },
+
+          pdf: {
+            fileName:
+              pdf.fileName,
+
+            sha256:
+              pdf.hash,
+          },
+        });
+      } catch (error) {
+        console.error(
+          "Erro ao enviar proposta avulsa por e-mail:",
+          error
+        );
+
+        return res.status(500).json({
+          message:
+            error instanceof Error
+              ? error.message
+              : "Erro ao enviar proposta por e-mail.",
+        });
+      }
+    }
+  );
+
 
   // =====================================================
   // DOWNLOAD DO PDF OFICIAL

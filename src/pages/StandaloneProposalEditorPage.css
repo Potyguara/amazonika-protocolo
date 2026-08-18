@@ -2836,3 +2836,66 @@ textarea {
     margin-top: 5px;
   }
 }
+
+/* =====================================================
+   ENVIO DE PROPOSTA POR E-MAIL
+===================================================== */
+
+.sp-send-email-modal {
+  width: min(720px, calc(100vw - 32px));
+}
+
+.sp-send-email-summary {
+  display: grid;
+  grid-template-columns:
+    repeat(3, minmax(0, 1fr));
+
+  gap: 10px;
+
+  padding: 14px;
+
+  border: 1px solid #dfe8e3;
+  border-radius: 14px;
+
+  background:
+    linear-gradient(
+      145deg,
+      #f8fbf9,
+      #f3f8f5
+    );
+}
+
+.sp-send-email-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sp-send-email-summary span {
+  color: #728078;
+  font-size: 11px;
+}
+
+.sp-send-email-summary strong {
+  color: #17372d;
+  font-size: 13px;
+}
+
+.sp-send-email-success {
+  padding: 12px 14px;
+
+  color: #176249;
+  background: #e7f5ed;
+
+  border: 1px solid #cee9da;
+  border-radius: 12px;
+
+  font-size: 12px;
+  font-weight: 700;
+}
+
+@media (max-width: 650px) {
+  .sp-send-email-summary {
+    grid-template-columns: 1fr;
+  }
+}

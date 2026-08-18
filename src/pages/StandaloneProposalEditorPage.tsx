@@ -387,6 +387,18 @@ export default function StandaloneProposalEditorPage() {
   const [duplicating, setDuplicating] =
     useState(false);
 
+  const [sendEmailOpen, setSendEmailOpen] =
+    useState(false);
+
+  const [sendEmailAddress, setSendEmailAddress] =
+    useState("");
+
+  const [sendingEmail, setSendingEmail] =
+    useState(false);
+
+  const [sendEmailMessage, setSendEmailMessage] =
+    useState("");
+
   const [editForm, setEditForm] = useState({
     clientName: "",
     clientEmail: "",
@@ -1617,6 +1629,63 @@ export default function StandaloneProposalEditorPage() {
     }
   }
 
+  function openSendEmailModal() {
+    if (!proposal) return;
+
+    setSendEmailAddress(
+      proposal.clientEmail || ""
+    );
+
+    setSendEmailMessage("");
+    setSendEmailOpen(true);
+  }
+
+  async function sendProposalEmail() {
+    if (!proposal) return;
+
+    const email =
+      sendEmailAddress.trim();
+
+    if (!email) {
+      setError(
+        "Informe o e-mail do destinatário."
+      );
+      return;
+    }
+
+    try {
+      setError("");
+      setSendEmailMessage("");
+      setSendingEmail(true);
+
+      await api.sendStandaloneProposalEmail(
+        proposal.id,
+        {
+          email,
+        }
+      );
+
+      setSendEmailMessage(
+        "Proposta enviada por e-mail com sucesso."
+      );
+
+      await loadProposal();
+
+      window.setTimeout(() => {
+        setSendEmailOpen(false);
+        setSendEmailMessage("");
+      }, 1100);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Erro ao enviar proposta por e-mail."
+      );
+    } finally {
+      setSendingEmail(false);
+    }
+  }
+
   async function duplicateProposal() {
     if (!proposal) return;
 
@@ -1737,6 +1806,25 @@ export default function StandaloneProposalEditorPage() {
               ? "Duplicando..."
               : "Duplicar"}
           </button>
+
+          {[
+            "RASCUNHO",
+            "GERADA",
+            "ENVIADA",
+          ].includes(proposal.status) && (
+            <button
+              type="button"
+              className="button secondary"
+              onClick={openSendEmailModal}
+              disabled={
+                sendingEmail ||
+                !proposal.items ||
+                proposal.items.length === 0
+              }
+            >
+              Enviar proposta
+            </button>
+          )}
 
           {[
             "RASCUNHO",
@@ -3631,6 +3719,128 @@ export default function StandaloneProposalEditorPage() {
                 {flowSaving
                   ? "Cancelando..."
                   : "Confirmar cancelamento"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+
+      {sendEmailOpen && (
+        <div
+          className="sp-edit-overlay"
+          onMouseDown={(event) => {
+            if (
+              event.target ===
+              event.currentTarget &&
+              !sendingEmail
+            ) {
+              setSendEmailOpen(false);
+            }
+          }}
+        >
+          <section className="sp-edit-modal sp-send-email-modal">
+            <header className="sp-edit-modal-header">
+              <div>
+                <span className="eyebrow">
+                  ENVIO DA PROPOSTA
+                </span>
+
+                <h2>
+                  Enviar proposta por e-mail
+                </h2>
+
+                <p>
+                  O PDF oficial será regenerado antes do envio
+                  e encaminhado ao destinatário como anexo.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="sp-edit-close"
+                disabled={sendingEmail}
+                onClick={() =>
+                  setSendEmailOpen(false)
+                }
+                aria-label="Fechar"
+              >
+                ×
+              </button>
+            </header>
+
+            <div className="sp-edit-form">
+              <label className="full">
+                Destinatário *
+                <input
+                  type="email"
+                  autoFocus
+                  placeholder="cliente@empresa.com.br"
+                  value={sendEmailAddress}
+                  onChange={(event) =>
+                    setSendEmailAddress(
+                      event.target.value
+                    )
+                  }
+                  disabled={sendingEmail}
+                />
+              </label>
+
+              <div className="full sp-send-email-summary">
+                <div>
+                  <span>Proposta</span>
+                  <strong>
+                    {proposal.proposalNumber}
+                  </strong>
+                </div>
+
+                <div>
+                  <span>Cliente</span>
+                  <strong>
+                    {proposal.clientName}
+                  </strong>
+                </div>
+
+                <div>
+                  <span>Valor</span>
+                  <strong>
+                    {money(
+                      proposal.totalAmount
+                    )}
+                  </strong>
+                </div>
+              </div>
+
+              {sendEmailMessage && (
+                <div className="full sp-send-email-success">
+                  {sendEmailMessage}
+                </div>
+              )}
+            </div>
+
+            <footer className="sp-edit-modal-footer">
+              <button
+                type="button"
+                className="button secondary"
+                disabled={sendingEmail}
+                onClick={() =>
+                  setSendEmailOpen(false)
+                }
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                className="button primary"
+                disabled={
+                  sendingEmail ||
+                  !sendEmailAddress.trim()
+                }
+                onClick={sendProposalEmail}
+              >
+                {sendingEmail
+                  ? "Enviando..."
+                  : "Enviar proposta"}
               </button>
             </footer>
           </section>

@@ -240,6 +240,21 @@ login(email: string, password: string) {
     });
   },
 
+  sendStandaloneProposalEmail(
+    id: number,
+    data?: {
+      email?: string;
+    }
+  ) {
+    return request(
+      `/standalone-proposals/${id}/send-email`,
+      {
+        method: "POST",
+        body: JSON.stringify(data || {}),
+      }
+    );
+  },
+
   approveStandaloneProposalVerbally(
     id: number,
     data: {

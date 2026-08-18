@@ -10635,6 +10635,9 @@ registerStandaloneProposalRoutes({
   authMiddleware,
   requireRoles,
   upload,
+  createTransporterFromSettings,
+  getSmtpSettings,
+  getEmailImageAttachments,
 });
 
 app.get("/health", (_req, res) => {
