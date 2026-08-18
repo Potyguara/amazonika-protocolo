@@ -1438,6 +1438,133 @@ togglePartnerActive(id: number) {
 // CATÁLOGO TÉCNICO-COMERCIAL
 // ==========================================
 
+// ==========================================
+// CRONOGRAMA DE CAMPO
+// ==========================================
+
+fieldScheduleSummary() {
+  return request("/field-schedules/summary");
+},
+
+fieldScheduleManagers() {
+  return request("/field-schedules/managers");
+},
+
+fieldSchedules(params?: {
+  search?: string;
+  status?: string;
+  type?: string;
+  from?: string;
+  to?: string;
+}) {
+  const query = new URLSearchParams();
+
+  if (params?.search) {
+    query.set("search", params.search);
+  }
+
+  if (params?.status) {
+    query.set("status", params.status);
+  }
+
+  if (params?.type) {
+    query.set("type", params.type);
+  }
+
+  if (params?.from) {
+    query.set("from", params.from);
+  }
+
+  if (params?.to) {
+    query.set("to", params.to);
+  }
+
+  const suffix = query.toString();
+
+  return request(
+    `/field-schedules${suffix ? `?${suffix}` : ""}`
+  );
+},
+
+fieldSchedule(id: number) {
+  return request(`/field-schedules/${id}`);
+},
+
+createFieldSchedule(
+  data: Record<string, unknown>
+) {
+  return request("/field-schedules", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+},
+
+updateFieldSchedule(
+  id: number,
+  data: Record<string, unknown>
+) {
+  return request(`/field-schedules/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+},
+
+updateFieldScheduleStatus(
+  id: number,
+  status: string
+) {
+  return request(
+    `/field-schedules/${id}/status`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        status,
+      }),
+    }
+  );
+},
+
+deleteFieldSchedule(
+  id: number
+) {
+  return request(
+    `/field-schedules/${id}`,
+    {
+      method: "DELETE",
+    }
+  );
+},
+
+processFieldScheduleNotifications(
+  limit = 50
+) {
+  return request(
+    "/field-schedules/process-notifications",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        limit,
+      }),
+    }
+  );
+},
+
+retryFieldScheduleNotification(
+  notificationId: number
+) {
+  return request(
+    `/field-schedules/notifications/${notificationId}/retry`,
+    {
+      method: "POST",
+    }
+  );
+},
+
+
+// ==========================================
+// CATÁLOGO TÉCNICO-COMERCIAL
+// ==========================================
+
 catalogSummary() {
   return request("/catalog/summary");
 },

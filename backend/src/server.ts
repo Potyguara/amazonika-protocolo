@@ -13,6 +13,7 @@ import crypto from "crypto";
 import { registerPartnerRoutes } from "./modules/partners/partners.routes";
 import { registerCatalogRoutes } from "./modules/catalog/catalog.routes";
 import { registerStandaloneProposalRoutes } from "./modules/standalone-proposals/standalone-proposals.routes";
+import { registerFieldScheduleRoutes } from "./modules/field-schedule/field-schedule.routes";
 import { registerPartnerReferralRoutes } from "./modules/partners/partner-referrals.routes";
 import { registerPartnerCommissionRoutes } from "./modules/partners/partner-commissions.routes";
 import { releasePartnerCommissionForEntryPayment } from "./modules/partners/partner-commission.service";
@@ -206,7 +207,87 @@ function getPublicEmailAssetUrl(filename: string) {
   return `${baseUrl.replace(/\/$/, "")}/email/${filename}`;
 }
 
-function buildEmailLayout(content: string) {
+function buildEmailLayout(
+  content: string,
+  options?: {
+    eyebrow?: string;
+    title?: string;
+    subtitle?: string;
+  }
+) {
+  const titleBlock =
+    options?.title
+      ? `
+        <tr>
+          <td
+            style="
+              padding:
+                30px
+                42px
+                6px;
+              background:#ffffff;
+            "
+          >
+            ${
+              options.eyebrow
+                ? `
+                  <div
+                    style="
+                      margin:0 0 7px;
+                      color:#176249;
+                      font-size:11px;
+                      line-height:1.3;
+                      font-weight:800;
+                      letter-spacing:.15em;
+                      text-transform:uppercase;
+                    "
+                  >
+                    ${escapeHtml(
+                      options.eyebrow
+                    )}
+                  </div>
+                `
+                : ""
+            }
+
+            <div
+              style="
+                margin:0;
+                color:#17231f;
+                font-size:29px;
+                line-height:1.16;
+                font-weight:800;
+                letter-spacing:-.025em;
+              "
+            >
+              ${escapeHtml(
+                options.title
+              )}
+            </div>
+
+            ${
+              options.subtitle
+                ? `
+                  <div
+                    style="
+                      margin-top:8px;
+                      color:#64736c;
+                      font-size:14px;
+                      line-height:1.5;
+                    "
+                  >
+                    ${escapeHtml(
+                      options.subtitle
+                    )}
+                  </div>
+                `
+                : ""
+            }
+          </td>
+        </tr>
+      `
+      : "";
+
   return `
     <div style="margin:0;padding:0;background:#f4f7f5;font-family:Arial,Helvetica,sans-serif;color:#10231b;">
       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f4f7f5;padding:24px 0;">
@@ -218,6 +299,8 @@ function buildEmailLayout(content: string) {
                   <img src="cid:amazonika-header" alt="AMAZONIKA Engenharia & Meio Ambiente" style="display:block;width:100%;max-width:760px;height:auto;border:0;" />
                 </td>
               </tr>
+
+              ${titleBlock}
 
               <tr>
                 <td style="padding:34px 42px;">
@@ -349,7 +432,17 @@ function buildClientAppointmentEmail(params: {
     </p>
   `;
 
-  return buildEmailLayout(content);
+  return buildEmailLayout(
+    content,
+    {
+      eyebrow:
+        "AGENDA TÉCNICA",
+      title:
+        "Agendamento de Reunião",
+      subtitle:
+        `Protocolo ${params.protocolNumber}`,
+    }
+  );
 }
 
 function buildManagerAppointmentEmail(params: {
@@ -462,7 +555,17 @@ function buildManagerAppointmentEmail(params: {
     </p>
   `;
 
-  return buildEmailLayout(content);
+  return buildEmailLayout(
+    content,
+    {
+      eyebrow:
+        "AGENDA TÉCNICA",
+      title:
+        "Novo Agendamento Técnico",
+      subtitle:
+        `Protocolo ${params.protocolNumber}`,
+    }
+  );
 }
 
 
@@ -10635,6 +10738,16 @@ registerStandaloneProposalRoutes({
   authMiddleware,
   requireRoles,
   upload,
+  createTransporterFromSettings,
+  getSmtpSettings,
+  getEmailImageAttachments,
+});
+
+registerFieldScheduleRoutes({
+  app,
+  prisma,
+  authMiddleware,
+  requireRoles,
   createTransporterFromSettings,
   getSmtpSettings,
   getEmailImageAttachments,

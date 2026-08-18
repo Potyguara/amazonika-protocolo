@@ -1279,3 +1279,140 @@ model StandaloneProposalEvent {
   @@index([eventType])
   @@index([createdAt])
 }
+
+// =====================================================
+// CRONOGRAMA OPERACIONAL DE CAMPO
+// =====================================================
+
+enum FieldScheduleType {
+  GEORREFERENCIAMENTO
+  TOPOGRAFIA
+  DRONE
+  INVENTARIO_FLORESTAL
+  VISTORIA_AMBIENTAL
+  LEVANTAMENTO_AMBIENTAL
+  OUTRO
+}
+
+enum FieldScheduleStatus {
+  PLANEJADO
+  CONFIRMADO
+  EM_DESLOCAMENTO
+  EM_CAMPO
+  CONCLUIDO
+  ADIADO
+  CANCELADO
+}
+
+enum FieldNotificationStatus {
+  PENDENTE
+  PROCESSANDO
+  ENVIADO
+  ERRO
+  CANCELADO
+}
+
+model FieldSchedule {
+  id Int @id @default(autoincrement())
+
+  title       String
+  description String?
+
+  type   FieldScheduleType
+  status FieldScheduleStatus @default(PLANEJADO)
+
+  // Cliente / empreendimento / imóvel
+  clientName   String?
+  propertyName String?
+
+  municipality String?
+  state        String?
+
+  location  String?
+  reference String?
+
+  // Coordenadas opcionais do destino.
+  latitude  Float?
+  longitude Float?
+
+  // Período da atividade
+  startDate DateTime
+  endDate   DateTime?
+
+  departureTime String?
+  returnTime    String?
+
+  meetingPoint String?
+
+  // Configuração padrão do alerta.
+  alertEnabled    Boolean @default(true)
+  alertDaysBefore Int     @default(3)
+
+  notes String?
+
+  createdById Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  managers      FieldScheduleManager[]
+  notifications FieldScheduleNotification[]
+
+  @@index([startDate])
+  @@index([status])
+  @@index([type])
+  @@index([createdById])
+}
+
+model FieldScheduleManager {
+  id Int @id @default(autoincrement())
+
+  scheduleId Int
+  userId     Int
+
+  // Snapshot para preservar histórico.
+  name  String
+  email String
+
+  createdAt DateTime @default(now())
+
+  schedule FieldSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  notifications FieldScheduleNotification[]
+
+  @@unique([scheduleId, userId])
+  @@index([scheduleId])
+  @@index([userId])
+}
+
+model FieldScheduleNotification {
+  id Int @id @default(autoincrement())
+
+  scheduleId Int
+  managerId  Int
+
+  daysBefore Int
+
+  status FieldNotificationStatus @default(PENDENTE)
+
+  scheduledFor DateTime
+  sentAt       DateTime?
+
+  recipientEmail String
+
+  subject   String?
+  messageId String?
+  errorText String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  schedule FieldSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  manager FieldScheduleManager @relation(fields: [managerId], references: [id], onDelete: Cascade)
+
+  @@unique([scheduleId, managerId, daysBefore])
+  @@index([scheduledFor])
+  @@index([status])
+  @@index([scheduleId])
+}

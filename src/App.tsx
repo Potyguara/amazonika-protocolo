@@ -1,5 +1,7 @@
 import "./App.css";
 import StandaloneProposalsPage from "./pages/StandaloneProposalsPage";
+import FieldSchedulePage from "./pages/FieldSchedulePage";
+import FieldTravelMapPage from "./pages/FieldTravelMapPage";
 import StandaloneProposalEditorPage from "./pages/StandaloneProposalEditorPage";
 import {
   copyPublicLink as copySharedPublicLink,
@@ -2044,6 +2046,12 @@ const nav = [
     to: "/app/agendamentos",
     icon: CalendarDays,
     roles: ["ATENDENTE", "GERENTE", "PROGRAMADOR"],
+  },
+  {
+    label: "Cronograma de Campo",
+    to: "/app/cronograma-campo",
+    icon: CalendarDays,
+    roles: ["GERENTE", "PROGRAMADOR"],
   },
   {
     label: "Propostas Avulsas",
@@ -11790,6 +11798,24 @@ function App() {
           element={
             <ProtectedRoute allowed={["GERENTE", "PROGRAMADOR"]}>
               <StandaloneProposalEditorPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="cronograma-campo"
+          element={
+            <ProtectedRoute allowed={["GERENTE", "PROGRAMADOR"]}>
+              <FieldSchedulePage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="cronograma-campo/mapa"
+          element={
+            <ProtectedRoute allowed={["GERENTE", "PROGRAMADOR"]}>
+              <FieldTravelMapPage />
             </ProtectedRoute>
           }
         />
