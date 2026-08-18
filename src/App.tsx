@@ -1856,6 +1856,8 @@ function PublicContractPage() {
   );
 }
 
+void PublicHome;
+
 function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -2017,9 +2019,7 @@ async function login() {
   {loading ? "Entrando..." : "Entrar no sistema"}
 </button>
 
-          <Link to="/" className="amazonika-login-back">
-            Voltar ao site institucional
-          </Link>
+          <a href="https://amazonikaengenharia.com.br/" className="amazonika-login-back">Voltar ao site institucional</a>
         </section>
       </section>
     </main>
@@ -11797,8 +11797,16 @@ function App() {
 
   return (
     <Routes>
-      <Route path="/" element={<PublicHome />} />
-      <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/"
+        element={
+          <Navigate
+            to="/login"
+            replace
+          />
+        }
+      />
+<Route path="/login" element={<LoginPage />} />
 
         <Route
           path="/esqueci-senha"
