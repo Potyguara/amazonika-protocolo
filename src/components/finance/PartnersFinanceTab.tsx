@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../../services/api";
+import PartnerCommissionsPanel from "./PartnerCommissionsPanel";
 
 type Partner = {
   id: number;
@@ -451,6 +452,12 @@ export default function PartnersFinanceTab() {
           </article>
         </>
       )}
+
+      <PartnerCommissionsPanel
+        onChanged={async () => {
+          await loadData();
+        }}
+      />
 
       {showForm && (
         <article className="panel">

@@ -93,6 +93,81 @@ async function request<T = unknown>(path: string, options: RequestInit = {}) {
   return response.json() as Promise<T>;
 }
 
+async function requestBlob(
+  path: string,
+  options: RequestInit = {}
+) {
+  const token = getToken();
+
+  const response = await fetch(
+    `${API_URL}${path}`,
+    {
+      ...options,
+      headers: {
+        "ngrok-skip-browser-warning": "true",
+        ...(token
+          ? {
+              Authorization:
+                `Bearer ${token}`,
+            }
+          : {}),
+        ...(options.headers || {}),
+      },
+    }
+  );
+
+  if (!response.ok) {
+    let message =
+      "Erro ao carregar arquivo.";
+
+    try {
+      const contentType =
+        response.headers.get(
+          "content-type"
+        ) || "";
+
+      if (
+        contentType.includes(
+          "application/json"
+        )
+      ) {
+        const data =
+          await response.json();
+
+        message =
+          data.message ||
+          data.error ||
+          message;
+      } else {
+        const text =
+          await response.text();
+
+        message =
+          text || message;
+      }
+    } catch {
+      // mantém mensagem padrão
+    }
+
+    throw new Error(message);
+  }
+
+  const blob =
+    await response.blob();
+
+  return {
+    blob,
+    contentType:
+      response.headers.get(
+        "content-type"
+      ),
+    contentDisposition:
+      response.headers.get(
+        "content-disposition"
+      ),
+  };
+}
+
 export const api = {
 login(email: string, password: string) {
   return request("/auth/login", {
@@ -107,6 +182,239 @@ login(email: string, password: string) {
 
   dashboard() {
     return request("/dashboard");
+  },
+
+  // ================================
+  // PROPOSTAS AVULSAS
+  // ================================
+
+  standaloneProposalSummary() {
+    return request("/standalone-proposals/summary");
+  },
+
+  standaloneProposals(params?: {
+    search?: string;
+    status?: string;
+  }) {
+    const query = new URLSearchParams();
+
+    if (params?.search) {
+      query.set("search", params.search);
+    }
+
+    if (params?.status) {
+      query.set("status", params.status);
+    }
+
+    const suffix = query.toString();
+
+    return request(
+      `/standalone-proposals${suffix ? `?${suffix}` : ""}`
+    );
+  },
+
+  standaloneProposal(id: number) {
+    return request(`/standalone-proposals/${id}`);
+  },
+
+  createStandaloneProposal(data: Record<string, unknown>) {
+    return request("/standalone-proposals", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+
+  updateStandaloneProposal(
+    id: number,
+    data: Record<string, unknown>
+  ) {
+    return request(`/standalone-proposals/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  },
+
+  generateStandaloneProposalPdf(id: number) {
+    return request(`/standalone-proposals/${id}/generate-pdf`, {
+      method: "POST",
+    });
+  },
+
+  approveStandaloneProposalVerbally(
+    id: number,
+    data: {
+      approvedBy: string;
+      note?: string | null;
+    }
+  ) {
+    return request(
+      `/standalone-proposals/${id}/approve-verbal`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    );
+  },
+
+  cancelStandaloneProposal(
+    id: number,
+    data?: {
+      reason?: string | null;
+    }
+  ) {
+    return request(
+      `/standalone-proposals/${id}/cancel`,
+      {
+        method: "POST",
+        body: JSON.stringify(data || {}),
+      }
+    );
+  },
+
+  duplicateStandaloneProposal(id: number) {
+    return request(
+      `/standalone-proposals/${id}/duplicate`,
+      {
+        method: "POST",
+      }
+    );
+  },
+
+  standaloneProposalPdfBlob(id: number) {
+    return requestBlob(
+      `/standalone-proposals/${id}/pdf`
+    );
+  },
+
+  addStandaloneProposalAttachment(
+    proposalId: number,
+    data: {
+      title: string;
+      description?: string | null;
+    }
+  ) {
+    return request(
+      `/standalone-proposals/${proposalId}/attachments`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    );
+  },
+
+  uploadStandaloneProposalAttachment(
+    proposalId: number,
+    data: {
+      title: string;
+      description?: string | null;
+      file: File;
+    }
+  ) {
+    const formData = new FormData();
+
+    formData.append("title", data.title);
+
+    if (data.description) {
+      formData.append(
+        "description",
+        data.description
+      );
+    }
+
+    formData.append(
+      "file",
+      data.file
+    );
+
+    return request(
+      `/standalone-proposals/${proposalId}/attachments/file`,
+      {
+        method: "POST",
+        body: formData,
+      }
+    );
+  },
+
+  deleteStandaloneProposalAttachment(
+    proposalId: number,
+    attachmentId: number
+  ) {
+    return request(
+      `/standalone-proposals/${proposalId}/attachments/${attachmentId}`,
+      {
+        method: "DELETE",
+      }
+    );
+  },
+
+  addStandaloneProposalCatalogItem(
+    proposalId: number,
+    data: {
+      catalogServiceId: number;
+      quantity?: number;
+      unitAmount?: number;
+      description?: string | null;
+    }
+  ) {
+    return request(
+      `/standalone-proposals/${proposalId}/items/catalog`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    );
+  },
+
+  addStandaloneProposalManualItem(
+    proposalId: number,
+    data: {
+      serviceName: string;
+      description?: string | null;
+      quantity?: number;
+      unitLabel?: string | null;
+      unitAmount: number;
+    }
+  ) {
+    return request(
+      `/standalone-proposals/${proposalId}/items/manual`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    );
+  },
+
+  updateStandaloneProposalItem(
+    proposalId: number,
+    itemId: number,
+    data: {
+      serviceName?: string;
+      description?: string | null;
+      quantity?: number;
+      unitLabel?: string | null;
+      unitAmount?: number;
+      sortOrder?: number;
+    }
+  ) {
+    return request(
+      `/standalone-proposals/${proposalId}/items/${itemId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    );
+  },
+
+  deleteStandaloneProposalItem(
+    proposalId: number,
+    itemId: number
+  ) {
+    return request(
+      `/standalone-proposals/${proposalId}/items/${itemId}`,
+      {
+        method: "DELETE",
+      }
+    );
   },
 
   serviceTypes() {
@@ -1031,6 +1339,33 @@ removePartnerReferral(protocolId: number) {
   );
 },
 
+
+partnerCommissions(status?: string) {
+  const query = status
+    ? `?status=${encodeURIComponent(status)}`
+    : "";
+
+  return request(
+    `/partner-commissions${query}`
+  );
+},
+
+payPartnerCommission(
+  id: number,
+  data?: {
+    paidAt?: string;
+    notes?: string;
+  }
+) {
+  return request(
+    `/partner-commissions/${id}/pay`,
+    {
+      method: "POST",
+      body: JSON.stringify(data || {}),
+    }
+  );
+},
+
 partnerRanking(
   period: "all" | "month" | "last3months" | "year" | string = "all"
 ) {
@@ -1082,5 +1417,225 @@ togglePartnerActive(id: number) {
   });
 },
 
+
+
+// ==========================================
+// CATÁLOGO TÉCNICO-COMERCIAL
+// ==========================================
+
+catalogSummary() {
+  return request("/catalog/summary");
+},
+
+catalogCategories(includeInactive = true) {
+  const query = includeInactive
+    ? "?includeInactive=true"
+    : "";
+
+  return request(`/catalog/categories${query}`);
+},
+
+createCatalogCategory(data: {
+  name: string;
+  code?: string;
+  description?: string | null;
+  sortOrder?: number;
+  active?: boolean;
+}) {
+  return request("/catalog/categories", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+},
+
+updateCatalogCategory(
+  id: number,
+  data: {
+    name?: string;
+    code?: string;
+    description?: string | null;
+    sortOrder?: number;
+    active?: boolean;
+  }
+) {
+  return request(`/catalog/categories/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+},
+
+catalogServices(params?: {
+  includeInactive?: boolean;
+  categoryId?: number;
+  search?: string;
+}) {
+  const query = new URLSearchParams();
+
+  if (params?.includeInactive) {
+    query.set("includeInactive", "true");
+  }
+
+  if (params?.categoryId) {
+    query.set(
+      "categoryId",
+      String(params.categoryId)
+    );
+  }
+
+  if (params?.search) {
+    query.set("search", params.search);
+  }
+
+  const suffix = query.toString();
+
+  return request(
+    `/catalog/services${suffix ? `?${suffix}` : ""}`
+  );
+},
+
+catalogServiceById(id: number) {
+  return request(`/catalog/services/${id}`);
+},
+
+createCatalogService(data: {
+  categoryId: number;
+  code?: string;
+  name: string;
+  acronym?: string | null;
+  shortDescription?: string | null;
+  proposalDescription?: string | null;
+  technicalDescription?: string | null;
+  legalText?: string | null;
+  pricingMode:
+    | "FIXO"
+    | "POR_HECTARE"
+    | "POR_KM"
+    | "POR_UNIDADE"
+    | "POR_MODULO_FISCAL"
+    | "POR_DIARIA"
+    | "POR_HORA"
+    | "POR_FAIXA"
+    | "SOB_CONSULTA";
+  baseAmount?: number;
+  minimumAmount?: number | null;
+  unitLabel?: string | null;
+  defaultExecutionDays?: number | null;
+  allowManualPrice?: boolean;
+  sortOrder?: number;
+  active?: boolean;
+}) {
+  return request("/catalog/services", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+},
+
+updateCatalogService(
+  id: number,
+  data: {
+    categoryId?: number;
+    code?: string;
+    name?: string;
+    acronym?: string | null;
+    shortDescription?: string | null;
+    proposalDescription?: string | null;
+    technicalDescription?: string | null;
+    legalText?: string | null;
+    pricingMode?:
+      | "FIXO"
+      | "POR_HECTARE"
+      | "POR_KM"
+      | "POR_UNIDADE"
+      | "POR_MODULO_FISCAL"
+      | "POR_DIARIA"
+      | "POR_HORA"
+      | "POR_FAIXA"
+      | "SOB_CONSULTA";
+    baseAmount?: number;
+    minimumAmount?: number | null;
+    unitLabel?: string | null;
+    defaultExecutionDays?: number | null;
+    allowManualPrice?: boolean;
+    sortOrder?: number;
+    active?: boolean;
+  }
+) {
+  return request(`/catalog/services/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+},
+
+updateCatalogPricingTiers(
+  id: number,
+  tiers: Array<{
+    minQuantity?: number | null;
+    maxQuantity?: number | null;
+    unitAmount: number;
+    minimumAmount?: number | null;
+    sortOrder?: number;
+    active?: boolean;
+  }>
+) {
+  return request(
+    `/catalog/services/${id}/pricing-tiers`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ tiers }),
+    }
+  );
+},
+
+catalogPackages(includeInactive = true) {
+  const query = includeInactive
+    ? "?includeInactive=true"
+    : "";
+
+  return request(`/catalog/packages${query}`);
+},
+
+createCatalogPackage(data: {
+  name: string;
+  code?: string;
+  description?: string | null;
+  proposalDescription?: string | null;
+  active?: boolean;
+}) {
+  return request("/catalog/packages", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+},
+
+updateCatalogPackage(
+  id: number,
+  data: {
+    name?: string;
+    code?: string;
+    description?: string | null;
+    proposalDescription?: string | null;
+    active?: boolean;
+  }
+) {
+  return request(`/catalog/packages/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+},
+
+updateCatalogPackageItems(
+  id: number,
+  items: Array<{
+    serviceId: number;
+    quantity?: number;
+    required?: boolean;
+    sortOrder?: number;
+  }>
+) {
+  return request(`/catalog/packages/${id}/items`, {
+    method: "PUT",
+    body: JSON.stringify({ items }),
+  });
+},
 
 };

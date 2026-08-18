@@ -1,11 +1,20 @@
 import "./App.css";
+import StandaloneProposalsPage from "./pages/StandaloneProposalsPage";
+import StandaloneProposalEditorPage from "./pages/StandaloneProposalEditorPage";
+import {
+  copyPublicLink as copySharedPublicLink,
+  openWhatsappShare,
+} from "./utils/share";
 import PartnerReferralPanel from "./components/partners/PartnerReferralPanel";
 import PartnersFinanceTab from "./components/finance/PartnersFinanceTab";
 import { api, setAuth, clearAuth } from "./services/api";
+import CatalogPage from "./pages/CatalogPage";
 import {
   BarChart3,
+  BookOpen,
   CalendarDays,
   ClipboardList,
+  ChevronDown,
   Clock,
   FileText,
   LayoutDashboard,
@@ -16,6 +25,8 @@ import {
   MessageCircle,
   Settings,
   WalletCards,
+  UsersRound,
+  History,
   X,
   Eye,
   EyeOff,
@@ -2033,6 +2044,18 @@ const nav = [
     to: "/app/agendamentos",
     icon: CalendarDays,
     roles: ["ATENDENTE", "GERENTE", "PROGRAMADOR"],
+  },
+  {
+    label: "Propostas Avulsas",
+    to: "/app/propostas-avulsas",
+    icon: FileText,
+    roles: ["GERENTE", "PROGRAMADOR"],
+  },
+  {
+    label: "Catálogo de Serviços",
+    to: "/app/catalogo",
+    icon: BookOpen,
+    roles: ["GERENTE", "PROGRAMADOR"],
   },
   {
     label: "Financeiro",
@@ -5054,14 +5077,59 @@ return (
                     )}
 
                     {proposal.status === "ENVIADA" && (
-                      <a
-                        className="mini-button"
-                        href={`/proposta/${proposal.publicToken}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Ver link
-                      </a>
+                      <>
+                        <a
+                          className="mini-button"
+                          href={`/proposta/${proposal.publicToken}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Ver proposta
+                        </a>
+
+                        <button
+                          className="mini-button"
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await copySharedPublicLink(
+                                `/proposta/${proposal.publicToken}`
+                              );
+                              setSuccess(
+                                "Link da proposta copiado."
+                              );
+                            } catch {
+                              setError(
+                                "Não foi possível copiar o link da proposta."
+                              );
+                            }
+                          }}
+                        >
+                          Copiar link
+                        </button>
+
+                        <button
+                          className="mini-button"
+                          type="button"
+                          onClick={() =>
+                            openWhatsappShare({
+                              phone:
+                                protocol.client.whatsapp ||
+                                protocol.client.phone,
+
+                              message:
+                                `Olá, ${protocol.client.name}. ` +
+                                `Segue a proposta comercial ${proposal.proposalNumber} ` +
+                                `da Amazônika Engenharia & Meio Ambiente:`,
+
+                              pathOrUrl:
+                                `/proposta/${proposal.publicToken}`,
+                            })
+                          }
+                        >
+                          WhatsApp
+                        </button>
+                      </>
                     )}
 
                     {proposal.status === "ACEITA" && (
@@ -5380,6 +5448,29 @@ const hasAcceptedProposalPendingContract = Boolean(acceptedProposal);
                         onClick={() => copyPublicLink(contract)}
                       >
                         Copiar link
+                      </button>
+
+                      <button
+                        className="mini-button"
+                        type="button"
+                        onClick={() =>
+                          openWhatsappShare({
+                            phone:
+                              protocol.client.whatsapp ||
+                              protocol.client.phone,
+
+                            message:
+                              `Olá, ${protocol.client.name}. ` +
+                              `Segue o contrato ${contract.contractNumber} ` +
+                              `para leitura e assinatura eletrônica:`,
+
+                            pathOrUrl:
+                              contract.publicUrl ||
+                              `/contrato/${contract.publicToken}`,
+                          })
+                        }
+                      >
+                        WhatsApp
                       </button>
                     </div>
                   </td>
@@ -6084,6 +6175,27 @@ const confirmed = window.confirm(
                   >
                     Copiar link
                   </button>
+
+                  <button
+                    className="mini-button"
+                    type="button"
+                    onClick={() =>
+                      openWhatsappShare({
+                        phone:
+                          protocol.client.whatsapp ||
+                          protocol.client.phone,
+
+                        message:
+                          `Olá, ${protocol.client.name}. ` +
+                          `Segue a cobrança referente a ${charge.description}:`,
+
+                        pathOrUrl:
+                          `/cobranca/${charge.id}`,
+                      })
+                    }
+                  >
+                    WhatsApp
+                  </button>
                 </div>
               </td>
             </tr>
@@ -6176,11 +6288,17 @@ const confirmed = window.confirm(
                   </div>
                 )}
 
-{(charge.status === "AGUARDANDO_DOCUMENTO_FISCAL" ||
-  charge.status === "PRONTA_PARA_EMISSAO" ||
-  charge.status === "EMITIDA" ||
-  charge.status === "ENVIADA" ||
-  needsReceipt) && (
+{(
+  (
+    charge.fiscalMode === "NOTA_FISCAL_ANTES" &&
+    !hasInvoice &&
+    (
+      charge.status === "AGUARDANDO_DOCUMENTO_FISCAL" ||
+      charge.status === "PRONTA_PARA_EMISSAO"
+    )
+  ) ||
+  needsReceipt
+) && (
                   <div className="billing-step-box">
                     <h4>
                       {charge.status === "PAGA"
@@ -6343,6 +6461,15 @@ const confirmed = window.confirm(
                     ))}
                   </div>
                 )}
+
+                {charge.fiscalMode === "RECIBO_POSTERIOR" &&
+                  charge.status === "PRONTA_PARA_EMISSAO" && (
+                    <div className="success-panel">
+                      <strong>Modo fiscal definido: recibo após o pagamento.</strong>
+                      <br />
+                      Nenhum documento precisa ser anexado agora. O próximo passo é emitir o Pix.
+                    </div>
+                  )}
 
                 {charge.status === "PRONTA_PARA_EMISSAO" && (
                   <button
@@ -6983,6 +7110,12 @@ function ProtocolDetailsPage() {
   const { id } = useParams();
   const navigate = useNavigate();
 
+  const currentRole = localStorage.getItem("amazonika_role");
+
+  const canAccessCommercialFlow =
+    currentRole === "GERENTE" ||
+    currentRole === "PROGRAMADOR";
+
   const [protocol, setProtocol] = useState<BackendProtocol | null>(null);
   const [serviceTypes, setServiceTypes] = useState<BackendServiceType[]>([]);
   const [managers, setManagers] = useState<BackendManager[]>([]);
@@ -7371,7 +7504,40 @@ return (
       {error && <div className="panel error-panel no-print">{error}</div>}
 
       {!editing ? (
-        <div className="detail-grid">
+        <details className="protocol-stage">
+          <summary className="protocol-stage-summary">
+            <div className="protocol-stage-main">
+              <div className="protocol-stage-heading">
+                <span className="protocol-stage-check">✓</span>
+
+                <div>
+                  <strong>
+                    Protocolo e atendimento inicial
+                  </strong>
+
+                  <p>
+                    {protocol.client.name} · {protocol.serviceType.name}
+                  </p>
+
+                  {appointment && (
+                    <small>
+                      Agendamento: {formatDate(appointment.scheduledAt)}
+                    </small>
+                  )}
+                </div>
+              </div>
+
+              <span className="protocol-stage-toggle">
+                Ver detalhes
+                <ChevronDown
+                  size={16}
+                  className="protocol-stage-chevron"
+                />
+              </span>
+            </div>
+          </summary>
+
+          <div className="detail-grid">
           <article className="panel">
             <h2>Dados do cliente</h2>
             <DetailRow label="Nome" value={protocol.client.name} />
@@ -7461,7 +7627,8 @@ return (
               )}
             </div>
           </article>
-        </div>
+          </div>
+        </details>
       ) : (
         <div className="panel no-print">
           <h2>Editar protocolo</h2>
@@ -7887,42 +8054,177 @@ return (
 
 {!editing && (
   <>
-    <PartnerReferralPanel
+    {canAccessCommercialFlow && (
+      <details className="protocol-flow-stage protocol-flow-stage--partner">
+        <summary className="protocol-flow-stage-summary">
+          <div className="protocol-flow-stage-icon">
+            <UsersRound size={21} strokeWidth={1.9} />
+          </div>
+
+          <div className="protocol-flow-stage-copy">
+            <strong>Indicação de parceiro</strong>
+            <span>
+              Parceiro comercial, percentual e comissão vinculada ao serviço.
+            </span>
+          </div>
+
+          <div className="protocol-flow-stage-action">
+            <span>Ver detalhes</span>
+            <ChevronDown
+              size={16}
+              className="protocol-flow-stage-chevron"
+            />
+          </div>
+        </summary>
+
+        <div className="protocol-flow-stage-body">
+          <PartnerReferralPanel
       protocol={protocol}
       onReload={async () => {
         await loadDetails();
         setProposalHistoryRefreshKey((value) => value + 1);
       }}
     />
+        </div>
+      </details>
+    )}
 
-    <ProposalPanel
+    {canAccessCommercialFlow && (
+      <details className="protocol-flow-stage protocol-flow-stage--proposal">
+        <summary className="protocol-flow-stage-summary">
+          <div className="protocol-flow-stage-icon">
+            <FileText size={21} strokeWidth={1.9} />
+          </div>
+
+          <div className="protocol-flow-stage-copy">
+            <strong>Propostas comerciais</strong>
+            <span>
+              Propostas, valores, aceite do cliente e compartilhamento.
+            </span>
+          </div>
+
+          <div className="protocol-flow-stage-action">
+            <span>Ver detalhes</span>
+            <ChevronDown
+              size={16}
+              className="protocol-flow-stage-chevron"
+            />
+          </div>
+        </summary>
+
+        <div className="protocol-flow-stage-body">
+          <ProposalPanel
       protocol={protocol}
       onReload={async () => {
         await loadDetails();
         setProposalHistoryRefreshKey((value) => value + 1);
       }}
     />
+        </div>
+      </details>
+    )}
 
-<ContractPanel
+{canAccessCommercialFlow && (
+      <details className="protocol-flow-stage protocol-flow-stage--contract">
+        <summary className="protocol-flow-stage-summary">
+          <div className="protocol-flow-stage-icon">
+            <ClipboardList size={21} strokeWidth={1.9} />
+          </div>
+
+          <div className="protocol-flow-stage-copy">
+            <strong>Contratos</strong>
+            <span>
+              Geração, assinatura eletrônica e compartilhamento do contrato.
+            </span>
+          </div>
+
+          <div className="protocol-flow-stage-action">
+            <span>Ver detalhes</span>
+            <ChevronDown
+              size={16}
+              className="protocol-flow-stage-chevron"
+            />
+          </div>
+        </summary>
+
+        <div className="protocol-flow-stage-body">
+          <ContractPanel
   protocol={protocol}
   onReload={async () => {
     await loadDetails();
     setProposalHistoryRefreshKey((value) => value + 1);
   }}
 />
+        </div>
+      </details>
+    )}
 
-<BillingPanel
+{canAccessCommercialFlow && (
+      <details className="protocol-flow-stage protocol-flow-stage--billing">
+        <summary className="protocol-flow-stage-summary">
+          <div className="protocol-flow-stage-icon">
+            <WalletCards size={21} strokeWidth={1.9} />
+          </div>
+
+          <div className="protocol-flow-stage-copy">
+            <strong>Cobranças</strong>
+            <span>
+              Entrada, parcelas, Pix, vencimentos e situação dos pagamentos.
+            </span>
+          </div>
+
+          <div className="protocol-flow-stage-action">
+            <span>Ver detalhes</span>
+            <ChevronDown
+              size={16}
+              className="protocol-flow-stage-chevron"
+            />
+          </div>
+        </summary>
+
+        <div className="protocol-flow-stage-body">
+          <BillingPanel
   protocol={protocol}
   onReload={async () => {
     await loadDetails();
     setProposalHistoryRefreshKey((value) => value + 1);
   }}
 />
+        </div>
+      </details>
+    )}
 
-<ProposalHistoryPanel
-  protocolId={protocol.id}
-  refreshKey={proposalHistoryRefreshKey}
-/>
+{canAccessCommercialFlow && (
+      <details className="protocol-flow-stage protocol-flow-stage--history">
+        <summary className="protocol-flow-stage-summary">
+          <div className="protocol-flow-stage-icon">
+            <History size={21} strokeWidth={1.9} />
+          </div>
+
+          <div className="protocol-flow-stage-copy">
+            <strong>Histórico comercial</strong>
+            <span>
+              Linha do tempo de propostas, contratos, cobranças e pagamentos.
+            </span>
+          </div>
+
+          <div className="protocol-flow-stage-action">
+            <span>Ver detalhes</span>
+            <ChevronDown
+              size={16}
+              className="protocol-flow-stage-chevron"
+            />
+          </div>
+        </summary>
+
+        <div className="protocol-flow-stage-body">
+          <ProposalHistoryPanel
+    protocolId={protocol.id}
+    refreshKey={proposalHistoryRefreshKey}
+  />
+        </div>
+      </details>
+    )}
   </>
 )}
     </section>
@@ -11482,6 +11784,33 @@ function App() {
         <Route index element={<Navigate to="/app/dashboard" replace />} />
         <Route path="dashboard" element={<AdminDashboard />} />
         <Route path="agendamentos" element={<SchedulePage />} />
+
+        <Route
+          path="propostas-avulsas/:id"
+          element={
+            <ProtectedRoute allowed={["GERENTE", "PROGRAMADOR"]}>
+              <StandaloneProposalEditorPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="propostas-avulsas"
+          element={
+            <ProtectedRoute allowed={["GERENTE", "PROGRAMADOR"]}>
+              <StandaloneProposalsPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="catalogo"
+          element={
+            <ProtectedRoute allowed={["GERENTE", "PROGRAMADOR"]}>
+              <CatalogPage />
+            </ProtectedRoute>
+          }
+        />
 
         <Route
           path="financeiro"

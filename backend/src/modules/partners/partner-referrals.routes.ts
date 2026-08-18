@@ -54,7 +54,7 @@ function getContractBaseAmount(contract: any) {
   ) {
     return Math.max(
       0,
-      Math.round(Number(contract.proposal.totalAmount))
+      Math.round(Number(contract.proposal.totalAmount) * 100)
     );
   }
 
@@ -64,7 +64,7 @@ function getContractBaseAmount(contract: any) {
    */
   return Math.max(
     0,
-    Math.round(Number(contract.contractValue || 0))
+    Math.round(Number(contract.contractValue || 0) * 100)
   );
 }
 

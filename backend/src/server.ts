@@ -11,7 +11,11 @@ import nodemailer from "nodemailer";
 import PDFDocument from "pdfkit";
 import crypto from "crypto";
 import { registerPartnerRoutes } from "./modules/partners/partners.routes";
+import { registerCatalogRoutes } from "./modules/catalog/catalog.routes";
+import { registerStandaloneProposalRoutes } from "./modules/standalone-proposals/standalone-proposals.routes";
 import { registerPartnerReferralRoutes } from "./modules/partners/partner-referrals.routes";
+import { registerPartnerCommissionRoutes } from "./modules/partners/partner-commissions.routes";
+import { releasePartnerCommissionForEntryPayment } from "./modules/partners/partner-commission.service";
 
 
 import {
@@ -75,10 +79,10 @@ type AuthRequest = Request & {
 };
 
 function generateBillingChargeReissueTxid(chargeId: number) {
-  const timestamp = Date.now().toString(36).toUpperCase();
-  const random = crypto.randomBytes(4).toString("hex").toUpperCase();
-
-  return `AMZ${String(chargeId).padStart(6, "0")}${timestamp}${random}`
+  return `AMZR${String(chargeId).padStart(8, "0")}${crypto
+    .randomBytes(16)
+    .toString("hex")
+    .toUpperCase()}`
     .replace(/[^a-zA-Z0-9]/g, "")
     .slice(0, 35);
 }
@@ -3462,6 +3466,49 @@ app.get(
 
       return res.status(500).json({
         message: "Erro ao buscar clientes.",
+      });
+    }
+  }
+);
+
+app.get(
+  "/clients",
+  authMiddleware,
+  requireRoles(["ATENDENTE", "GERENTE", "PROGRAMADOR"]),
+  async (_req, res) => {
+    try {
+      const clients = await prisma.client.findMany({
+        orderBy: {
+          name: "asc",
+        },
+
+        select: {
+          id: true,
+          name: true,
+          personType: true,
+          cpfCnpj: true,
+          phone: true,
+          whatsapp: true,
+          email: true,
+          address: true,
+          city: true,
+          state: true,
+          notes: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
+
+      return res.json(clients);
+    } catch (error) {
+      console.error(
+        "Erro ao listar clientes:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Erro ao listar clientes.",
       });
     }
   }
@@ -9980,11 +10027,32 @@ const paidAmount =
 
       const competenceMonth = getCompetenceMonthFromDate(paidAt);
 
+      const contractsCategory =
+        await prisma.financialCategory.upsert({
+          where: {
+            name_type: {
+              name: "Contratos",
+              type: "RECEITA",
+            },
+          },
+          update: {
+            active: true,
+          },
+          create: {
+            name: "Contratos",
+            type: "RECEITA",
+            active: true,
+            color: "#0f766e",
+          },
+        });
+
       const duplicatedTransaction =
         await prisma.financialTransaction.findFirst({
           where: {
             type: "ENTRADA",
             source: "CONTRATO",
+
+          
             protocolId: charge.protocolId,
             description: {
               contains: `Cobrança #${charge.id}`,
@@ -9997,6 +10065,7 @@ const paidAmount =
           data: {
             type: "ENTRADA",
             source: "CONTRATO",
+          categoryId: contractsCategory.id,
             status: "PAGO",
             protocolId: charge.protocolId,
             description: `Entrada paga - Cobrança #${charge.id} - ${
@@ -10013,6 +10082,23 @@ const paidAmount =
             createdById: req.user?.id || null,
           },
         });
+      }
+
+      // ------------------------------------------------------
+      // COMISSÃO DO PARCEIRO
+      // Libera somente após pagamento da ENTRADA.
+      // Parcelas posteriores não alteram a comissão.
+      // ------------------------------------------------------
+
+      if (charge.chargeType === "ENTRADA") {
+        await releasePartnerCommissionForEntryPayment(
+          prisma,
+          {
+            protocolId: charge.protocolId,
+            contractId: charge.contractId,
+            paidAt,
+          }
+        );
       }
 
       const nextDeadline =
@@ -10525,6 +10611,30 @@ registerPartnerReferralRoutes({
   prisma,
   authMiddleware,
   requireRoles,
+});
+
+registerPartnerCommissionRoutes({
+  app,
+  prisma,
+  authMiddleware,
+  requireRoles,
+});
+
+
+registerCatalogRoutes({
+  app,
+  prisma,
+  authMiddleware,
+  requireRoles,
+});
+
+
+registerStandaloneProposalRoutes({
+  app,
+  prisma,
+  authMiddleware,
+  requireRoles,
+  upload,
 });
 
 app.get("/health", (_req, res) => {
