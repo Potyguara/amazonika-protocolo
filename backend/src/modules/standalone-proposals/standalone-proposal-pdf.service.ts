@@ -663,25 +663,63 @@ function drawItemsTable(
 
   items.forEach(
     (item, index) => {
-      const description =
-        safeText(item.description) ||
-        safeText(item.serviceName);
-
-      const descriptionHeight =
-        doc.heightOfString(
-          description,
-          {
-            width:
-              widths.description -
-              10,
-            lineGap: 2,
-          }
+      /*
+       * A tabela comercial deve permanecer compacta.
+       *
+       * Textos comerciais, técnicos e legais completos
+       * são apresentados posteriormente no corpo da
+       * proposta.
+       */
+      const summary =
+        safeText(
+          item.summaryDescription
         );
+
+      const serviceName =
+        safeText(
+          item.serviceName
+        ) || "Serviço";
+
+      const serviceNameHeight =
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(8)
+          .heightOfString(
+            serviceName,
+            {
+              width:
+                widths.description -
+                10,
+              lineGap: 1,
+            }
+          );
+
+      const summaryHeight =
+        summary
+          ? doc
+              .font("Helvetica")
+              .fontSize(7.4)
+              .heightOfString(
+                summary,
+                {
+                  width:
+                    widths.description -
+                    10,
+                  lineGap: 1.5,
+                }
+              )
+          : 0;
 
       const rowHeight =
         Math.max(
-          36,
-          descriptionHeight + 14
+          34,
+          12 +
+            serviceNameHeight +
+            (
+              summary
+                ? summaryHeight + 5
+                : 0
+            )
         );
 
       if (
@@ -746,33 +784,36 @@ function drawItemsTable(
         .fontSize(8)
         .fillColor(DARK)
         .text(
-          item.serviceName,
+          serviceName,
           cursor + 5,
           y + 7,
           {
             width:
               widths.description -
               10,
+            lineGap: 1,
           }
         );
 
-      if (
-        description !==
-        item.serviceName
-      ) {
+      if (summary) {
+        const summaryY =
+          y +
+          9 +
+          serviceNameHeight;
+
         doc
           .font("Helvetica")
-          .fontSize(8)
+          .fontSize(7.4)
           .fillColor(MUTED)
           .text(
-            description,
+            summary,
             cursor + 5,
-            y + 18,
+            summaryY,
             {
               width:
                 widths.description -
                 10,
-              lineGap: 2,
+              lineGap: 1.5,
             }
           );
       }
@@ -853,6 +894,146 @@ function drawItemsTable(
   );
 
   doc.moveDown(0.6);
+}
+
+type ProposalItemNarrativeField =
+  | "commercialDescription"
+  | "technicalDescription"
+  | "legalText";
+
+function itemNarrativeText(
+  item: any,
+  field: ProposalItemNarrativeField
+) {
+  /*
+   * Compatibilidade com propostas anteriores à V2:
+   * description era o campo comercial genérico.
+   */
+  if (
+    field ===
+    "commercialDescription"
+  ) {
+    return (
+      safeText(
+        item.commercialDescription
+      ) ||
+      safeText(
+        item.description
+      )
+    );
+  }
+
+  return safeText(
+    item[field]
+  );
+}
+
+function hasNarrativeContent(
+  items: any[],
+  field: ProposalItemNarrativeField
+) {
+  return items.some(
+    (item) =>
+      Boolean(
+        itemNarrativeText(
+          item,
+          field
+        )
+      )
+  );
+}
+
+function drawServiceNarratives(
+  doc: PDFKit.PDFDocument,
+  items: any[],
+  field: ProposalItemNarrativeField
+) {
+  const availableItems =
+    items.filter(
+      (item) =>
+        Boolean(
+          itemNarrativeText(
+            item,
+            field
+          )
+        )
+    );
+
+  availableItems.forEach(
+    (item, index) => {
+      const content =
+        itemNarrativeText(
+          item,
+          field
+        );
+
+      if (!content) {
+        return;
+      }
+
+      ensureSpace(
+        doc,
+        82
+      );
+
+      const originalIndex =
+        items.findIndex(
+          (candidate) =>
+            candidate.id ===
+            item.id
+        );
+
+      const itemNumber =
+        originalIndex >= 0
+          ? originalIndex + 1
+          : index + 1;
+
+      const acronym =
+        safeText(
+          item.acronym
+        ) ||
+        safeText(
+          item.catalogServiceCode
+        );
+
+      const title =
+        `${itemNumber}. ${safeText(
+          item.serviceName
+        ) || "Serviço"}${
+          acronym
+            ? ` (${acronym})`
+            : ""
+        }`;
+
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(9.3)
+        .fillColor(DARK)
+        .text(
+          title,
+          PAGE_LEFT,
+          doc.y,
+          {
+            width:
+              CONTENT_WIDTH,
+          }
+        );
+
+      doc.moveDown(0.28);
+
+      paragraph(
+        doc,
+        content
+      );
+
+      if (
+        index <
+        availableItems.length - 1
+      ) {
+        doc.moveDown(0.15);
+      }
+    }
+  );
 }
 
 function drawTotals(
@@ -1163,7 +1344,79 @@ export async function generateStandaloneProposalPdf(
     doc,
     proposal
   );
-  doc.x = doc.page.margins.left;
+
+  doc.x =
+    doc.page.margins.left;
+
+  /*
+   * =====================================================
+   * CONTEÚDO DESCRITIVO DOS SERVIÇOS
+   * =====================================================
+   *
+   * A tabela anterior apresenta somente informações
+   * comerciais essenciais. Os textos extensos passam
+   * a integrar o corpo da proposta.
+   */
+
+  if (
+    hasNarrativeContent(
+      proposal.items,
+      "commercialDescription"
+    )
+  ) {
+    sectionTitle(
+      doc,
+      nextSection(
+        "Descrição Comercial dos Serviços"
+      )
+    );
+
+    drawServiceNarratives(
+      doc,
+      proposal.items,
+      "commercialDescription"
+    );
+  }
+
+  if (
+    hasNarrativeContent(
+      proposal.items,
+      "technicalDescription"
+    )
+  ) {
+    sectionTitle(
+      doc,
+      nextSection(
+        "Descrição Técnica dos Serviços"
+      )
+    );
+
+    drawServiceNarratives(
+      doc,
+      proposal.items,
+      "technicalDescription"
+    );
+  }
+
+  if (
+    hasNarrativeContent(
+      proposal.items,
+      "legalText"
+    )
+  ) {
+    sectionTitle(
+      doc,
+      nextSection(
+        "Fundamentação Legal e Normativa"
+      )
+    );
+
+    drawServiceNarratives(
+      doc,
+      proposal.items,
+      "legalText"
+    );
+  }
 
   if (
     proposal.executionText ||

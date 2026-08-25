@@ -406,7 +406,21 @@ login(email: string, password: string) {
       catalogServiceId: number;
       quantity?: number;
       unitAmount?: number;
+
+      // Texto curto exibido na tabela comercial.
+      summaryDescription?: string | null;
+
+      // Descrição comercial detalhada.
+      commercialDescription?: string | null;
+
+      // Campo legado, mantido para compatibilidade.
       description?: string | null;
+
+      // Conteúdo técnico detalhado.
+      technicalDescription?: string | null;
+
+      // Fundamentação legal/normativa.
+      legalText?: string | null;
     }
   ) {
     return request(
@@ -422,7 +436,22 @@ login(email: string, password: string) {
     proposalId: number,
     data: {
       serviceName: string;
+
+      // Texto curto exibido na tabela comercial.
+      summaryDescription?: string | null;
+
+      // Descrição comercial detalhada.
+      commercialDescription?: string | null;
+
+      // Campo legado, mantido para compatibilidade.
       description?: string | null;
+
+      // Conteúdo técnico detalhado.
+      technicalDescription?: string | null;
+
+      // Fundamentação legal/normativa.
+      legalText?: string | null;
+
       quantity?: number;
       unitLabel?: string | null;
       unitAmount: number;
@@ -442,7 +471,16 @@ login(email: string, password: string) {
     itemId: number,
     data: {
       serviceName?: string;
+
+      summaryDescription?: string | null;
+      commercialDescription?: string | null;
+
+      // Campo legado.
       description?: string | null;
+
+      technicalDescription?: string | null;
+      legalText?: string | null;
+
       quantity?: number;
       unitLabel?: string | null;
       unitAmount?: number;

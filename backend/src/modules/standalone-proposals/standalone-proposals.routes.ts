@@ -1358,7 +1358,18 @@ export function registerStandaloneProposalRoutes({
               acronym:
                 service.acronym,
 
-              description:
+              summaryDescription:
+                textOrNull(
+                  req.body?.summaryDescription
+                ) ||
+                service.shortDescription ||
+                service.name ||
+                null,
+
+              commercialDescription:
+                textOrNull(
+                  req.body?.commercialDescription
+                ) ||
                 textOrNull(
                   req.body?.description
                 ) ||
@@ -1366,11 +1377,33 @@ export function registerStandaloneProposalRoutes({
                 service.shortDescription ||
                 null,
 
+              // Campo legado preservado para compatibilidade.
+              description:
+                textOrNull(
+                  req.body?.description
+                ) ||
+                textOrNull(
+                  req.body?.commercialDescription
+                ) ||
+                service.proposalDescription ||
+                service.shortDescription ||
+                null,
+
               technicalDescription:
-                service.technicalDescription,
+                req.body?.technicalDescription !==
+                undefined
+                  ? textOrNull(
+                      req.body.technicalDescription
+                    )
+                  : service.technicalDescription,
 
               legalText:
-                service.legalText,
+                req.body?.legalText !==
+                undefined
+                  ? textOrNull(
+                      req.body.legalText
+                    )
+                  : service.legalText,
 
               pricingMode:
                 service.pricingMode,
@@ -1524,9 +1557,36 @@ export function registerStandaloneProposalRoutes({
 
               serviceName,
 
+              summaryDescription:
+                textOrNull(
+                  req.body?.summaryDescription
+                ),
+
+              commercialDescription:
+                textOrNull(
+                  req.body?.commercialDescription
+                ) ||
+                textOrNull(
+                  req.body?.description
+                ),
+
+              // Campo legado preservado.
               description:
                 textOrNull(
                   req.body?.description
+                ) ||
+                textOrNull(
+                  req.body?.commercialDescription
+                ),
+
+              technicalDescription:
+                textOrNull(
+                  req.body?.technicalDescription
+                ),
+
+              legalText:
+                textOrNull(
+                  req.body?.legalText
                 ),
 
               quantity,
@@ -1649,6 +1709,23 @@ export function registerStandaloneProposalRoutes({
                     ).trim()
                   : item.serviceName,
 
+              summaryDescription:
+                req.body?.summaryDescription !==
+                undefined
+                  ? textOrNull(
+                      req.body.summaryDescription
+                    )
+                  : item.summaryDescription,
+
+              commercialDescription:
+                req.body?.commercialDescription !==
+                undefined
+                  ? textOrNull(
+                      req.body.commercialDescription
+                    )
+                  : item.commercialDescription,
+
+              // Campo legado.
               description:
                 req.body?.description !==
                 undefined
@@ -1656,6 +1733,22 @@ export function registerStandaloneProposalRoutes({
                       req.body.description
                     )
                   : item.description,
+
+              technicalDescription:
+                req.body?.technicalDescription !==
+                undefined
+                  ? textOrNull(
+                      req.body.technicalDescription
+                    )
+                  : item.technicalDescription,
+
+              legalText:
+                req.body?.legalText !==
+                undefined
+                  ? textOrNull(
+                      req.body.legalText
+                    )
+                  : item.legalText,
 
               quantity,
 

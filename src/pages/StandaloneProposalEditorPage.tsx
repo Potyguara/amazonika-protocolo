@@ -155,6 +155,7 @@ type CatalogService = {
   shortDescription?: string | null;
   proposalDescription?: string | null;
   technicalDescription?: string | null;
+  legalText?: string | null;
 
   pricingMode: CatalogPricingMode;
 
@@ -179,7 +180,20 @@ type ProposalItem = {
   serviceName: string;
   acronym?: string | null;
 
+  // Resumo curto usado na tabela comercial.
+  summaryDescription?: string | null;
+
+  // Texto comercial completo.
+  commercialDescription?: string | null;
+
+  // Campo legado.
   description?: string | null;
+
+  // Texto técnico detalhado.
+  technicalDescription?: string | null;
+
+  // Fundamentação legal/normativa.
+  legalText?: string | null;
 
   pricingMode?: CatalogPricingMode | null;
 
@@ -358,6 +372,28 @@ export default function StandaloneProposalEditorPage() {
 
   const [deletingItemId, setDeletingItemId] =
     useState<number | null>(null);
+
+  // ======================================================
+  // EDIÇÃO INDIVIDUAL DOS SERVIÇOS
+  // ======================================================
+
+  const [editingItem, setEditingItem] =
+    useState<ProposalItem | null>(null);
+
+  const [itemEditSaving, setItemEditSaving] =
+    useState(false);
+
+  const [itemEditForm, setItemEditForm] =
+    useState({
+      serviceName: "",
+      summaryDescription: "",
+      commercialDescription: "",
+      technicalDescription: "",
+      legalText: "",
+      quantity: "1",
+      unitLabel: "",
+      unitAmount: "",
+    });
 
   const [showEditModal, setShowEditModal] =
     useState(false);
@@ -835,6 +871,155 @@ export default function StandaloneProposalEditorPage() {
       );
     } finally {
       setDeletingItemId(null);
+    }
+  }
+
+  function openProposalItemEditor(
+    item: ProposalItem
+  ) {
+    setError("");
+
+    setEditingItem(item);
+
+    setItemEditForm({
+      serviceName:
+        item.serviceName || "",
+
+      summaryDescription:
+        item.summaryDescription || "",
+
+      commercialDescription:
+        item.commercialDescription ||
+        item.description ||
+        "",
+
+      technicalDescription:
+        item.technicalDescription || "",
+
+      legalText:
+        item.legalText || "",
+
+      quantity:
+        String(item.quantity || 1),
+
+      unitLabel:
+        item.unitLabel || "",
+
+      unitAmount:
+        centsToInput(
+          item.unitAmount
+        ),
+    });
+  }
+
+  function closeProposalItemEditor() {
+    if (itemEditSaving) {
+      return;
+    }
+
+    setEditingItem(null);
+  }
+
+  async function saveProposalItemEditor() {
+    if (
+      !proposal ||
+      !editingItem
+    ) {
+      return;
+    }
+
+    const serviceName =
+      itemEditForm.serviceName.trim();
+
+    const quantity =
+      numberFromInput(
+        itemEditForm.quantity
+      );
+
+    const unitAmount =
+      currencyInputToCents(
+        itemEditForm.unitAmount
+      );
+
+    if (!serviceName) {
+      setError(
+        "Informe o nome do serviço."
+      );
+      return;
+    }
+
+    if (quantity <= 0) {
+      setError(
+        "A quantidade deve ser maior que zero."
+      );
+      return;
+    }
+
+    if (unitAmount < 0) {
+      setError(
+        "Informe um valor unitário válido."
+      );
+      return;
+    }
+
+    const commercialDescription =
+      itemEditForm
+        .commercialDescription
+        .trim() || null;
+
+    try {
+      setItemEditSaving(true);
+      setError("");
+
+      await api.updateStandaloneProposalItem(
+        proposal.id,
+        editingItem.id,
+        {
+          serviceName,
+
+          summaryDescription:
+            itemEditForm
+              .summaryDescription
+              .trim() || null,
+
+          commercialDescription,
+
+          // Mantém propostas e rotinas antigas compatíveis.
+          description:
+            commercialDescription,
+
+          technicalDescription:
+            itemEditForm
+              .technicalDescription
+              .trim() || null,
+
+          legalText:
+            itemEditForm
+              .legalText
+              .trim() || null,
+
+          quantity,
+
+          unitLabel:
+            itemEditForm
+              .unitLabel
+              .trim() || null,
+
+          unitAmount,
+        }
+      );
+
+      await loadProposal();
+
+      setEditingItem(null);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao atualizar serviço."
+      );
+    } finally {
+      setItemEditSaving(false);
     }
   }
 
@@ -2077,9 +2262,11 @@ export default function StandaloneProposalEditorPage() {
                           </div>
                         </div>
 
-                        {item.description && (
+                        {(item.summaryDescription ||
+                          item.description) && (
                           <p className="sp-proposal-item-description">
-                            {item.description}
+                            {item.summaryDescription ||
+                              item.description}
                           </p>
                         )}
 
@@ -2108,6 +2295,11 @@ export default function StandaloneProposalEditorPage() {
                             <button
                               type="button"
                               className="sp-item-action"
+                              onClick={() =>
+                                openProposalItemEditor(
+                                  item
+                                )
+                              }
                             >
                               Editar
                             </button>
@@ -3484,6 +3676,282 @@ export default function StandaloneProposalEditorPage() {
                 </footer>
               </div>
             )}
+          </section>
+        </div>
+      )}
+
+      {editingItem && (
+        <div
+          className="sp-edit-overlay"
+          onMouseDown={(event) => {
+            if (
+              event.target ===
+                event.currentTarget &&
+              !itemEditSaving
+            ) {
+              closeProposalItemEditor();
+            }
+          }}
+        >
+          <section className="sp-edit-modal">
+            <header className="sp-edit-modal-header">
+              <div>
+                <span className="eyebrow">
+                  SERVIÇO DA PROPOSTA
+                </span>
+
+                <h2>
+                  Editar serviço
+                </h2>
+
+                <p>
+                  As alterações serão aplicadas somente a esta
+                  proposta e não modificarão o catálogo original.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="sp-edit-close"
+                disabled={itemEditSaving}
+                onClick={
+                  closeProposalItemEditor
+                }
+                aria-label="Fechar"
+              >
+                ×
+              </button>
+            </header>
+
+            <div className="sp-edit-form">
+              <label className="full">
+                Nome do serviço *
+                <input
+                  type="text"
+                  value={
+                    itemEditForm.serviceName
+                  }
+                  onChange={(event) =>
+                    setItemEditForm(
+                      (current) => ({
+                        ...current,
+                        serviceName:
+                          event.target.value,
+                      })
+                    )
+                  }
+                />
+              </label>
+
+              <label className="full">
+                Descrição resumida
+                <textarea
+                  rows={3}
+                  value={
+                    itemEditForm
+                      .summaryDescription
+                  }
+                  onChange={(event) =>
+                    setItemEditForm(
+                      (current) => ({
+                        ...current,
+                        summaryDescription:
+                          event.target.value,
+                      })
+                    )
+                  }
+                  placeholder="Resumo objetivo para aparecer na tabela comercial do PDF."
+                />
+              </label>
+
+              <label className="full">
+                Descrição Comercial
+                <textarea
+                  rows={7}
+                  value={
+                    itemEditForm
+                      .commercialDescription
+                  }
+                  onChange={(event) =>
+                    setItemEditForm(
+                      (current) => ({
+                        ...current,
+                        commercialDescription:
+                          event.target.value,
+                      })
+                    )
+                  }
+                  placeholder="Apresente o serviço em linguagem comercial, seu objetivo, abrangência e principais entregas."
+                />
+              </label>
+
+              <label className="full">
+                Descrição Técnica
+                <textarea
+                  rows={9}
+                  value={
+                    itemEditForm
+                      .technicalDescription
+                  }
+                  onChange={(event) =>
+                    setItemEditForm(
+                      (current) => ({
+                        ...current,
+                        technicalDescription:
+                          event.target.value,
+                      })
+                    )
+                  }
+                  placeholder="Metodologia, atividades, critérios técnicos, levantamentos, produtos e procedimentos."
+                />
+              </label>
+
+              <label className="full">
+                Fundamentação Legal
+                <textarea
+                  rows={7}
+                  value={
+                    itemEditForm.legalText
+                  }
+                  onChange={(event) =>
+                    setItemEditForm(
+                      (current) => ({
+                        ...current,
+                        legalText:
+                          event.target.value,
+                      })
+                    )
+                  }
+                  placeholder="Leis, decretos, resoluções, instruções normativas e demais referências aplicáveis."
+                />
+              </label>
+
+              <label>
+                Quantidade *
+                <input
+                  inputMode="decimal"
+                  value={
+                    itemEditForm.quantity
+                  }
+                  onChange={(event) =>
+                    setItemEditForm(
+                      (current) => ({
+                        ...current,
+                        quantity:
+                          event.target.value,
+                      })
+                    )
+                  }
+                />
+              </label>
+
+              <label>
+                Unidade
+                <input
+                  type="text"
+                  value={
+                    itemEditForm.unitLabel
+                  }
+                  onChange={(event) =>
+                    setItemEditForm(
+                      (current) => ({
+                        ...current,
+                        unitLabel:
+                          event.target.value,
+                      })
+                    )
+                  }
+                  placeholder="Serviço, ha, km, un..."
+                />
+              </label>
+
+              <label>
+                Valor unitário
+                <input
+                  inputMode="decimal"
+                  value={
+                    itemEditForm.unitAmount
+                  }
+                  onChange={(event) =>
+                    setItemEditForm(
+                      (current) => ({
+                        ...current,
+                        unitAmount:
+                          event.target.value,
+                      })
+                    )
+                  }
+                  placeholder="0,00"
+                />
+              </label>
+
+              <div>
+                <span
+                  style={{
+                    display: "block",
+                    marginBottom: 6,
+                    color: "#34463d",
+                    fontSize: 10,
+                    fontWeight: 700,
+                  }}
+                >
+                  Total do serviço
+                </span>
+
+                <strong
+                  style={{
+                    display: "block",
+                    padding: "11px 12px",
+                    borderRadius: 11,
+                    background: "#edf6f1",
+                    color: "#146047",
+                  }}
+                >
+                  {money(
+                    Math.round(
+                      Math.max(
+                        0,
+                        numberFromInput(
+                          itemEditForm.quantity
+                        )
+                      ) *
+                        Math.max(
+                          0,
+                          currencyInputToCents(
+                            itemEditForm.unitAmount
+                          )
+                        )
+                    )
+                  )}
+                </strong>
+              </div>
+            </div>
+
+            <footer className="sp-edit-modal-footer">
+              <button
+                type="button"
+                className="button secondary"
+                disabled={itemEditSaving}
+                onClick={
+                  closeProposalItemEditor
+                }
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                className="button primary"
+                disabled={itemEditSaving}
+                onClick={
+                  saveProposalItemEditor
+                }
+              >
+                {itemEditSaving
+                  ? "Salvando..."
+                  : "Salvar serviço"}
+              </button>
+            </footer>
           </section>
         </div>
       )}

@@ -1177,11 +1177,22 @@ model StandaloneProposalItem {
 
   serviceName String
 
-  acronym     String?
+  acronym String?
+
+  // Texto curto usado exclusivamente na tabela comercial do PDF.
+  summaryDescription String?
+
+  // Texto comercial detalhado exibido no corpo da proposta.
+  commercialDescription String?
+
+  // Campo legado preservado por compatibilidade.
   description String?
 
+  // Conteúdo técnico detalhado do serviço.
   technicalDescription String?
-  legalText            String?
+
+  // Fundamentação legal, normativa e regulatória.
+  legalText String?
 
   pricingMode CatalogPricingMode?
 
