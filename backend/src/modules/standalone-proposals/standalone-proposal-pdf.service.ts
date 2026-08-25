@@ -607,9 +607,11 @@ function drawItemsTable(
     widths.unitAmount +
     widths.total;
 
-  function drawTableHeader() {
-    ensureSpace(doc, 34);
+  const TABLE_HEADER_HEIGHT = 26;
+  const TABLE_HEADER_GAP = 3;
+  const MIN_ROW_HEIGHT = 34;
 
+  function drawTableHeader() {
     const y = doc.y;
 
     doc
@@ -656,7 +658,31 @@ function drawItemsTable(
       cursor += width;
     }
 
-    doc.y = y + 29;
+    doc.y =
+      y +
+      TABLE_HEADER_HEIGHT +
+      TABLE_HEADER_GAP;
+  }
+
+  /*
+   * O primeiro cabeçalho só é iniciado nesta página
+   * se houver espaço para:
+   *
+   * cabeçalho + ao menos uma linha mínima.
+   *
+   * Isso evita deixar apenas o cabeçalho no rodapé.
+   */
+  if (
+    doc.y +
+      TABLE_HEADER_HEIGHT +
+      TABLE_HEADER_GAP +
+      MIN_ROW_HEIGHT >
+    CONTENT_BOTTOM
+  ) {
+    doc.addPage();
+
+    doc.x = PAGE_LEFT;
+    doc.y = CONTENT_TOP;
   }
 
   drawTableHeader();
@@ -722,9 +748,24 @@ function drawItemsTable(
             )
         );
 
+      /*
+       * PAGINAÇÃO NATURAL
+       * --------------------------------------------------
+       * Nunca reservamos espaço para a tabela inteira.
+       *
+       * Cada item é analisado isoladamente.
+       * Se a próxima linha não couber, somente ela passa
+       * para a página seguinte.
+       *
+       * O cabeçalho é repetido automaticamente.
+       */
+      const availableHeight =
+        CONTENT_BOTTOM -
+        doc.y;
+
       if (
-        doc.y + rowHeight >
-        CONTENT_BOTTOM
+        rowHeight >
+        availableHeight
       ) {
         doc.addPage();
 
@@ -1040,8 +1081,6 @@ function drawTotals(
   doc: PDFKit.PDFDocument,
   proposal: any
 ) {
-  ensureSpace(doc, 100);
-
   const x = 325;
   const width = 225;
 
@@ -1088,6 +1127,43 @@ function drawTotals(
     ),
     true,
   ]);
+
+  /*
+   * Altura real do quadro financeiro.
+   *
+   * Linha comum:
+   *   22 pt + 3 pt de intervalo = 25
+   *
+   * Total:
+   *   28 pt + 3 pt de intervalo = 31
+   *
+   * Só o quadro de totais muda de página,
+   * nunca as linhas anteriores da tabela.
+   */
+  const totalsHeight =
+    rows.reduce(
+      (
+        height,
+        [, , total]
+      ) =>
+        height +
+        (
+          total
+            ? 31
+            : 25
+        ),
+      0
+    ) + 8;
+
+  if (
+    doc.y + totalsHeight >
+    CONTENT_BOTTOM
+  ) {
+    doc.addPage();
+
+    doc.x = PAGE_LEFT;
+    doc.y = CONTENT_TOP;
+  }
 
   for (
     const [label, value, total]
