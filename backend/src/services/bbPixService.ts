@@ -280,3 +280,46 @@ try {
   throw error;
 }
 }
+
+export async function getBbPixDueCharge(txid: string) {
+  const accessToken = await getBbAccessToken();
+
+  const appKey = requiredEnv("BB_APP_KEY");
+  const pixApiUrl = requiredEnv("BB_PIX_API_URL");
+
+  const sanitizedTxid = sanitizeTxid(txid);
+
+  if (!sanitizedTxid) {
+    throw new Error(
+      "TXID inválido para consulta Pix BB com vencimento."
+    );
+  }
+
+  const url = `${pixApiUrl.replace(/\/$/, "")}/cobv/${encodeURIComponent(
+    sanitizedTxid
+  )}`;
+
+  try {
+    const response = await axios.get(url, {
+      params: {
+        "gw-dev-app-key": appKey,
+      },
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    return response.data;
+  } catch (error: any) {
+    console.error("ERRO DETALHADO BB PIX GET /cobv:", {
+      message: error?.message,
+      status: error?.response?.status,
+      data: error?.response?.data,
+      txid: sanitizedTxid,
+      url,
+    });
+
+    throw error;
+  }
+}
+

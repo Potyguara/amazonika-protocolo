@@ -5514,6 +5514,7 @@ type FinanceAutoChargeResult = {
   transactionId: number;
   status:
     | "CREATED"
+    | "DRY_RUN"
     | "SKIPPED"
     | "ERROR";
   reason?: string;
@@ -5550,46 +5551,35 @@ function isValidFinancePixDocument(
 function generateFinanceBbPixTxid(
   transactionId: number
 ) {
-  const base =
-    [
-      "AMAZONIKAFIN",
-      String(transactionId)
-        .padStart(8, "0"),
-      Date.now()
-        .toString(36)
-        .toUpperCase(),
-      crypto
-        .randomBytes(4)
-        .toString("hex")
-        .toUpperCase(),
-    ]
-      .join("")
-      .replace(
-        /[^A-Z0-9]/g,
-        ""
-      );
-
   /*
-   * Garante mínimo de 26.
+   * TXID determinístico:
+   *
+   * AMAZONIKAFIN = 12 caracteres
+   * ID preenchido = 14 caracteres
+   * Total mínimo = 26 caracteres
+   *
+   * A mesma FinancialTransaction sempre produzirá
+   * exatamente o mesmo TXID.
+   *
+   * Isso evita uma segunda cobrança caso o BB responda
+   * com sucesso e ocorra falha local antes da persistência.
    */
-  const padded =
-    (
-      base +
-      "AMAZONIKAFINANCEIRO"
-    ).slice(
-      0,
-      35
-    );
+  const txid =
+    `AMAZONIKAFIN${String(transactionId).padStart(14, "0")}`
+      .replace(/[^A-Z0-9]/gi, "")
+      .toUpperCase()
+      .slice(0, 35);
 
   if (
-    padded.length < 26
+    txid.length < 26 ||
+    txid.length > 35
   ) {
     throw new Error(
-      "Não foi possível gerar TXID financeiro válido."
+      "Não foi possível gerar TXID financeiro determinístico válido."
     );
   }
 
-  return padded;
+  return txid;
 }
 
 function financeDateOnly(
@@ -5661,6 +5651,8 @@ function financeDaysBetween(
 async function processFinanceAutoCharges(
   options?: {
     daysAhead?: number;
+    transactionId?: number;
+    dryRun?: boolean;
   }
 ) {
   const daysAhead =
@@ -5683,6 +5675,13 @@ async function processFinanceAutoCharges(
       .financialTransaction
       .findMany({
         where: {
+          ...(options?.transactionId
+            ? {
+                id:
+                  options.transactionId,
+              }
+            : {}),
+
           type:
             "ENTRADA",
 
@@ -5889,6 +5888,28 @@ async function processFinanceAutoCharges(
         generateFinanceBbPixTxid(
           transaction.id
         );
+
+      /*
+       * DRY RUN:
+       * valida toda a elegibilidade e calcula o TXID,
+       * mas deliberadamente NÃO chama o Banco do Brasil.
+       */
+      if (options?.dryRun) {
+        results.push({
+          transactionId:
+            transaction.id,
+
+          status:
+            "DRY_RUN",
+
+          reason:
+            "Transação elegível. Nenhuma cobrança foi enviada ao Banco do Brasil.",
+
+          txid,
+        });
+
+        continue;
+      }
 
       /*
        * FinancialTransaction.amount já está em centavos.
@@ -6151,9 +6172,47 @@ app.post(
           });
       }
 
+      const transactionIdRaw =
+        req.body?.transactionId ??
+        req.query?.transactionId ??
+        null;
+
+      const transactionId =
+        transactionIdRaw === null ||
+        transactionIdRaw === undefined ||
+        transactionIdRaw === ""
+          ? null
+          : Number(transactionIdRaw);
+
+      if (
+        transactionId !== null &&
+        (
+          !Number.isInteger(transactionId) ||
+          transactionId <= 0
+        )
+      ) {
+        return res.status(400).json({
+          message:
+            "transactionId deve ser um inteiro positivo.",
+        });
+      }
+
+      const dryRunRaw =
+        req.body?.dryRun ??
+        req.query?.dryRun ??
+        false;
+
+      const dryRun =
+        dryRunRaw === true ||
+        String(dryRunRaw).toLowerCase() === "true" ||
+        String(dryRunRaw) === "1";
+
       const result =
         await processFinanceAutoCharges({
           daysAhead,
+          transactionId:
+            transactionId || undefined,
+          dryRun,
         });
 
       await prisma.auditLog.create({

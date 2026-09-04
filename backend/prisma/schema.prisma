@@ -513,6 +513,10 @@ model BillingCharge {
   contractId  Int?
   createdById Int?
 
+  // Vínculo 1:1 com a parcela/lancamento do Financeiro V2.
+  // Impede que a mesma transação gere duas BillingCharge.
+  financialTransactionId Int? @unique
+
   provider   BillingProvider   @default(BANCO_DO_BRASIL)
   status     BillingStatus     @default(AGUARDANDO_DOCUMENTO_FISCAL)
   chargeType BillingChargeType @default(ENTRADA)
@@ -541,6 +545,28 @@ model BillingCharge {
 
   sentToClientAt DateTime?
 
+  // =====================================================
+  // DOCUMENTO OFICIAL DE COBRANÇA / AUTENTICIDADE
+  // =====================================================
+
+  // Ex.: COB-2026-000123
+  documentNumber String? @unique
+
+  // Identificador não sequencial exibido no PDF.
+  serialNumber String? @unique
+
+  // Token público utilizado na página de verificação.
+  publicToken String? @unique
+
+  // SHA-256 dos dados canônicos da cobrança/documento.
+  verificationHash String?
+
+  documentPdfPath     String?
+  documentGeneratedAt DateTime?
+
+  // Evita envio duplicado da confirmação pós-pagamento.
+  paymentConfirmationEmailSentAt DateTime?
+
   rawRequest  String?
   rawResponse String?
   rawWebhook  String?
@@ -555,6 +581,8 @@ model BillingCharge {
   client    Client    @relation(fields: [clientId], references: [id])
   contract  Contract? @relation(fields: [contractId], references: [id])
   createdBy User?     @relation("BillingChargeCreatedBy", fields: [createdById], references: [id])
+
+  financialTransaction FinancialTransaction? @relation(fields: [financialTransactionId], references: [id])
 
   fiscalDocuments FiscalDocument[]
 
@@ -780,6 +808,9 @@ model FinancialTransaction {
   createdBy   User? @relation("FinancialTransactionCreatedBy", fields: [createdById], references: [id])
 
   partnerCommission PartnerCommission?
+
+  // Cobrança operacional/documental associada a este lançamento.
+  billingCharge BillingCharge?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
