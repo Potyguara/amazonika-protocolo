@@ -235,17 +235,37 @@ export async function createBbPixDueCharge(input: CreateBbPixDueChargeInput) {
     ),
   };
 
-  if (document.length === 11) {
+  const shouldSendDebtor =
+    String(
+      process.env.BB_SEND_DEBTOR ||
+        "false"
+    ).toLowerCase() === "true";
+
+  if (
+    shouldSendDebtor &&
+    document.length === 11
+  ) {
     payload.devedor = {
       cpf: document,
-      nome: input.debtorName.slice(0, 200),
+      nome:
+        input.debtorName.slice(
+          0,
+          200
+        ),
     };
   }
 
-  if (document.length === 14) {
+  if (
+    shouldSendDebtor &&
+    document.length === 14
+  ) {
     payload.devedor = {
       cnpj: document,
-      nome: input.debtorName.slice(0, 200),
+      nome:
+        input.debtorName.slice(
+          0,
+          200
+        ),
     };
   }
 
