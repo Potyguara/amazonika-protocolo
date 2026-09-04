@@ -5731,12 +5731,31 @@ async function processFinanceAutoCharges(
           client:
             true,
 
+          billingCharge:
+            true,
+
           protocol: {
             include: {
               client:
                 true,
+
               serviceType:
                 true,
+
+              contracts: {
+                where: {
+                  status:
+                    "ASSINADO",
+                },
+
+                orderBy: {
+                  createdAt:
+                    "desc",
+                },
+
+                take:
+                  1,
+              },
             },
           },
         },
@@ -5919,10 +5938,42 @@ async function processFinanceAutoCharges(
           transaction.id
         );
 
+      if (!transaction.protocolId || !transaction.protocol) {
+        errors += 1;
+
+        results.push({
+          transactionId:
+            transaction.id,
+
+          status:
+            "ERROR",
+
+          reason:
+            "Cobrança automática exige protocolo vinculado ao lançamento financeiro.",
+        });
+
+        continue;
+      }
+
+      const contract =
+        transaction.protocol
+          .contracts?.[0] ||
+        null;
+
+      const chargeType =
+        transaction.installmentNumber === 0
+          ? "ENTRADA"
+          : "PARCELA";
+
+      const installmentNumber =
+        transaction.installmentNumber === 0
+          ? 1
+          : transaction.installmentNumber;
+
       /*
        * DRY RUN:
-       * valida toda a elegibilidade e calcula o TXID,
-       * mas deliberadamente NÃO chama o Banco do Brasil.
+       * nenhuma BillingCharge é criada e nenhuma chamada
+       * é enviada ao Banco do Brasil.
        */
       if (options?.dryRun) {
         results.push({
@@ -5933,7 +5984,9 @@ async function processFinanceAutoCharges(
             "DRY_RUN",
 
           reason:
-            "Transação elegível. Nenhuma cobrança foi enviada ao Banco do Brasil.",
+            transaction.billingCharge
+              ? `Transação elegível. BillingCharge #${transaction.billingCharge.id} já vinculada. Nenhuma chamada ao Banco do Brasil foi realizada.`
+              : "Transação elegível. BillingCharge será criada quando o processamento real for autorizado. Nenhuma chamada ao Banco do Brasil foi realizada.",
 
           txid,
         });
@@ -5942,12 +5995,202 @@ async function processFinanceAutoCharges(
       }
 
       /*
-       * FinancialTransaction.amount já está em centavos.
-       * NÃO converter novamente.
+       * ------------------------------------------------
+       * BillingCharge é a camada operacional oficial.
+       * ------------------------------------------------
+       *
+       * financialTransactionId possui UNIQUE no banco,
+       * impedindo duas BillingCharge para a mesma parcela.
        */
+      let billingCharge =
+        transaction.billingCharge;
+
+      if (!billingCharge) {
+        billingCharge =
+          await prisma.billingCharge.create({
+            data: {
+              protocolId:
+                transaction.protocolId,
+
+              clientId:
+                client.id,
+
+              contractId:
+                contract?.id ||
+                null,
+
+              createdById:
+                transaction.createdById ||
+                null,
+
+              financialTransactionId:
+                transaction.id,
+
+              provider:
+                "BANCO_DO_BRASIL",
+
+              /*
+               * O fluxo automático usa recibo posterior
+               * para não bloquear a emissão aguardando NF.
+               * A política fiscal será refinada posteriormente.
+               */
+              fiscalMode:
+                "RECIBO_POSTERIOR",
+
+              status:
+                "PRONTA_PARA_EMISSAO",
+
+              chargeType,
+
+              description:
+                transaction.description ||
+                `Cobrança financeira ${transaction.id}`,
+
+              /*
+               * Campo legado mantido apenas para
+               * compatibilidade de telas/rotas antigas.
+               */
+              amount:
+                Math.round(
+                  transaction.amount /
+                    100
+                ),
+
+              /*
+               * Valor canônico Financeiro V2.
+               */
+              amountCents:
+                transaction.amount,
+
+              dueDate:
+                transaction.dueDate,
+
+              installmentNumber,
+              totalInstallments:
+                transaction.totalInstallments,
+
+              txid,
+
+              notes:
+                `Cobrança criada automaticamente pelo Financeiro V2 a partir do lançamento ${transaction.id}.`,
+            },
+          });
+
+        await prisma.auditLog.create({
+          data: {
+            userId:
+              null,
+
+            userName:
+              "SIS Amazonika",
+
+            userEmail:
+              null,
+
+            userRole:
+              "SYSTEM",
+
+            action:
+              "FINANCE_BILLING_CHARGE_CREATED",
+
+            entity:
+              "BillingCharge",
+
+            entityId:
+              String(
+                billingCharge.id
+              ),
+
+            description:
+              `BillingCharge criada para o lançamento financeiro ${transaction.id}.`,
+
+            metadata:
+              JSON.stringify({
+                transactionId:
+                  transaction.id,
+
+                billingChargeId:
+                  billingCharge.id,
+
+                protocolId:
+                  transaction.protocolId,
+
+                contractId:
+                  contract?.id ||
+                  null,
+
+                amountCents:
+                  transaction.amount,
+
+                dueDate:
+                  dueDateOnly,
+
+                txid,
+              }),
+          },
+        });
+      }
+
+      /*
+       * Se a BillingCharge já tiver sido emitida,
+       * não emitimos novamente.
+       */
+      if (
+        billingCharge.status === "EMITIDA" ||
+        billingCharge.status === "ENVIADA" ||
+        billingCharge.status === "PAGA"
+      ) {
+        await prisma.financialTransaction.update({
+          where: {
+            id:
+              transaction.id,
+          },
+
+          data: {
+            paymentProvider:
+              "BANCO_DO_BRASIL",
+
+            providerTxId:
+              billingCharge.txid ||
+              txid,
+
+            chargeStatus:
+              billingCharge.status,
+          },
+        });
+
+        skipped += 1;
+
+        results.push({
+          transactionId:
+            transaction.id,
+
+          status:
+            "SKIPPED",
+
+          reason:
+            `BillingCharge #${billingCharge.id} já está ${billingCharge.status}.`,
+
+          txid:
+            billingCharge.txid ||
+            txid,
+        });
+
+        continue;
+      }
+
+      /*
+       * Mesmo TXID em toda nova tentativa.
+       * Nunca geramos TXID aleatório para o mesmo lançamento.
+       */
+      const effectiveTxid =
+        billingCharge.txid ||
+        txid;
+
       const bbResult =
         await createBbPixDueCharge({
-          txid,
+          txid:
+            effectiveTxid,
 
           amountInCents:
             transaction.amount,
@@ -5977,40 +6220,109 @@ async function processFinanceAutoCharges(
           "ATIVA"
         ).toUpperCase();
 
-      await prisma
-        .financialTransaction
-        .update({
+      const pixCopiaECola =
+        extractBbPixCopiaECola(
+          bbResult
+        );
+
+      const pixLocation =
+        extractBbChargeLocation(
+          bbResult
+        );
+
+      billingCharge =
+        await prisma.billingCharge.update({
           where: {
             id:
-              transaction.id,
+              billingCharge.id,
           },
 
           data: {
-            paymentProvider:
+            provider:
               "BANCO_DO_BRASIL",
 
-            providerChargeId,
+            status:
+              "EMITIDA",
 
-            providerTxId:
-              txid,
+            externalId:
+              bbResult?.txid ||
+              effectiveTxid,
 
-            chargeStatus:
-              bbStatus,
+            txid:
+              bbResult?.txid ||
+              effectiveTxid,
 
-            chargeCreatedAt:
-              new Date(),
+            pixKey:
+              bbResult?.chave ||
+              process.env.BB_PIX_KEY ||
+              null,
 
-            /*
-             * CobV criada no BB utiliza
-             * validadeAposVencimento = 30.
-             */
-            chargeExpiresAt:
-              financeAddDays(
-                transaction.dueDate,
-                30
+            pixCopyPaste:
+              pixCopiaECola,
+
+            pixQrCode:
+              pixLocation,
+
+            rawRequest:
+              safeJson({
+                source:
+                  "FINANCEIRO_V2",
+
+                transactionId:
+                  transaction.id,
+
+                billingChargeId:
+                  billingCharge.id,
+
+                txid:
+                  effectiveTxid,
+
+                amountCents:
+                  transaction.amount,
+
+                dueDate:
+                  dueDateOnly,
+              }),
+
+            rawResponse:
+              safeJson(
+                bbResult
               ),
+
+            errorMessage:
+              null,
           },
         });
+
+      await prisma.financialTransaction.update({
+        where: {
+          id:
+            transaction.id,
+        },
+
+        data: {
+          paymentProvider:
+            "BANCO_DO_BRASIL",
+
+          providerChargeId,
+
+          providerTxId:
+            billingCharge.txid ||
+            effectiveTxid,
+
+          chargeStatus:
+            bbStatus,
+
+          chargeCreatedAt:
+            new Date(),
+
+          chargeExpiresAt:
+            financeAddDays(
+              transaction.dueDate,
+              30
+            ),
+        },
+      });
 
       await prisma.auditLog.create({
         data: {
@@ -6030,11 +6342,11 @@ async function processFinanceAutoCharges(
             "FINANCE_AUTO_BB_PIX_CREATED",
 
           entity:
-            "FinancialTransaction",
+            "BillingCharge",
 
           entityId:
             String(
-              transaction.id
+              billingCharge.id
             ),
 
           description:
@@ -6044,6 +6356,9 @@ async function processFinanceAutoCharges(
             JSON.stringify({
               transactionId:
                 transaction.id,
+
+              billingChargeId:
+                billingCharge.id,
 
               installmentGroupId:
                 transaction.installmentGroupId,
@@ -6060,7 +6375,9 @@ async function processFinanceAutoCharges(
               dueDate:
                 dueDateOnly,
 
-              txid,
+              txid:
+                billingCharge.txid ||
+                effectiveTxid,
 
               providerChargeId,
 
@@ -6081,7 +6398,9 @@ async function processFinanceAutoCharges(
         status:
           "CREATED",
 
-        txid,
+        txid:
+          billingCharge.txid ||
+          effectiveTxid,
       });
     } catch (error: any) {
       errors += 1;
