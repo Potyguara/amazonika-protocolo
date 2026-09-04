@@ -5401,6 +5401,57 @@ function normalizeNullableDate(value: any) {
   return date;
 }
 
+function addFinanceMonths(baseDate: Date, monthsToAdd: number) {
+  /*
+   * Mantém o dia de vencimento sempre que possível.
+   *
+   * Exemplo:
+   * 20/08 -> 20/09 -> 20/10
+   *
+   * Para datas como 31/01, quando o mês seguinte não possui
+   * dia 31, utiliza o último dia válido daquele mês.
+   */
+  const originalDay = baseDate.getUTCDate();
+
+  const target = new Date(
+    Date.UTC(
+      baseDate.getUTCFullYear(),
+      baseDate.getUTCMonth() + monthsToAdd,
+      1,
+      12,
+      0,
+      0
+    )
+  );
+
+  const lastDay = new Date(
+    Date.UTC(
+      target.getUTCFullYear(),
+      target.getUTCMonth() + 1,
+      0,
+      12,
+      0,
+      0
+    )
+  ).getUTCDate();
+
+  target.setUTCDate(
+    Math.min(originalDay, lastDay)
+  );
+
+  return target;
+}
+
+function financeCompetenceFromDate(date: Date) {
+  const year = date.getUTCFullYear();
+
+  const month = String(
+    date.getUTCMonth() + 1
+  ).padStart(2, "0");
+
+  return `${year}-${month}`;
+}
+
 function buildFinancialWhere(req: any) {
   const { type, status, categoryId, source, search } = req.query;
   const competenceMonth = getFinanceMonth(req);
@@ -5453,6 +5504,723 @@ function buildFinancialWhere(req: any) {
 function categoryTypeFromTransactionType(type: string) {
   return type === "ENTRADA" ? "RECEITA" : "DESPESA";
 }
+
+
+// ==========================================================
+// FINANCEIRO V2 — AUTO CHARGE BB PIX — START
+// ==========================================================
+
+type FinanceAutoChargeResult = {
+  transactionId: number;
+  status:
+    | "CREATED"
+    | "SKIPPED"
+    | "ERROR";
+  reason?: string;
+  txid?: string | null;
+};
+
+function normalizeFinanceDocument(
+  value?: string | null
+) {
+  return String(value || "")
+    .replace(/\D/g, "");
+}
+
+function isValidFinancePixDocument(
+  value?: string | null
+) {
+  const document =
+    normalizeFinanceDocument(value);
+
+  return (
+    document.length === 11 ||
+    document.length === 14
+  );
+}
+
+/*
+ * TXID BB:
+ * - somente alfanumérico
+ * - entre 26 e 35 caracteres
+ *
+ * O ID da transação é incluído para facilitar
+ * rastreabilidade e idempotência.
+ */
+function generateFinanceBbPixTxid(
+  transactionId: number
+) {
+  const base =
+    [
+      "AMAZONIKAFIN",
+      String(transactionId)
+        .padStart(8, "0"),
+      Date.now()
+        .toString(36)
+        .toUpperCase(),
+      crypto
+        .randomBytes(4)
+        .toString("hex")
+        .toUpperCase(),
+    ]
+      .join("")
+      .replace(
+        /[^A-Z0-9]/g,
+        ""
+      );
+
+  /*
+   * Garante mínimo de 26.
+   */
+  const padded =
+    (
+      base +
+      "AMAZONIKAFINANCEIRO"
+    ).slice(
+      0,
+      35
+    );
+
+  if (
+    padded.length < 26
+  ) {
+    throw new Error(
+      "Não foi possível gerar TXID financeiro válido."
+    );
+  }
+
+  return padded;
+}
+
+function financeDateOnly(
+  value: Date
+) {
+  return value
+    .toISOString()
+    .slice(0, 10);
+}
+
+function financeAddDays(
+  date: Date,
+  days: number
+) {
+  const result =
+    new Date(date);
+
+  result.setUTCDate(
+    result.getUTCDate() +
+      days
+  );
+
+  return result;
+}
+
+function financeTodayDateOnly() {
+  /*
+   * O Financeiro trabalha com vencimentos sem horário.
+   * Mantemos YYYY-MM-DD para evitar divergência visual
+   * entre UTC e America/Belem.
+   */
+  return new Intl.DateTimeFormat(
+    "en-CA",
+    {
+      timeZone:
+        "America/Belem",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }
+  ).format(
+    new Date()
+  );
+}
+
+function financeDaysBetween(
+  fromDateOnly: string,
+  toDateOnly: string
+) {
+  const from =
+    new Date(
+      `${fromDateOnly}T12:00:00Z`
+    );
+
+  const to =
+    new Date(
+      `${toDateOnly}T12:00:00Z`
+    );
+
+  return Math.round(
+    (
+      to.getTime() -
+      from.getTime()
+    ) /
+      86_400_000
+  );
+}
+
+async function processFinanceAutoCharges(
+  options?: {
+    daysAhead?: number;
+  }
+) {
+  const daysAhead =
+    Math.max(
+      0,
+      Math.min(
+        60,
+        Number(
+          options?.daysAhead ??
+            7
+        )
+      )
+    );
+
+  const today =
+    financeTodayDateOnly();
+
+  const transactions =
+    await prisma
+      .financialTransaction
+      .findMany({
+        where: {
+          type:
+            "ENTRADA",
+
+          status:
+            "PENDENTE",
+
+          autoChargeEnabled:
+            true,
+
+          dueDate: {
+            not:
+              null,
+          },
+        },
+
+        include: {
+          client:
+            true,
+
+          protocol: {
+            include: {
+              client:
+                true,
+              serviceType:
+                true,
+            },
+          },
+        },
+
+        orderBy: {
+          dueDate:
+            "asc",
+        },
+      });
+
+  const results:
+    FinanceAutoChargeResult[] =
+      [];
+
+  let eligible = 0;
+  let created = 0;
+  let skipped = 0;
+  let errors = 0;
+
+  for (
+    const transaction of transactions
+  ) {
+    try {
+      /*
+       * -----------------------------------------------
+       * IDEMPOTÊNCIA
+       * -----------------------------------------------
+       */
+      if (
+        transaction.providerTxId
+      ) {
+        skipped += 1;
+
+        results.push({
+          transactionId:
+            transaction.id,
+          status:
+            "SKIPPED",
+          reason:
+            "A transação já possui TXID Pix.",
+          txid:
+            transaction.providerTxId,
+        });
+
+        continue;
+      }
+
+      if (
+        !transaction.dueDate
+      ) {
+        skipped += 1;
+
+        results.push({
+          transactionId:
+            transaction.id,
+          status:
+            "SKIPPED",
+          reason:
+            "Lançamento sem vencimento.",
+        });
+
+        continue;
+      }
+
+      const dueDateOnly =
+        financeDateOnly(
+          transaction.dueDate
+        );
+
+      const daysUntilDue =
+        financeDaysBetween(
+          today,
+          dueDateOnly
+        );
+
+      /*
+       * Não abre cobrança antecipadamente demais.
+       */
+      if (
+        daysUntilDue >
+        daysAhead
+      ) {
+        skipped += 1;
+
+        results.push({
+          transactionId:
+            transaction.id,
+          status:
+            "SKIPPED",
+          reason:
+            `Ainda faltam ${daysUntilDue} dia(s) para o vencimento.`,
+        });
+
+        continue;
+      }
+
+      /*
+       * Nesta primeira versão não emitimos CobV
+       * retroativamente.
+       */
+      if (
+        daysUntilDue < 0
+      ) {
+        skipped += 1;
+
+        results.push({
+          transactionId:
+            transaction.id,
+          status:
+            "SKIPPED",
+          reason:
+            "Parcela vencida. Cobrança automática não emitida retroativamente.",
+        });
+
+        continue;
+      }
+
+      eligible += 1;
+
+      const client =
+        transaction.client ||
+        transaction.protocol
+          ?.client ||
+        null;
+
+      if (!client) {
+        errors += 1;
+
+        results.push({
+          transactionId:
+            transaction.id,
+          status:
+            "ERROR",
+          reason:
+            "A transação não possui cliente vinculado.",
+        });
+
+        continue;
+      }
+
+      if (
+        !isValidFinancePixDocument(
+          client.cpfCnpj
+        )
+      ) {
+        errors += 1;
+
+        results.push({
+          transactionId:
+            transaction.id,
+          status:
+            "ERROR",
+          reason:
+            "Cliente sem CPF/CNPJ válido para cobrança Pix com vencimento.",
+        });
+
+        continue;
+      }
+
+      if (
+        !transaction.amount ||
+        transaction.amount <= 0
+      ) {
+        errors += 1;
+
+        results.push({
+          transactionId:
+            transaction.id,
+          status:
+            "ERROR",
+          reason:
+            "Valor financeiro inválido.",
+        });
+
+        continue;
+      }
+
+      const txid =
+        generateFinanceBbPixTxid(
+          transaction.id
+        );
+
+      /*
+       * FinancialTransaction.amount já está em centavos.
+       * NÃO converter novamente.
+       */
+      const bbResult =
+        await createBbPixDueCharge({
+          txid,
+
+          amountInCents:
+            transaction.amount,
+
+          dueDate:
+            transaction.dueDate,
+
+          debtorName:
+            client.name,
+
+          debtorCpfCnpj:
+            client.cpfCnpj,
+
+          description:
+            transaction.description ||
+            `Cobrança financeira ${transaction.id}`,
+        });
+
+      const providerChargeId =
+        extractBbChargeId(
+          bbResult
+        );
+
+      const bbStatus =
+        String(
+          bbResult?.status ||
+          "ATIVA"
+        ).toUpperCase();
+
+      await prisma
+        .financialTransaction
+        .update({
+          where: {
+            id:
+              transaction.id,
+          },
+
+          data: {
+            paymentProvider:
+              "BANCO_DO_BRASIL",
+
+            providerChargeId,
+
+            providerTxId:
+              txid,
+
+            chargeStatus:
+              bbStatus,
+
+            chargeCreatedAt:
+              new Date(),
+
+            /*
+             * CobV criada no BB utiliza
+             * validadeAposVencimento = 30.
+             */
+            chargeExpiresAt:
+              financeAddDays(
+                transaction.dueDate,
+                30
+              ),
+          },
+        });
+
+      await prisma.auditLog.create({
+        data: {
+          userId:
+            null,
+
+          userName:
+            "SIS Amazonika",
+
+          userEmail:
+            null,
+
+          userRole:
+            "SYSTEM",
+
+          action:
+            "FINANCE_AUTO_BB_PIX_CREATED",
+
+          entity:
+            "FinancialTransaction",
+
+          entityId:
+            String(
+              transaction.id
+            ),
+
+          description:
+            `Cobrança Pix BB criada automaticamente para o lançamento financeiro ${transaction.id}.`,
+
+          metadata:
+            JSON.stringify({
+              transactionId:
+                transaction.id,
+
+              installmentGroupId:
+                transaction.installmentGroupId,
+
+              installmentNumber:
+                transaction.installmentNumber,
+
+              totalInstallments:
+                transaction.totalInstallments,
+
+              amountInCents:
+                transaction.amount,
+
+              dueDate:
+                dueDateOnly,
+
+              txid,
+
+              providerChargeId,
+
+              bbStatus,
+
+              provider:
+                "BANCO_DO_BRASIL",
+            }),
+        },
+      });
+
+      created += 1;
+
+      results.push({
+        transactionId:
+          transaction.id,
+
+        status:
+          "CREATED",
+
+        txid,
+      });
+    } catch (error: any) {
+      errors += 1;
+
+      console.error(
+        "Erro ao processar cobrança automática financeira:",
+        {
+          transactionId:
+            transaction.id,
+
+          message:
+            error?.message,
+
+          status:
+            error?.response
+              ?.status,
+
+          data:
+            error?.response
+              ?.data,
+        }
+      );
+
+      /*
+       * Registramos o erro no lançamento, mas NÃO gravamos
+       * providerTxId. Dessa forma é permitido tentar novamente
+       * depois que o problema for corrigido.
+       */
+      await prisma
+        .financialTransaction
+        .update({
+          where: {
+            id:
+              transaction.id,
+          },
+
+          data: {
+            paymentProvider:
+              "BANCO_DO_BRASIL",
+
+            chargeStatus:
+              "ERROR",
+          },
+        })
+        .catch(() => undefined);
+
+      results.push({
+        transactionId:
+          transaction.id,
+
+        status:
+          "ERROR",
+
+        reason:
+          error?.response
+            ?.data?.detail ||
+          error?.response
+            ?.data?.message ||
+          error?.message ||
+          "Erro desconhecido ao criar cobrança.",
+      });
+    }
+  }
+
+  return {
+    daysAhead,
+    today,
+
+    checked:
+      transactions.length,
+
+    eligible,
+    created,
+    skipped,
+    errors,
+
+    results,
+  };
+}
+
+/*
+ * Primeira versão deliberadamente manual.
+ *
+ * Depois de validada, esta mesma função será executada
+ * pelo agendador automático.
+ */
+app.post(
+  "/finance/auto-charges/process",
+  authMiddleware,
+  requireRoles([
+    "GERENTE",
+    "PROGRAMADOR",
+  ]),
+  async (req: any, res) => {
+    try {
+      const daysAheadRaw =
+        req.body?.daysAhead ??
+        req.query?.daysAhead ??
+        7;
+
+      const daysAhead =
+        Number(
+          daysAheadRaw
+        );
+
+      if (
+        !Number.isFinite(
+          daysAhead
+        ) ||
+        daysAhead < 0 ||
+        daysAhead > 60
+      ) {
+        return res
+          .status(400)
+          .json({
+            message:
+              "daysAhead deve estar entre 0 e 60.",
+          });
+      }
+
+      const result =
+        await processFinanceAutoCharges({
+          daysAhead,
+        });
+
+      await prisma.auditLog.create({
+        data: {
+          userId:
+            req.user?.id ||
+            null,
+
+          userName:
+            req.user?.name ||
+            null,
+
+          userEmail:
+            req.user?.email ||
+            null,
+
+          userRole:
+            req.user?.role ||
+            null,
+
+          action:
+            "PROCESS_FINANCE_AUTO_CHARGES",
+
+          entity:
+            "FinancialTransaction",
+
+          entityId:
+            null,
+
+          description:
+            `Processamento manual das cobranças automáticas financeiras. Criadas: ${result.created}; ignoradas: ${result.skipped}; erros: ${result.errors}.`,
+
+          metadata:
+            JSON.stringify(
+              result
+            ),
+        },
+      });
+
+      return res.json(
+        result
+      );
+    } catch (error: any) {
+      console.error(
+        "Erro no processamento das cobranças automáticas:",
+        error
+      );
+
+      return res
+        .status(500)
+        .json({
+          message:
+            error?.response
+              ?.data?.detail ||
+            error?.response
+              ?.data?.message ||
+            error?.message ||
+            "Erro ao processar cobranças automáticas.",
+        });
+    }
+  }
+);
+
+// ==========================================================
+// FINANCEIRO V2 — AUTO CHARGE BB PIX — END
+// ==========================================================
+
 
 // ------------------------------------------------------
 // CATEGORIAS FINANCEIRAS
@@ -5685,86 +6453,791 @@ app.post(
   authMiddleware,
   requireRoles(["GERENTE", "PROGRAMADOR"]),
   async (req: any, res) => {
-    const {
-      type,
-      source,
-      status,
-      categoryId,
-      protocolId,
-      description,
-      amount,
-      dueDate,
-      paidAt,
-      competenceMonth,
-      clientName,
-      notes,
-    } = req.body;
-
-    if (!type || !source || !description || amount === undefined || amount === null) {
-      return res.status(400).json({
-        message: "Tipo, origem, descrição e valor são obrigatórios.",
-      });
-    }
-
-    const finalDueDate = normalizeNullableDate(dueDate);
-    const finalPaidAt = normalizeNullableDate(paidAt);
-
-    const transaction = await prisma.financialTransaction.create({
-      data: {
+    try {
+      const {
         type,
         source,
-        status: status || "PENDENTE",
-        categoryId: categoryId ? Number(categoryId) : null,
-        protocolId: protocolId ? Number(protocolId) : null,
-        description: String(description).trim(),
-        amount: toIntMoney(amount),
-        dueDate: finalDueDate,
-        paidAt: finalPaidAt,
-        competenceMonth:
-          competenceMonth ||
-          getCompetenceMonthFromDate(finalDueDate || finalPaidAt || new Date()),
-        clientName: clientName || null,
-        notes: notes || null,
-        createdById: req.user?.id || null,
-      },
-      include: {
-        category: true,
-        protocol: {
-          include: {
-            client: true,
-            serviceType: true,
-          },
-        },
-        createdBy: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-      },
-    });
+        status,
+        categoryId,
+        protocolId,
+        clientId,
+        description,
 
-    await prisma.auditLog.create({
-      data: {
-        userId: req.user?.id || null,
-        userName: req.user?.name || null,
-        userEmail: req.user?.email || null,
-        userRole: req.user?.role || null,
-        action: "CREATE_FINANCIAL_TRANSACTION",
-        entity: "FinancialTransaction",
-        entityId: String(transaction.id),
-        description: `Transação financeira criada: ${transaction.description}.`,
-        metadata: JSON.stringify({
-          type: transaction.type,
-          source: transaction.source,
-          amount: transaction.amount,
-          status: transaction.status,
-        }),
-      },
-    });
+        /*
+         * NOVA REGRA:
+         * amount = valor TOTAL do serviço.
+         */
+        amount,
 
-    return res.status(201).json(transaction);
+        dueDate,
+        paidAt,
+        competenceMonth,
+        clientName,
+        notes,
+
+        /*
+         * FINANCEIRO V2
+         */
+        entryAmount,
+        entryStatus,
+        entryDueDate,
+        entryPaidAt,
+        entryAutoChargeEnabled,
+
+        installments,
+      } = req.body;
+
+      if (
+        !type ||
+        !source ||
+        !description ||
+        amount === undefined ||
+        amount === null
+      ) {
+        return res.status(400).json({
+          message:
+            "Tipo, origem, descrição e valor total são obrigatórios.",
+        });
+      }
+
+      const totalAmount =
+        toIntMoney(amount);
+
+      if (totalAmount <= 0) {
+        return res.status(400).json({
+          message:
+            "Informe um valor total maior que zero.",
+        });
+      }
+
+      /*
+       * --------------------------------------------------
+       * CLIENTE
+       * --------------------------------------------------
+       */
+
+      let selectedClient:
+        | {
+            id: number;
+            name: string;
+          }
+        | null = null;
+
+      if (clientId) {
+        selectedClient =
+          await prisma.client.findUnique({
+            where: {
+              id: Number(clientId),
+            },
+
+            select: {
+              id: true,
+              name: true,
+            },
+          });
+
+        if (!selectedClient) {
+          return res.status(404).json({
+            message:
+              "Cliente selecionado não foi encontrado.",
+          });
+        }
+      }
+
+      const finalClientName =
+        selectedClient?.name ||
+        clientName ||
+        null;
+
+      /*
+       * --------------------------------------------------
+       * DETECTA NOVO PLANO FINANCEIRO
+       * --------------------------------------------------
+       */
+
+      const hasFinancialPlan =
+        entryAmount !== undefined ||
+        Array.isArray(installments);
+
+      /*
+       * --------------------------------------------------
+       * MODO SIMPLES
+       * Um único lançamento, sem composição financeira.
+       * --------------------------------------------------
+       */
+
+      if (!hasFinancialPlan) {
+        const finalDueDate =
+          normalizeNullableDate(
+            dueDate
+          );
+
+        const finalPaidAt =
+          normalizeNullableDate(
+            paidAt
+          );
+
+        const transaction =
+          await prisma.financialTransaction.create({
+            data: {
+              type,
+              source,
+
+              status:
+                status ||
+                "PENDENTE",
+
+              categoryId:
+                categoryId
+                  ? Number(categoryId)
+                  : null,
+
+              protocolId:
+                protocolId
+                  ? Number(protocolId)
+                  : null,
+
+              clientId:
+                clientId
+                  ? Number(clientId)
+                  : null,
+
+              description:
+                String(
+                  description
+                ).trim(),
+
+              amount:
+                totalAmount,
+
+              dueDate:
+                finalDueDate,
+
+              paidAt:
+                status === "PAGO"
+                  ? finalPaidAt ||
+                    new Date()
+                  : finalPaidAt,
+
+              competenceMonth:
+                competenceMonth ||
+                getCompetenceMonthFromDate(
+                  finalDueDate ||
+                    finalPaidAt ||
+                    new Date()
+                ),
+
+              clientName:
+                finalClientName,
+
+              notes:
+                notes ||
+                null,
+
+              createdById:
+                req.user?.id ||
+                null,
+
+              autoChargeEnabled:
+                false,
+            },
+
+            include: {
+              category: true,
+
+              protocol: {
+                include: {
+                  client: true,
+                  serviceType: true,
+                },
+              },
+
+              createdBy: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                },
+              },
+            },
+          });
+
+        await prisma.auditLog.create({
+          data: {
+            userId:
+              req.user?.id ||
+              null,
+
+            userName:
+              req.user?.name ||
+              null,
+
+            userEmail:
+              req.user?.email ||
+              null,
+
+            userRole:
+              req.user?.role ||
+              null,
+
+            action:
+              "CREATE_FINANCIAL_TRANSACTION",
+
+            entity:
+              "FinancialTransaction",
+
+            entityId:
+              String(
+                transaction.id
+              ),
+
+            description:
+              `Transação financeira criada: ${transaction.description}.`,
+
+            metadata:
+              JSON.stringify({
+                totalAmount:
+                  transaction.amount,
+
+                mode:
+                  "SINGLE",
+              }),
+          },
+        });
+
+        return res
+          .status(201)
+          .json(transaction);
+      }
+
+      /*
+       * --------------------------------------------------
+       * MODO COMPOSTO
+       * Valor total + entrada + parcelas futuras
+       * --------------------------------------------------
+       */
+
+      const finalEntryAmount =
+        entryAmount !== undefined &&
+        entryAmount !== null &&
+        entryAmount !== ""
+          ? toIntMoney(
+              entryAmount
+            )
+          : 0;
+
+      if (
+        finalEntryAmount < 0 ||
+        finalEntryAmount >
+          totalAmount
+      ) {
+        return res.status(400).json({
+          message:
+            "O valor da entrada é inválido.",
+        });
+      }
+
+      const normalizedInstallments:
+        Array<{
+          amount: number;
+          dueDate: Date;
+          autoChargeEnabled: boolean;
+        }> = [];
+
+      if (
+        Array.isArray(
+          installments
+        )
+      ) {
+        for (
+          let index = 0;
+          index <
+          installments.length;
+          index += 1
+        ) {
+          const raw =
+            installments[
+              index
+            ] || {};
+
+          const installmentAmount =
+            toIntMoney(
+              raw.amount
+            );
+
+          if (
+            installmentAmount <=
+            0
+          ) {
+            return res.status(400).json({
+              message:
+                `Informe um valor válido para a parcela ${index + 1}.`,
+            });
+          }
+
+          const installmentDueDate =
+            normalizeNullableDate(
+              raw.dueDate
+            );
+
+          if (
+            !installmentDueDate
+          ) {
+            return res.status(400).json({
+              message:
+                `Informe o vencimento da parcela ${index + 1}.`,
+            });
+          }
+
+          normalizedInstallments.push({
+            amount:
+              installmentAmount,
+
+            dueDate:
+              installmentDueDate,
+
+            autoChargeEnabled:
+              Boolean(
+                raw.autoChargeEnabled
+              ),
+          });
+        }
+      }
+
+      /*
+       * --------------------------------------------------
+       * VALIDAÇÃO CONTÁBIL
+       * --------------------------------------------------
+       */
+
+      const installmentsTotal =
+        normalizedInstallments.reduce(
+          (
+            accumulator,
+            item
+          ) =>
+            accumulator +
+            item.amount,
+          0
+        );
+
+      const distributedTotal =
+        finalEntryAmount +
+        installmentsTotal;
+
+      if (
+        distributedTotal !==
+        totalAmount
+      ) {
+        const difference =
+          totalAmount -
+          distributedTotal;
+
+        return res.status(400).json({
+          message:
+            difference > 0
+              ? `Ainda existem R$ ${(difference / 100).toLocaleString(
+                  "pt-BR",
+                  {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  }
+                )} a distribuir entre entrada e parcelas.`
+              : `A soma da entrada e das parcelas excede o valor total em R$ ${(
+                  Math.abs(
+                    difference
+                  ) / 100
+                ).toLocaleString(
+                  "pt-BR",
+                  {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  }
+                )}.`,
+        });
+      }
+
+      if (
+        finalEntryAmount === 0 &&
+        normalizedInstallments.length ===
+          0
+      ) {
+        return res.status(400).json({
+          message:
+            "Informe a entrada ou ao menos uma parcela.",
+        });
+      }
+
+      /*
+       * Grupo financeiro comum.
+       */
+      const installmentGroupId =
+        [
+          "FIN",
+          Date.now(),
+          Math.random()
+            .toString(36)
+            .slice(2, 10)
+            .toUpperCase(),
+        ].join("-");
+
+      const totalFutureInstallments =
+        normalizedInstallments.length;
+
+      const created =
+        await prisma.$transaction(
+          async (tx) => {
+            const result = [];
+
+            /*
+             * ------------------------------------------------
+             * ENTRADA
+             * installmentNumber = 0
+             * Isso permite diferenciá-la claramente
+             * das parcelas futuras.
+             * ------------------------------------------------
+             */
+
+            if (
+              finalEntryAmount >
+              0
+            ) {
+              const finalEntryDueDate =
+                normalizeNullableDate(
+                  entryDueDate ||
+                    dueDate
+                );
+
+              if (
+                !finalEntryDueDate
+              ) {
+                throw new Error(
+                  "Informe o vencimento da entrada."
+                );
+              }
+
+              const finalEntryStatus =
+                entryStatus ||
+                status ||
+                "PENDENTE";
+
+              const finalEntryPaidAt =
+                finalEntryStatus ===
+                "PAGO"
+                  ? normalizeNullableDate(
+                      entryPaidAt ||
+                        paidAt
+                    ) ||
+                    new Date()
+                  : null;
+
+              const entry =
+                await tx.financialTransaction.create({
+                  data: {
+                    type,
+                    source,
+
+                    status:
+                      finalEntryStatus,
+
+                    categoryId:
+                      categoryId
+                        ? Number(
+                            categoryId
+                          )
+                        : null,
+
+                    protocolId:
+                      protocolId
+                        ? Number(
+                            protocolId
+                          )
+                        : null,
+
+                    clientId:
+                      clientId
+                        ? Number(
+                            clientId
+                          )
+                        : null,
+
+                    description:
+                      String(
+                        description
+                      ).trim(),
+
+                    amount:
+                      finalEntryAmount,
+
+                    dueDate:
+                      finalEntryDueDate,
+
+                    paidAt:
+                      finalEntryPaidAt,
+
+                    competenceMonth:
+                      financeCompetenceFromDate(
+                        finalEntryDueDate
+                      ),
+
+                    clientName:
+                      finalClientName,
+
+                    notes:
+                      notes ||
+                      null,
+
+                    installmentGroupId,
+
+                    /*
+                     * ZERO = ENTRADA
+                     */
+                    installmentNumber:
+                      0,
+
+                    totalInstallments:
+                      totalFutureInstallments,
+
+                    createdById:
+                      req.user?.id ||
+                      null,
+
+                    autoChargeEnabled:
+                      finalEntryStatus !==
+                        "PAGO" &&
+                      Boolean(
+                        entryAutoChargeEnabled
+                      ),
+
+                    paymentProvider:
+                      finalEntryStatus !==
+                        "PAGO" &&
+                      entryAutoChargeEnabled
+                        ? "BANCO_DO_BRASIL"
+                        : null,
+
+                    chargeStatus:
+                      finalEntryStatus !==
+                        "PAGO" &&
+                      entryAutoChargeEnabled
+                        ? "PENDING"
+                        : null,
+                  },
+                });
+
+              result.push(entry);
+            }
+
+            /*
+             * ------------------------------------------------
+             * PARCELAS FUTURAS
+             * ------------------------------------------------
+             */
+
+            for (
+              let index = 0;
+              index <
+              normalizedInstallments.length;
+              index += 1
+            ) {
+              const plan =
+                normalizedInstallments[
+                  index
+                ];
+
+              const installment =
+                await tx.financialTransaction.create({
+                  data: {
+                    type,
+                    source,
+
+                    status:
+                      "PENDENTE",
+
+                    categoryId:
+                      categoryId
+                        ? Number(
+                            categoryId
+                          )
+                        : null,
+
+                    protocolId:
+                      protocolId
+                        ? Number(
+                            protocolId
+                          )
+                        : null,
+
+                    clientId:
+                      clientId
+                        ? Number(
+                            clientId
+                          )
+                        : null,
+
+                    description:
+                      String(
+                        description
+                      ).trim(),
+
+                    /*
+                     * VALOR INDIVIDUAL
+                     * DA PARCELA.
+                     */
+                    amount:
+                      plan.amount,
+
+                    dueDate:
+                      plan.dueDate,
+
+                    paidAt:
+                      null,
+
+                    competenceMonth:
+                      financeCompetenceFromDate(
+                        plan.dueDate
+                      ),
+
+                    clientName:
+                      finalClientName,
+
+                    notes:
+                      notes ||
+                      null,
+
+                    installmentGroupId,
+
+                    installmentNumber:
+                      index + 1,
+
+                    totalInstallments:
+                      totalFutureInstallments,
+
+                    createdById:
+                      req.user?.id ||
+                      null,
+
+                    autoChargeEnabled:
+                      plan.autoChargeEnabled,
+
+                    paymentProvider:
+                      plan.autoChargeEnabled
+                        ? "BANCO_DO_BRASIL"
+                        : null,
+
+                    chargeStatus:
+                      plan.autoChargeEnabled
+                        ? "PENDING"
+                        : null,
+                  },
+                });
+
+              result.push(
+                installment
+              );
+            }
+
+            await tx.auditLog.create({
+              data: {
+                userId:
+                  req.user?.id ||
+                  null,
+
+                userName:
+                  req.user?.name ||
+                  null,
+
+                userEmail:
+                  req.user?.email ||
+                  null,
+
+                userRole:
+                  req.user?.role ||
+                  null,
+
+                action:
+                  "CREATE_FINANCIAL_PAYMENT_PLAN",
+
+                entity:
+                  "FinancialTransaction",
+
+                entityId:
+                  installmentGroupId,
+
+                description:
+                  `Plano financeiro criado para ${String(
+                    description
+                  ).trim()}.`,
+
+                metadata:
+                  JSON.stringify({
+                    totalAmount,
+                    entryAmount:
+                      finalEntryAmount,
+
+                    installments:
+                      normalizedInstallments.map(
+                        (
+                          item,
+                          index
+                        ) => ({
+                          number:
+                            index +
+                            1,
+
+                          amount:
+                            item.amount,
+
+                          dueDate:
+                            item.dueDate,
+
+                          autoChargeEnabled:
+                            item.autoChargeEnabled,
+                        })
+                      ),
+                  }),
+              },
+            });
+
+            return result;
+          }
+        );
+
+      return res
+        .status(201)
+        .json({
+          mode:
+            "PAYMENT_PLAN",
+
+          installmentGroupId,
+
+          totalAmount,
+
+          entryAmount:
+            finalEntryAmount,
+
+          balanceAmount:
+            totalAmount -
+            finalEntryAmount,
+
+          installmentsTotal,
+
+          transactions:
+            created,
+        });
+    } catch (error) {
+      console.error(
+        "Erro ao criar lançamento financeiro:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          error instanceof Error
+            ? error.message
+            : "Erro ao criar lançamento financeiro.",
+      });
+    }
   }
 );
 
@@ -5781,6 +7254,7 @@ app.put(
       status,
       categoryId,
       protocolId,
+      clientId,
       description,
       amount,
       dueDate,
@@ -5801,6 +7275,14 @@ app.put(
         status,
         categoryId: categoryId ? Number(categoryId) : null,
         protocolId: protocolId ? Number(protocolId) : null,
+
+        clientId:
+          clientId === undefined
+            ? undefined
+            : clientId
+            ? Number(clientId)
+            : null,
+
         description,
         amount: amount !== undefined ? toIntMoney(amount) : undefined,
         dueDate: dueDate === undefined ? undefined : finalDueDate,

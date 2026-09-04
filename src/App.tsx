@@ -8662,8 +8662,13 @@ type BackendFinanceTransaction = {
   dueDate?: string | null;
   paidAt?: string | null;
   competenceMonth?: string | null;
+  clientId?: number | null;
   clientName?: string | null;
   notes?: string | null;
+
+  installmentGroupId?: string | null;
+  installmentNumber?: number | null;
+  totalInstallments?: number | null;
   category?: BackendFinanceCategory | null;
   protocol?: {
     id: number;
@@ -8677,6 +8682,18 @@ type BackendFinanceTransaction = {
       name: string;
     };
   } | null;
+  autoChargeEnabled?: boolean;
+  paymentProvider?: string | null;
+  providerChargeId?: string | null;
+  providerTxId?: string | null;
+  chargeStatus?: string | null;
+  chargeCreatedAt?: string | null;
+  chargeExpiresAt?: string | null;
+  paymentConfirmedAt?: string | null;
+  lastNotificationAt?: string | null;
+  notificationCount?: number;
+  webhookLastReceivedAt?: string | null;
+
 };
 
 type BackendFinanceFixedCost = {
@@ -8798,6 +8815,50 @@ function FinancePage() {
   const [transactionDueDate, setTransactionDueDate] = useState("");
   const [transactionPaidAt, setTransactionPaidAt] = useState("");
   const [transactionClientName, setTransactionClientName] = useState("");
+
+  const [
+    transactionClientId,
+    setTransactionClientId,
+  ] = useState<number | null>(null);
+
+  const [
+    transactionInstallmentEnabled,
+    setTransactionInstallmentEnabled,
+  ] = useState(false);
+
+  const [
+    transactionInstallmentQty,
+    setTransactionInstallmentQty,
+  ] = useState("2");
+
+  const [
+    transactionInstallmentDates,
+    setTransactionInstallmentDates,
+  ] = useState<string[]>([]);
+
+  const [
+    transactionAutoChargeEnabled,
+    setTransactionAutoChargeEnabled,
+  ] = useState(false);
+
+
+  /*
+   * FINANCEIRO V2
+   * O campo transactionAmount representa
+   * o valor TOTAL do serviço.
+   *
+   * A entrada e as parcelas possuem
+   * valores próprios.
+   */
+  const [
+    transactionEntryAmount,
+    setTransactionEntryAmount,
+  ] = useState("");
+
+  const [
+    transactionInstallmentAmounts,
+    setTransactionInstallmentAmounts,
+  ] = useState<string[]>([]);
   const [transactionNotes, setTransactionNotes] = useState("");
 
   const [showFixedCostForm, setShowFixedCostForm] = useState(false);
@@ -8915,6 +8976,7 @@ function FinancePage() {
     return transactionType === "ENTRADA" ? incomeCategories() : expenseCategories();
   }
 
+
   function resetTransactionForm() {
     setEditingTransaction(null);
     setTransactionType("ENTRADA");
@@ -8925,8 +8987,28 @@ function FinancePage() {
     setTransactionAmount("");
     setTransactionDueDate("");
     setTransactionPaidAt("");
+    setTransactionClientId(null);
     setTransactionClientName("");
+    setTransactionEntryAmount("");
+    setTransactionInstallmentAmounts([]);
+
     setTransactionNotes("");
+
+    setTransactionInstallmentEnabled(
+      false
+    );
+
+    setTransactionInstallmentQty(
+      "2"
+    );
+
+    setTransactionInstallmentDates(
+      []
+    );
+
+    setTransactionAutoChargeEnabled(
+      false
+    );
   }
 
   function startEditTransaction(item: BackendFinanceTransaction) {
@@ -8940,8 +9022,251 @@ function FinancePage() {
     setTransactionAmount(String(item.amount || ""));
     setTransactionDueDate(item.dueDate ? item.dueDate.slice(0, 10) : "");
     setTransactionPaidAt(item.paidAt ? item.paidAt.slice(0, 10) : "");
-    setTransactionClientName(item.clientName || item.protocol?.client?.name || "");
-    setTransactionNotes(item.notes || "");
+
+    setTransactionClientId(
+      item.clientId ||
+      null
+    );
+
+    setTransactionClientName(
+      item.clientName ||
+      item.protocol?.client?.name ||
+      ""
+    );
+
+    setTransactionNotes(
+      item.notes ||
+      ""
+    );
+
+    /*
+     * A edição continua individual.
+     * Não recria o grupo.
+     */
+    setTransactionInstallmentEnabled(
+      false
+    );
+
+    setTransactionInstallmentQty(
+      item.totalInstallments
+        ? String(
+            item.totalInstallments
+          )
+        : "2"
+    );
+
+    setTransactionInstallmentDates(
+      []
+    );
+
+    setTransactionAutoChargeEnabled(
+      Boolean(
+        item.autoChargeEnabled
+      )
+    );
+  }
+
+  /*
+   * ======================================================
+   * FINANCEIRO V2 — RESUMO DA COMPOSIÇÃO
+   * ======================================================
+   */
+
+  const financeTotalServiceValue =
+    Number(transactionAmount || 0);
+
+  const financeEntryValue =
+    Number(transactionEntryAmount || 0);
+
+  const financeFutureInstallmentsValue =
+    transactionInstallmentAmounts.reduce(
+      (total, rawValue) => {
+        const value = Number(rawValue || 0);
+
+        return (
+          total +
+          (
+            Number.isFinite(value)
+              ? value
+              : 0
+          )
+        );
+      },
+      0
+    );
+
+  const financeDistributedValue =
+    financeEntryValue +
+    financeFutureInstallmentsValue;
+
+  const financeBalanceValue =
+    Math.max(
+      0,
+      financeTotalServiceValue -
+        financeEntryValue
+    );
+
+  const financeDifferenceValue =
+    financeTotalServiceValue -
+    financeDistributedValue;
+
+  function resizeFinanceInstallmentPlan(
+    rawQty: string
+  ) {
+    const quantity = Math.max(
+      1,
+      Math.min(
+        120,
+        Number(rawQty || 1)
+      )
+    );
+
+    setTransactionInstallmentAmounts(
+      (current) =>
+        Array.from(
+          {
+            length: quantity,
+          },
+          (_, index) =>
+            current[index] || ""
+        )
+    );
+
+    setTransactionInstallmentDates(
+      (current) =>
+        Array.from(
+          {
+            length: quantity,
+          },
+          (_, index) =>
+            current[index] || ""
+        )
+    );
+  }
+
+  function suggestFinanceInstallmentDates() {
+    const quantity = Math.max(
+      1,
+      Number(
+        transactionInstallmentQty ||
+          1
+      )
+    );
+
+    const base =
+      transactionDueDate
+        ? new Date(
+            `${transactionDueDate}T12:00:00`
+          )
+        : new Date();
+
+    const dates =
+      Array.from(
+        {
+          length: quantity,
+        },
+        (_, index) => {
+          const date =
+            new Date(base);
+
+          /*
+           * Parcela futura 1 = mês seguinte.
+           */
+          date.setMonth(
+            date.getMonth() +
+              index +
+              1
+          );
+
+          const year =
+            date.getFullYear();
+
+          const month =
+            String(
+              date.getMonth() + 1
+            ).padStart(
+              2,
+              "0"
+            );
+
+          const day =
+            String(
+              date.getDate()
+            ).padStart(
+              2,
+              "0"
+            );
+
+          return `${year}-${month}-${day}`;
+        }
+      );
+
+    setTransactionInstallmentDates(
+      dates
+    );
+  }
+
+  function distributeFinanceBalanceEqually() {
+    const quantity =
+      Math.max(
+        1,
+        Number(
+          transactionInstallmentQty ||
+            1
+        )
+      );
+
+    const balance =
+      Math.max(
+        0,
+        financeTotalServiceValue -
+          financeEntryValue
+      );
+
+    /*
+     * Trabalhamos em centavos para não gerar
+     * diferença de arredondamento.
+     */
+    const totalCents =
+      Math.round(
+        balance * 100
+      );
+
+    const baseCents =
+      Math.floor(
+        totalCents /
+          quantity
+      );
+
+    const remainder =
+      totalCents -
+      baseCents *
+        quantity;
+
+    const amounts =
+      Array.from(
+        {
+          length: quantity,
+        },
+        (_, index) => {
+          const cents =
+            baseCents +
+            (
+              index ===
+              quantity - 1
+                ? remainder
+                : 0
+            );
+
+          return (
+            cents / 100
+          ).toFixed(2);
+        }
+      );
+
+    setTransactionInstallmentAmounts(
+      amounts
+    );
   }
 
   async function handleSaveTransaction() {
@@ -8957,6 +9282,142 @@ function FinancePage() {
         throw new Error("Informe um valor válido.");
       }
 
+      /*
+       * ==================================================
+       * FINANCEIRO V2 — COMPOSIÇÃO DO VALOR TOTAL
+       * ==================================================
+       *
+       * transactionAmount = valor TOTAL do serviço.
+       *
+       * Total =
+       * entrada + soma das parcelas futuras.
+       */
+      if (
+        !editingTransaction &&
+        transactionInstallmentEnabled
+      ) {
+        const totalServiceAmount =
+          Number(
+            transactionAmount ||
+            0
+          );
+
+        const entryValue =
+          Number(
+            transactionEntryAmount ||
+            0
+          );
+
+        if (
+          !Number.isFinite(
+            entryValue
+          ) ||
+          entryValue < 0 ||
+          entryValue >
+            totalServiceAmount
+        ) {
+          throw new Error(
+            "O valor da entrada é inválido."
+          );
+        }
+
+        const expectedFutureInstallments =
+          Math.max(
+            1,
+            Number(
+              transactionInstallmentQty ||
+                1
+            )
+          );
+
+        if (
+          transactionInstallmentAmounts.length !==
+            expectedFutureInstallments ||
+          transactionInstallmentDates.length !==
+            expectedFutureInstallments
+        ) {
+          throw new Error(
+            "Informe o valor e o vencimento de todas as parcelas futuras."
+          );
+        }
+
+        if (
+          transactionInstallmentAmounts.some(
+            (rawAmount) =>
+              !rawAmount ||
+              Number(rawAmount) <= 0
+          ) ||
+          transactionInstallmentDates.some(
+            (date) => !date
+          )
+        ) {
+          throw new Error(
+            "Informe o valor e o vencimento de todas as parcelas futuras."
+          );
+        }
+
+        const futureInstallmentsValue =
+          transactionInstallmentAmounts.reduce(
+            (
+              accumulator,
+              rawAmount
+            ) => {
+              const parsed =
+                Number(
+                  rawAmount ||
+                  0
+                );
+
+              return (
+                accumulator +
+                (
+                  Number.isFinite(
+                    parsed
+                  )
+                    ? parsed
+                    : 0
+                )
+              );
+            },
+            0
+          );
+
+        /*
+         * A validação da igualdade só é aplicada
+         * quando já existem valores individuais
+         * definidos no planejador.
+         *
+         * Na próxima etapa a interface passará
+         * a preencher esse array automaticamente.
+         */
+        if (
+          transactionInstallmentAmounts.length >
+            0
+        ) {
+          const distributedTotal =
+            entryValue +
+            futureInstallmentsValue;
+
+          const difference =
+            Math.abs(
+              totalServiceAmount -
+              distributedTotal
+            );
+
+          if (
+            difference >
+            0.009
+          ) {
+            throw new Error(
+              "A entrada somada às parcelas deve ser igual ao valor total do serviço."
+            );
+          }
+        }
+      }
+
+
+
+
       const payload = {
         type: transactionType,
         source: transactionSource,
@@ -8970,16 +9431,108 @@ function FinancePage() {
             ? transactionPaidAt || new Date().toISOString().slice(0, 10)
             : null,
         competenceMonth: month,
-        clientName: transactionClientName || null,
-        notes: transactionNotes || null,
+
+        clientId:
+          transactionClientId ||
+          null,
+
+        clientName:
+          transactionClientName ||
+          null,
+
+        notes:
+          transactionNotes ||
+          null,
+
+        /*
+         * Só cria parcelas novas durante
+         * o cadastro inicial.
+         */
+        /*
+         * FINANCEIRO V2
+         *
+         * amount acima representa o valor TOTAL.
+         * A composição real é enviada separadamente.
+         */
+        entryAmount:
+          !editingTransaction &&
+          transactionInstallmentEnabled
+            ? Number(
+                transactionEntryAmount ||
+                  0
+              )
+            : undefined,
+
+        entryStatus:
+          !editingTransaction &&
+          transactionInstallmentEnabled
+            ? transactionStatus
+            : undefined,
+
+        entryDueDate:
+          !editingTransaction &&
+          transactionInstallmentEnabled
+            ? transactionDueDate ||
+              null
+            : undefined,
+
+        entryPaidAt:
+          !editingTransaction &&
+          transactionInstallmentEnabled &&
+          transactionStatus === "PAGO"
+            ? transactionPaidAt ||
+              new Date()
+                .toISOString()
+                .slice(
+                  0,
+                  10
+                )
+            : null,
+
+        entryAutoChargeEnabled:
+          !editingTransaction &&
+          transactionInstallmentEnabled &&
+          transactionStatus !== "PAGO"
+            ? transactionAutoChargeEnabled
+            : false,
+
+        installments:
+          !editingTransaction &&
+          transactionInstallmentEnabled
+            ? transactionInstallmentDates.map(
+                (
+                  dueDate,
+                  index
+                ) => ({
+                  amount:
+                    Number(
+                      transactionInstallmentAmounts[
+                        index
+                      ] || 0
+                    ),
+
+                  dueDate,
+
+                  autoChargeEnabled:
+                    transactionAutoChargeEnabled,
+                })
+              )
+            : undefined,
       };
 
       if (editingTransaction) {
         await api.updateFinanceTransaction(editingTransaction.id, payload);
         setSuccess("Lançamento financeiro atualizado com sucesso.");
       } else {
-        await api.createFinanceTransaction(payload);
-        setSuccess("Lançamento financeiro cadastrado com sucesso.");
+        await api.createFinanceTransaction(
+          payload
+        );
+
+        setSuccess(
+          transactionInstallmentEnabled
+            ? `${transactionInstallmentQty} parcelas criadas automaticamente com sucesso.`
+            : "Lançamento financeiro cadastrado com sucesso."
+        );
       }
 
       resetTransactionForm();
@@ -9676,6 +10229,11 @@ async function handleDeleteSalary(id: number) {
     <input
       value={transactionClientName}
       onChange={(event) => {
+        /*
+         * Se o usuário digitar manualmente,
+         * desfaz o vínculo anterior.
+         */
+        setTransactionClientId(null);
         setTransactionClientName(event.target.value);
         setClientSearch(event.target.value);
       }}
@@ -9698,6 +10256,7 @@ async function handleDeleteSalary(id: number) {
         type="button"
         className="secondary-action"
         onClick={() => {
+          setTransactionClientId(null);
           setTransactionClientName("");
           setClientSearch("");
           setClientResults([]);
@@ -9716,6 +10275,7 @@ async function handleDeleteSalary(id: number) {
           type="button"
           className="client-search-result"
           onClick={() => {
+            setTransactionClientId(client.id);
             setTransactionClientName(client.name);
             setClientSearch(client.name);
             setClientResults([]);
@@ -9737,7 +10297,7 @@ async function handleDeleteSalary(id: number) {
 </div>
 
                   <label>
-                    Valor
+                    Valor total do serviço
                     <input
                       type="number"
                       value={transactionAmount}
@@ -9787,10 +10347,560 @@ async function handleDeleteSalary(id: number) {
                       }
                     />
                   </label>
+
+
                 </div>
 
-                <div className="form-section">
-                  <label>
+              </div>
+
+              {!editingTransaction &&
+                transactionType ===
+                  "ENTRADA" && (
+                  <section className="finance-installment-planner finance-v2-planner">
+                    <div className="finance-v2-header">
+                      <div>
+                        <span className="finance-installment-kicker">
+                          PLANO DE RECEBIMENTO
+                        </span>
+
+                        <h4>
+                          Composição financeira do serviço
+                        </h4>
+
+                        <p>
+                          O valor informado acima corresponde ao
+                          valor total contratado. Defina abaixo
+                          quanto será recebido na entrada e como o
+                          saldo será distribuído.
+                        </p>
+                      </div>
+
+                      <label className="finance-switch-card">
+                        <input
+                          type="checkbox"
+                          checked={
+                            transactionInstallmentEnabled
+                          }
+                          onChange={(event) => {
+                            const enabled =
+                              event.target.checked;
+
+                            setTransactionInstallmentEnabled(
+                              enabled
+                            );
+
+                            if (enabled) {
+                              resizeFinanceInstallmentPlan(
+                                transactionInstallmentQty
+                              );
+                            } else {
+                              setTransactionEntryAmount(
+                                ""
+                              );
+
+                              setTransactionInstallmentAmounts(
+                                []
+                              );
+
+                              setTransactionInstallmentDates(
+                                []
+                              );
+
+                              setTransactionAutoChargeEnabled(
+                                false
+                              );
+                            }
+                          }}
+                        />
+
+                        <span>
+                          <strong>
+                            Serviço parcelado
+                          </strong>
+
+                          <small>
+                            Entrada + parcelas futuras
+                          </small>
+                        </span>
+                      </label>
+                    </div>
+
+                    {transactionInstallmentEnabled && (
+                      <>
+                        <div className="finance-v2-total-card">
+                          <span>
+                            Valor total do serviço
+                          </span>
+
+                          <strong>
+                            {money(
+                              financeTotalServiceValue
+                            )}
+                          </strong>
+
+                          <small>
+                            Este valor não é o valor de cada
+                            parcela.
+                          </small>
+                        </div>
+
+                        <div className="finance-v2-entry-card">
+                          <div className="finance-v2-section-title">
+                            <span>
+                              1
+                            </span>
+
+                            <div>
+                              <strong>
+                                Entrada
+                              </strong>
+
+                              <small>
+                                Valor recebido ou a receber no
+                                início.
+                              </small>
+                            </div>
+                          </div>
+
+                          <div className="finance-v2-entry-grid">
+                            <label>
+                              Valor da entrada
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={
+                                  transactionEntryAmount
+                                }
+                                onChange={(event) =>
+                                  setTransactionEntryAmount(
+                                    event.target.value
+                                  )
+                                }
+                                placeholder="0,00"
+                              />
+                            </label>
+
+                            <label>
+                              Vencimento da entrada
+                              <input
+                                type="date"
+                                value={
+                                  transactionDueDate
+                                }
+                                onChange={(event) =>
+                                  setTransactionDueDate(
+                                    event.target.value
+                                  )
+                                }
+                              />
+                            </label>
+
+                            <label>
+                              Status da entrada
+                              <select
+                                value={
+                                  transactionStatus
+                                }
+                                onChange={(event) =>
+                                  setTransactionStatus(
+                                    event.target
+                                      .value as FinanceTransactionStatus
+                                  )
+                                }
+                              >
+                                <option value="PENDENTE">
+                                  Pendente
+                                </option>
+
+                                <option value="PAGO">
+                                  Pago
+                                </option>
+
+                                <option value="CANCELADO">
+                                  Cancelado
+                                </option>
+                              </select>
+                            </label>
+
+                            {transactionStatus ===
+                              "PAGO" && (
+                              <label>
+                                Data do pagamento
+                                <input
+                                  type="date"
+                                  value={
+                                    transactionPaidAt
+                                  }
+                                  onChange={(event) =>
+                                    setTransactionPaidAt(
+                                      event.target.value
+                                    )
+                                  }
+                                />
+                              </label>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="finance-v2-balance-card">
+                          <div>
+                            <span>
+                              Saldo após entrada
+                            </span>
+
+                            <strong>
+                              {money(
+                                financeBalanceValue
+                              )}
+                            </strong>
+                          </div>
+
+                          <div>
+                            <span>
+                              Parcelas futuras
+                            </span>
+
+                            <strong>
+                              {
+                                transactionInstallmentQty
+                              }
+                            </strong>
+                          </div>
+                        </div>
+
+                        <div className="finance-v2-installments-card">
+                          <div className="finance-v2-section-title">
+                            <span>
+                              2
+                            </span>
+
+                            <div>
+                              <strong>
+                                Parcelas futuras
+                              </strong>
+
+                              <small>
+                                Cada parcela pode possuir valor e
+                                vencimento diferentes.
+                              </small>
+                            </div>
+                          </div>
+
+                          <div className="finance-v2-toolbar">
+                            <label>
+                              Quantidade de parcelas futuras
+
+                              <input
+                                type="number"
+                                min="1"
+                                max="120"
+                                value={
+                                  transactionInstallmentQty
+                                }
+                                onChange={(event) => {
+                                  const value =
+                                    event.target.value;
+
+                                  setTransactionInstallmentQty(
+                                    value
+                                  );
+
+                                  resizeFinanceInstallmentPlan(
+                                    value
+                                  );
+                                }}
+                              />
+                            </label>
+
+                            <div className="finance-v2-toolbar-actions">
+                              <button
+                                type="button"
+                                className="secondary-action"
+                                onClick={
+                                  distributeFinanceBalanceEqually
+                                }
+                              >
+                                Distribuir saldo igualmente
+                              </button>
+
+                              <button
+                                type="button"
+                                className="secondary-action"
+                                onClick={
+                                  suggestFinanceInstallmentDates
+                                }
+                              >
+                                Sugerir datas mensais
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="finance-v2-schedule-list">
+                            {Array.from({
+                              length:
+                                Math.max(
+                                  1,
+                                  Number(
+                                    transactionInstallmentQty ||
+                                      1
+                                  )
+                                ),
+                            }).map(
+                              (
+                                _,
+                                index
+                              ) => (
+                                <div
+                                  className="finance-v2-schedule-row"
+                                  key={
+                                    index
+                                  }
+                                >
+                                  <div className="finance-v2-installment-index">
+                                    <span>
+                                      Parcela
+                                    </span>
+
+                                    <strong>
+                                      {index + 1}
+                                    </strong>
+                                  </div>
+
+                                  <label>
+                                    Valor
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      step="0.01"
+                                      value={
+                                        transactionInstallmentAmounts[
+                                          index
+                                        ] || ""
+                                      }
+                                      onChange={(event) => {
+                                        const value =
+                                          event.target.value;
+
+                                        setTransactionInstallmentAmounts(
+                                          (current) => {
+                                            const next =
+                                              [
+                                                ...current,
+                                              ];
+
+                                            next[
+                                              index
+                                            ] =
+                                              value;
+
+                                            return next;
+                                          }
+                                        );
+                                      }}
+                                      placeholder="0,00"
+                                    />
+                                  </label>
+
+                                  <label>
+                                    Vencimento
+                                    <input
+                                      type="date"
+                                      value={
+                                        transactionInstallmentDates[
+                                          index
+                                        ] || ""
+                                      }
+                                      onChange={(event) => {
+                                        const value =
+                                          event.target.value;
+
+                                        setTransactionInstallmentDates(
+                                          (current) => {
+                                            const next =
+                                              [
+                                                ...current,
+                                              ];
+
+                                            next[
+                                              index
+                                            ] =
+                                              value;
+
+                                            return next;
+                                          }
+                                        );
+                                      }}
+                                    />
+                                  </label>
+
+                                  <div className="finance-v2-status">
+                                    <span>
+                                      Status inicial
+                                    </span>
+
+                                    <strong>
+                                      Pendente
+                                    </strong>
+                                  </div>
+                                </div>
+                              )
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="finance-v2-summary-card">
+                          <div className="finance-v2-section-title">
+                            <span>
+                              3
+                            </span>
+
+                            <div>
+                              <strong>
+                                Conferência
+                              </strong>
+
+                              <small>
+                                O total distribuído precisa fechar
+                                exatamente com o valor contratado.
+                              </small>
+                            </div>
+                          </div>
+
+                          <div className="finance-v2-summary-grid">
+                            <div>
+                              <span>
+                                Valor total
+                              </span>
+
+                              <strong>
+                                {money(
+                                  financeTotalServiceValue
+                                )}
+                              </strong>
+                            </div>
+
+                            <div>
+                              <span>
+                                Entrada
+                              </span>
+
+                              <strong>
+                                {money(
+                                  financeEntryValue
+                                )}
+                              </strong>
+                            </div>
+
+                            <div>
+                              <span>
+                                Parcelas futuras
+                              </span>
+
+                              <strong>
+                                {money(
+                                  financeFutureInstallmentsValue
+                                )}
+                              </strong>
+                            </div>
+
+                            <div>
+                              <span>
+                                Total distribuído
+                              </span>
+
+                              <strong>
+                                {money(
+                                  financeDistributedValue
+                                )}
+                              </strong>
+                            </div>
+
+                            <div
+                              className={
+                                Math.abs(
+                                  financeDifferenceValue
+                                ) < 0.009
+                                  ? "finance-v2-difference ok"
+                                  : "finance-v2-difference warning"
+                              }
+                            >
+                              <span>
+                                Diferença
+                              </span>
+
+                              <strong>
+                                {money(
+                                  Math.abs(
+                                    financeDifferenceValue
+                                  )
+                                )}
+                              </strong>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="finance-v2-auto-charge-card">
+                          <div>
+                            <strong>
+                              Cobrança automática
+                            </strong>
+
+                            <span>
+                              Preparar as parcelas pendentes para
+                              geração de Pix e futura baixa pelo
+                              webhook bancário.
+                            </span>
+                          </div>
+
+                          <select
+                            value={
+                              transactionAutoChargeEnabled
+                                ? "SIM"
+                                : "NAO"
+                            }
+                            onChange={(event) =>
+                              setTransactionAutoChargeEnabled(
+                                event.target.value ===
+                                  "SIM"
+                              )
+                            }
+                          >
+                            <option value="NAO">
+                              Não
+                            </option>
+
+                            <option value="SIM">
+                              Sim — preparar cobrança automática
+                            </option>
+                          </select>
+
+                          {transactionAutoChargeEnabled && (
+                            <small className="finance-v2-webhook-notice">
+                              Banco do Brasil • Pix • confirmação
+                              de pagamento preparada para webhook.
+                            </small>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </section>
+                )}
+
+
+
+              
+                  <div className="finance-v2-notes-section">
+                    <div className="finance-v2-notes-heading">
+                      <div>
+                        <strong>Observações</strong>
+                        <span>
+                          Informações complementares sobre este lançamento.
+                        </span>
+                      </div>
+                    </div>
+
+                    <label className="finance-v2-notes">
                     Observações
                     <textarea
                       value={transactionNotes}
@@ -9798,10 +10908,9 @@ async function handleDeleteSalary(id: number) {
                       rows={5}
                     />
                   </label>
-                </div>
-              </div>
+                  </div>
 
-              <div className="form-actions">
+<div className="form-actions">
                 <button
                   className="secondary-action"
                   onClick={() => {
@@ -9844,8 +10953,18 @@ async function handleDeleteSalary(id: number) {
                     <td>{item.type === "ENTRADA" ? "Entrada" : "Saída"}</td>
 
                     <td>
-                      <strong>{item.description}</strong>
-                      <small className="table-small">{item.source}</small>
+                      <strong>
+                        {item.description}
+                      </strong>
+
+                      <small className="table-small">
+                        {item.source}
+
+                        {item.installmentNumber &&
+                        item.totalInstallments
+                          ? ` · Parcela ${item.installmentNumber}/${item.totalInstallments}`
+                          : ""}
+                      </small>
                     </td>
 
                     <td>

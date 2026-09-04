@@ -6070,3 +6070,2364 @@ a {
   text-decoration: underline !important;
 }
 
+
+/* ======================================================
+   FINANCEIRO V2 — PLANO DE PARCELAMENTO
+   ====================================================== */
+
+.finance-installment-planner {
+  grid-column: 1 / -1;
+  margin-top: 10px;
+  padding: 22px;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 20px;
+  background:
+    linear-gradient(
+      145deg,
+      rgba(240, 253, 250, 0.92),
+      rgba(255, 255, 255, 0.98)
+    );
+}
+
+.finance-installment-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.finance-installment-heading h4 {
+  margin: 3px 0 5px;
+  font-size: 18px;
+}
+
+.finance-installment-heading p {
+  margin: 0;
+  max-width: 620px;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.finance-installment-kicker {
+  display: block;
+  color: #0f766e;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.finance-switch-card {
+  min-width: 235px;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 15px;
+  border: 1px solid #d7e4e0;
+  border-radius: 14px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.finance-switch-card input {
+  width: 19px;
+  height: 19px;
+  margin: 0;
+}
+
+.finance-switch-card span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.finance-switch-card strong {
+  color: #163d38;
+}
+
+.finance-switch-card small {
+  color: #7a8d89;
+}
+
+.finance-installment-settings {
+  display: grid;
+  grid-template-columns:
+    minmax(150px, 0.7fr)
+    minmax(180px, 1fr)
+    minmax(260px, 1.4fr);
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.finance-installment-settings > label,
+.finance-first-installment,
+.finance-auto-charge-card {
+  padding: 15px;
+  border: 1px solid #dde8e5;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.finance-first-installment {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.finance-first-installment span,
+.finance-installment-status span {
+  color: #7b8d89;
+  font-size: 12px;
+}
+
+.finance-first-installment strong {
+  color: #173e38;
+  font-size: 15px;
+}
+
+.finance-first-installment small {
+  color: #64748b;
+}
+
+.finance-auto-charge-card small {
+  display: block;
+  margin-top: 7px;
+  color: #71817e;
+  line-height: 1.4;
+}
+
+.finance-installment-schedule {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid #dce8e5;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.finance-schedule-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 13px;
+}
+
+.finance-schedule-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.finance-schedule-heading strong {
+  color: #173e38;
+}
+
+.finance-schedule-heading span {
+  color: #71817e;
+  font-size: 13px;
+}
+
+.finance-schedule-list {
+  display: grid;
+  gap: 8px;
+}
+
+.finance-schedule-row {
+  display: grid;
+  grid-template-columns:
+    100px
+    minmax(170px, 1fr)
+    minmax(120px, 0.6fr);
+  align-items: center;
+  gap: 14px;
+  padding: 11px 13px;
+  border: 1px solid #e3ebe9;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.finance-schedule-row.first {
+  border-color: rgba(15, 118, 110, 0.28);
+  background: #f1faf7;
+}
+
+.finance-installment-number {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.finance-installment-number span {
+  color: #82908d;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.finance-installment-number strong {
+  color: #0f766e;
+  font-size: 16px;
+}
+
+.finance-installment-status {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.finance-installment-status strong {
+  color: #334155;
+}
+
+.finance-auto-charge-notice {
+  display: flex;
+  gap: 13px;
+  align-items: flex-start;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid rgba(14, 116, 144, 0.22);
+  border-radius: 13px;
+  background: #f0f9ff;
+}
+
+.finance-auto-charge-notice strong {
+  flex: 0 0 auto;
+  color: #0e7490;
+}
+
+.finance-auto-charge-notice span {
+  color: #52636a;
+  line-height: 1.45;
+}
+
+@media (max-width: 900px) {
+  .finance-installment-heading,
+  .finance-schedule-heading {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .finance-switch-card {
+    min-width: 0;
+  }
+
+  .finance-installment-settings {
+    grid-template-columns: 1fr;
+  }
+
+  .finance-schedule-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* ==========================================================
+   FINANCEIRO V2 — ETAPA 3D2
+   TOTAL + ENTRADA + PARCELAS DO SALDO
+   ========================================================== */
+
+.finance-v2-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.finance-v2-summary-card {
+  padding: 15px 16px;
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  border-radius: 14px;
+  background: #ffffff;
+}
+
+.finance-v2-summary-card span {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.finance-v2-summary-card strong {
+  font-size: 18px;
+  color: #0f172a;
+}
+
+.finance-v2-summary-card.total {
+  background: #f0fdfa;
+}
+
+.finance-v2-summary-card.entry {
+  background: #f8fafc;
+}
+
+.finance-v2-summary-card.balance {
+  background: #f0f9ff;
+}
+
+.finance-v2-entry-card {
+  padding: 16px;
+  margin: 14px 0;
+  border: 1px solid rgba(14, 116, 144, 0.18);
+  border-radius: 16px;
+  background: #ffffff;
+}
+
+.finance-v2-entry-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 0.7fr;
+  gap: 14px;
+  align-items: end;
+  margin-top: 14px;
+}
+
+.finance-v2-entry-status {
+  min-height: 70px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.finance-v2-entry-status span {
+  display: block;
+  margin-bottom: 5px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.finance-v2-schedule-row {
+  grid-template-columns:
+    minmax(70px, 0.5fr)
+    minmax(155px, 1fr)
+    minmax(145px, 0.9fr)
+    minmax(100px, 0.7fr) !important;
+}
+
+.finance-v2-reconciliation {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+  padding: 16px;
+  border-radius: 15px;
+}
+
+.finance-v2-reconciliation > div {
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.finance-v2-reconciliation span {
+  display: block;
+  font-size: 11px;
+  color: #64748b;
+}
+
+.finance-v2-reconciliation strong {
+  display: block;
+  margin-top: 3px;
+}
+
+.finance-v2-reconciliation p {
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+  font-weight: 600;
+}
+
+.finance-v2-reconciliation.balanced {
+  border: 1px solid #86efac;
+  background: #f0fdf4;
+}
+
+.finance-v2-reconciliation.balanced p {
+  color: #166534;
+}
+
+.finance-v2-reconciliation.pending {
+  border: 1px solid #fcd34d;
+  background: #fffbeb;
+}
+
+.finance-v2-reconciliation.pending p {
+  color: #92400e;
+}
+
+@media (max-width: 900px) {
+  .finance-v2-summary-grid,
+  .finance-v2-entry-grid,
+  .finance-v2-reconciliation {
+    grid-template-columns: 1fr;
+  }
+
+  .finance-v2-reconciliation p {
+    grid-column: auto;
+  }
+
+  .finance-v2-schedule-row {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ===== FINANCEIRO V2 PREMIUM — START ===== */
+
+/*
+ * FINANCEIRO V2
+ * Planejador financeiro premium.
+ * Todo o bloco fica isolado nas classes finance-v2-*.
+ */
+
+.finance-installment-planner.finance-v2-planner {
+  grid-column: 1 / -1;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 18px;
+  padding: 24px;
+  border: 1px solid rgba(20, 83, 65, 0.14);
+  border-radius: 24px;
+  background:
+    radial-gradient(
+      circle at 100% 0%,
+      rgba(25, 135, 84, 0.08),
+      transparent 34%
+    ),
+    linear-gradient(
+      145deg,
+      #ffffff 0%,
+      #fbfdfc 48%,
+      #f5faf7 100%
+    );
+  box-shadow:
+    0 20px 50px rgba(15, 45, 36, 0.08),
+    0 4px 14px rgba(15, 45, 36, 0.04);
+  overflow: hidden;
+}
+
+.finance-v2-planner *,
+.finance-v2-planner *::before,
+.finance-v2-planner *::after {
+  box-sizing: border-box;
+}
+
+/* =========================================================
+   CABEÇALHO
+   ========================================================= */
+
+.finance-v2-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 22px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid rgba(20, 83, 65, 0.10);
+}
+
+.finance-v2-header > div:first-child {
+  min-width: 0;
+  max-width: 720px;
+}
+
+.finance-v2-header h4 {
+  margin: 6px 0 7px;
+  font-size: 22px;
+  line-height: 1.25;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #10271f;
+}
+
+.finance-v2-header p {
+  margin: 0;
+  max-width: 680px;
+  color: #68766f;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.finance-installment-kicker {
+  display: block;
+  margin-bottom: 5px;
+  color: #13795b;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+/* =========================================================
+   SWITCH SERVIÇO PARCELADO
+   ========================================================= */
+
+.finance-switch-card {
+  flex: 0 0 auto;
+  min-width: 235px;
+  display: flex !important;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 15px;
+  margin: 0 !important;
+  border: 1px solid rgba(19, 121, 91, 0.18);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 5px 16px rgba(15, 45, 36, 0.05);
+  cursor: pointer;
+}
+
+.finance-switch-card input[type="checkbox"] {
+  width: 19px !important;
+  height: 19px !important;
+  min-width: 19px;
+  margin: 0;
+  accent-color: #13795b;
+}
+
+.finance-switch-card > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.finance-switch-card strong {
+  color: #173b2f;
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.finance-switch-card small {
+  color: #7b8983;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+/* =========================================================
+   VALOR TOTAL
+   ========================================================= */
+
+.finance-v2-total-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "label value"
+    "hint value";
+  align-items: center;
+  column-gap: 24px;
+  row-gap: 3px;
+  padding: 18px 20px;
+  margin-bottom: 16px;
+  border: 1px solid rgba(19, 121, 91, 0.14);
+  border-radius: 18px;
+  background:
+    linear-gradient(
+      135deg,
+      rgba(19, 121, 91, 0.07),
+      rgba(19, 121, 91, 0.025)
+    );
+}
+
+.finance-v2-total-card > span {
+  grid-area: label;
+  color: #486157;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.finance-v2-total-card > strong {
+  grid-area: value;
+  color: #0c5b43;
+  font-size: 26px;
+  line-height: 1.1;
+  font-weight: 850;
+  letter-spacing: -0.025em;
+  white-space: nowrap;
+}
+
+.finance-v2-total-card > small {
+  grid-area: hint;
+  color: #7c8b85;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* =========================================================
+   CARDS E TÍTULOS DE ETAPA
+   ========================================================= */
+
+.finance-v2-entry-card,
+.finance-v2-installments-card,
+.finance-v2-summary-card,
+.finance-v2-auto-charge-card {
+  width: 100%;
+  margin-top: 16px;
+  padding: 20px;
+  border: 1px solid rgba(27, 76, 61, 0.10);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 7px 22px rgba(20, 51, 41, 0.045);
+}
+
+.finance-v2-section-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.finance-v2-section-title > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  border-radius: 10px;
+  background: #e7f5ee;
+  color: #13795b;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.finance-v2-section-title > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.finance-v2-section-title strong {
+  color: #173b2f;
+  font-size: 16px;
+  line-height: 1.25;
+  font-weight: 800;
+}
+
+.finance-v2-section-title small {
+  color: #7a8882;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+/* =========================================================
+   CAMPOS
+   ========================================================= */
+
+.finance-v2-entry-grid {
+  display: grid;
+  grid-template-columns:
+    repeat(4, minmax(150px, 1fr));
+  gap: 15px;
+  align-items: end;
+}
+
+.finance-v2-planner label {
+  color: #44554e;
+  font-size: 12px;
+  line-height: 1.3;
+  font-weight: 700;
+}
+
+.finance-v2-planner input[type="text"],
+.finance-v2-planner input[type="number"],
+.finance-v2-planner input[type="date"],
+.finance-v2-planner select {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 7px;
+  padding: 10px 12px;
+  border: 1px solid #dce5e0;
+  border-radius: 12px;
+  outline: none;
+  background: #ffffff;
+  color: #193129;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    background 160ms ease;
+}
+
+.finance-v2-planner input:focus,
+.finance-v2-planner select:focus {
+  border-color: rgba(19, 121, 91, 0.55);
+  box-shadow: 0 0 0 4px rgba(19, 121, 91, 0.08);
+  background: #fff;
+}
+
+/* =========================================================
+   SALDO
+   ========================================================= */
+
+.finance-v2-balance-card {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.finance-v2-balance-card > div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-height: 82px;
+  padding: 16px 18px;
+  border: 1px solid rgba(19, 121, 91, 0.10);
+  border-radius: 16px;
+  background: #f7fbf9;
+}
+
+.finance-v2-balance-card span {
+  color: #718079;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.045em;
+}
+
+.finance-v2-balance-card strong {
+  color: #163c30;
+  font-size: 21px;
+  line-height: 1.2;
+  font-weight: 850;
+}
+
+/* =========================================================
+   TOOLBAR DAS PARCELAS
+   ========================================================= */
+
+.finance-v2-toolbar {
+  display: grid;
+  grid-template-columns:
+    minmax(220px, 0.85fr)
+    minmax(360px, 1.4fr);
+  gap: 16px;
+  align-items: end;
+  padding: 15px;
+  margin-bottom: 14px;
+  border-radius: 15px;
+  background: #f8faf9;
+}
+
+.finance-v2-toolbar-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.finance-v2-toolbar-actions button {
+  min-height: 42px;
+  padding: 9px 15px;
+  border: 1px solid #d8e3de;
+  border-radius: 11px;
+  background: #ffffff;
+  color: #285344;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 750;
+  cursor: pointer;
+  box-shadow: 0 2px 7px rgba(15, 45, 36, 0.035);
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    background 140ms ease;
+}
+
+.finance-v2-toolbar-actions button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(19, 121, 91, 0.35);
+  background: #f8fcfa;
+  box-shadow: 0 5px 13px rgba(15, 45, 36, 0.07);
+}
+
+/* =========================================================
+   LINHAS DAS PARCELAS
+   ========================================================= */
+
+.finance-v2-schedule-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.finance-v2-schedule-row {
+  display: grid;
+  grid-template-columns:
+    90px
+    minmax(145px, 1fr)
+    minmax(165px, 1fr)
+    minmax(120px, 0.7fr);
+  gap: 14px;
+  align-items: end;
+  padding: 14px;
+  border: 1px solid #e3e9e6;
+  border-radius: 15px;
+  background: #ffffff;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
+}
+
+.finance-v2-schedule-row:hover {
+  transform: translateY(-1px);
+  border-color: rgba(19, 121, 91, 0.22);
+  box-shadow: 0 7px 18px rgba(15, 45, 36, 0.05);
+}
+
+.finance-v2-installment-index {
+  height: 44px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-left: 4px;
+}
+
+.finance-v2-installment-index span,
+.finance-v2-status span {
+  color: #84918c;
+  font-size: 10px;
+  line-height: 1.2;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.finance-v2-installment-index strong {
+  margin-top: 2px;
+  color: #173d31;
+  font-size: 18px;
+  line-height: 1;
+  font-weight: 850;
+}
+
+.finance-v2-status {
+  height: 44px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 12px;
+  border-radius: 11px;
+  background: #fff8e8;
+}
+
+.finance-v2-status strong {
+  color: #9c6a12;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+/* =========================================================
+   CONFERÊNCIA
+   ========================================================= */
+
+.finance-v2-summary-card {
+  background:
+    linear-gradient(
+      145deg,
+      #ffffff 0%,
+      #fafdfb 100%
+    );
+}
+
+.finance-v2-summary-grid {
+  display: grid;
+  grid-template-columns:
+    repeat(5, minmax(125px, 1fr));
+  gap: 10px;
+}
+
+.finance-v2-summary-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 14px;
+  border: 1px solid #e2e9e5;
+  border-radius: 14px;
+  background: #fafcfb;
+}
+
+.finance-v2-summary-grid span {
+  color: #77857f;
+  font-size: 10px;
+  line-height: 1.2;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.045em;
+}
+
+.finance-v2-summary-grid strong {
+  color: #243d34;
+  font-size: 17px;
+  line-height: 1.2;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.finance-v2-difference.ok {
+  border-color: rgba(25, 135, 84, 0.24);
+  background: #eef9f3;
+}
+
+.finance-v2-difference.ok strong {
+  color: #13795b;
+}
+
+.finance-v2-difference.warning {
+  border-color: rgba(190, 62, 62, 0.22);
+  background: #fff4f4;
+}
+
+.finance-v2-difference.warning strong {
+  color: #bd3434;
+}
+
+/* =========================================================
+   COBRANÇA AUTOMÁTICA
+   ========================================================= */
+
+.finance-v2-auto-charge-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(250px, 360px);
+  gap: 16px 22px;
+  align-items: center;
+  border-color: rgba(21, 94, 117, 0.13);
+  background:
+    linear-gradient(
+      135deg,
+      rgba(237, 248, 251, 0.84),
+      rgba(250, 253, 252, 0.95)
+    );
+}
+
+.finance-v2-auto-charge-card > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.finance-v2-auto-charge-card > div strong {
+  color: #174453;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.finance-v2-auto-charge-card > div span {
+  max-width: 630px;
+  color: #6e8187;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.finance-v2-auto-charge-card select {
+  margin-top: 0 !important;
+}
+
+.finance-v2-webhook-notice {
+  grid-column: 1 / -1;
+  display: block;
+  padding: 10px 12px;
+  border: 1px solid rgba(21, 94, 117, 0.10);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.65);
+  color: #56737c;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* =========================================================
+   RESPONSIVIDADE
+   ========================================================= */
+
+@media (max-width: 1100px) {
+  .finance-v2-entry-grid {
+    grid-template-columns:
+      repeat(2, minmax(160px, 1fr));
+  }
+
+  .finance-v2-summary-grid {
+    grid-template-columns:
+      repeat(3, minmax(130px, 1fr));
+  }
+}
+
+@media (max-width: 820px) {
+  .finance-installment-planner.finance-v2-planner {
+    padding: 17px;
+    border-radius: 18px;
+  }
+
+  .finance-v2-header {
+    flex-direction: column;
+  }
+
+  .finance-switch-card {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .finance-v2-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .finance-v2-toolbar-actions {
+    justify-content: stretch;
+  }
+
+  .finance-v2-toolbar-actions button {
+    flex: 1 1 180px;
+  }
+
+  .finance-v2-schedule-row {
+    grid-template-columns:
+      70px
+      minmax(120px, 1fr)
+      minmax(150px, 1fr);
+  }
+
+  .finance-v2-status {
+    grid-column: 2 / -1;
+  }
+
+  .finance-v2-auto-charge-card {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 620px) {
+  .finance-v2-entry-grid,
+  .finance-v2-balance-card,
+  .finance-v2-summary-grid,
+  .finance-v2-schedule-row {
+    grid-template-columns: 1fr;
+  }
+
+  .finance-v2-total-card {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "label"
+      "value"
+      "hint";
+  }
+
+  .finance-v2-total-card > strong {
+    margin: 7px 0 2px;
+  }
+
+  .finance-v2-status {
+    grid-column: auto;
+  }
+
+  .finance-v2-installment-index {
+    height: auto;
+  }
+}
+
+/* ===== FINANCEIRO V2 PREMIUM — END ===== */
+
+/* ==========================================================
+   FINANCEIRO V2 — AJUSTE ESTRUTURAL 3D5
+   ========================================================== */
+
+/*
+ * O planejador não deve disputar espaço com Observações.
+ */
+.finance-installment-planner.finance-v2-planner {
+  grid-column: 1 / -1 !important;
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+}
+
+/*
+ * Observações passa a ser uma seção final independente.
+ */
+.finance-v2-notes-section {
+  grid-column: 1 / -1 !important;
+  width: 100%;
+  margin-top: 22px;
+  padding: 22px;
+  border: 1px solid rgba(24, 74, 59, 0.11);
+  border-radius: 20px;
+  background:
+    linear-gradient(
+      145deg,
+      #ffffff 0%,
+      #fafcfb 100%
+    );
+  box-shadow:
+    0 8px 24px rgba(18, 55, 43, 0.045);
+}
+
+.finance-v2-notes-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.finance-v2-notes-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.finance-v2-notes-heading strong {
+  color: #173d31;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.finance-v2-notes-heading span {
+  color: #7b8983;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.finance-v2-notes {
+  display: block !important;
+  width: 100% !important;
+  margin: 0 !important;
+}
+
+.finance-v2-notes textarea {
+  display: block;
+  width: 100% !important;
+  min-height: 130px;
+  resize: vertical;
+  margin-top: 0 !important;
+  padding: 14px 16px;
+  border: 1px solid #dce5e0;
+  border-radius: 14px;
+  outline: none;
+  background: #ffffff;
+  color: #223a31;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.55;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.finance-v2-notes textarea:focus {
+  border-color: rgba(19, 121, 91, 0.55);
+  box-shadow:
+    0 0 0 4px rgba(19, 121, 91, 0.08);
+}
+
+/*
+ * Mais espaço interno para o planejador.
+ */
+.finance-v2-entry-card,
+.finance-v2-installments-card,
+.finance-v2-summary-card,
+.finance-v2-auto-charge-card {
+  min-width: 0;
+}
+
+/*
+ * Em notebook, as parcelas continuam confortáveis.
+ */
+@media (min-width: 900px) {
+  .finance-v2-installments-card {
+    padding: 24px;
+  }
+
+  .finance-v2-summary-card {
+    padding: 24px;
+  }
+}
+
+/*
+ * Evita botões escapando para fora dos cards.
+ */
+.finance-v2-toolbar {
+  min-width: 0;
+}
+
+.finance-v2-toolbar-actions {
+  min-width: 0;
+}
+
+.finance-v2-toolbar-actions button {
+  white-space: normal;
+}
+
+/*
+ * Nenhuma linha de parcela pode ultrapassar o card.
+ */
+.finance-v2-schedule-row {
+  width: 100%;
+  min-width: 0;
+}
+
+.finance-v2-schedule-row > * {
+  min-width: 0;
+}
+
+/* ===== FINANCEIRO V2 — PREMIUM FINAL 3D6 START ===== */
+
+/* =========================================================
+   PALETA E BASE
+   ========================================================= */
+
+.finance-v2-planner {
+  --finance-green: #176b52;
+  --finance-green-dark: #103f32;
+  --finance-green-soft: #edf7f2;
+  --finance-border: #e1e8e4;
+  --finance-muted: #75837d;
+  --finance-text: #1e3029;
+  --finance-bg: #f8fbf9;
+  --finance-white: #ffffff;
+  --finance-warning: #a76b13;
+  --finance-danger: #b53a3a;
+}
+
+/* =========================================================
+   PLANEJADOR PRINCIPAL
+   ========================================================= */
+
+.finance-installment-planner.finance-v2-planner {
+  grid-column: 1 / -1 !important;
+
+  display: block;
+
+  width: 100% !important;
+  max-width: none !important;
+
+  margin-top: 26px;
+  padding: 28px;
+
+  border:
+    1px solid
+    rgba(25, 92, 71, 0.12);
+
+  border-radius: 24px;
+
+  background:
+    radial-gradient(
+      circle at 96% 0%,
+      rgba(31, 123, 91, 0.065),
+      transparent 30%
+    ),
+    linear-gradient(
+      155deg,
+      #ffffff 0%,
+      #fbfdfc 58%,
+      #f6faf8 100%
+    );
+
+  box-shadow:
+    0 18px 48px rgba(20, 52, 41, 0.06),
+    0 2px 8px rgba(20, 52, 41, 0.025);
+
+  overflow: hidden;
+}
+
+/* =========================================================
+   CABEÇALHO DO PLANO
+   ========================================================= */
+
+.finance-v2-header {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1fr)
+    auto;
+
+  gap: 28px;
+
+  align-items: center;
+
+  padding-bottom: 24px;
+  margin-bottom: 22px;
+
+  border-bottom:
+    1px solid
+    rgba(24, 84, 66, 0.09);
+}
+
+.finance-installment-kicker {
+  display: block;
+
+  margin: 0 0 8px;
+
+  color: var(--finance-green);
+
+  font-size: 10px;
+  font-weight: 850;
+
+  letter-spacing: 0.17em;
+  text-transform: uppercase;
+}
+
+.finance-v2-header h4 {
+  margin: 0 0 8px;
+
+  color: var(--finance-green-dark);
+
+  font-size: 24px;
+  line-height: 1.18;
+  font-weight: 850;
+
+  letter-spacing: -0.025em;
+}
+
+.finance-v2-header p {
+  max-width: 720px;
+
+  margin: 0;
+
+  color: var(--finance-muted);
+
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+/* =========================================================
+   SERVIÇO PARCELADO
+   ========================================================= */
+
+.finance-switch-card {
+  display: flex !important;
+
+  min-width: 245px;
+
+  align-items: center;
+  gap: 13px;
+
+  margin: 0 !important;
+  padding: 14px 16px;
+
+  border:
+    1px solid
+    rgba(23, 107, 82, 0.16);
+
+  border-radius: 16px;
+
+  background: #ffffff;
+
+  box-shadow:
+    0 6px 18px
+    rgba(27, 70, 56, 0.045);
+
+  cursor: pointer;
+}
+
+.finance-switch-card:hover {
+  border-color:
+    rgba(23, 107, 82, 0.28);
+}
+
+.finance-switch-card input {
+  width: 19px !important;
+  height: 19px !important;
+
+  min-width: 19px;
+
+  margin: 0;
+
+  accent-color:
+    var(--finance-green);
+}
+
+.finance-switch-card > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.finance-switch-card strong {
+  color: var(--finance-green-dark);
+
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.finance-switch-card small {
+  color: #8a9691;
+
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* =========================================================
+   TOTAL DO SERVIÇO
+   ========================================================= */
+
+.finance-v2-total-card {
+  display: grid;
+
+  grid-template-columns:
+    minmax(0, 1fr)
+    auto;
+
+  grid-template-areas:
+    "label value"
+    "hint value";
+
+  column-gap: 28px;
+  row-gap: 4px;
+
+  align-items: center;
+
+  margin-bottom: 18px;
+  padding: 20px 22px;
+
+  border:
+    1px solid
+    rgba(23, 107, 82, 0.12);
+
+  border-radius: 18px;
+
+  background:
+    linear-gradient(
+      135deg,
+      rgba(23, 107, 82, 0.065),
+      rgba(23, 107, 82, 0.02)
+    );
+}
+
+.finance-v2-total-card > span {
+  grid-area: label;
+
+  color: #5d6f67;
+
+  font-size: 10px;
+  font-weight: 800;
+
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.finance-v2-total-card > strong {
+  grid-area: value;
+
+  color: var(--finance-green);
+
+  font-size: 28px;
+  font-weight: 900;
+
+  letter-spacing: -0.035em;
+
+  white-space: nowrap;
+}
+
+.finance-v2-total-card > small {
+  grid-area: hint;
+
+  color: #87928d;
+
+  font-size: 11px;
+}
+
+/* =========================================================
+   CARDS INTERNOS
+   ========================================================= */
+
+.finance-v2-entry-card,
+.finance-v2-installments-card,
+.finance-v2-summary-card,
+.finance-v2-auto-charge-card {
+  width: 100%;
+  min-width: 0;
+
+  margin-top: 16px;
+  padding: 22px;
+
+  border:
+    1px solid
+    rgba(28, 74, 59, 0.095);
+
+  border-radius: 19px;
+
+  background:
+    rgba(255, 255, 255, 0.96);
+
+  box-shadow:
+    0 7px 22px
+    rgba(21, 54, 43, 0.035);
+}
+
+/* =========================================================
+   CABEÇALHO DAS ETAPAS
+   ========================================================= */
+
+.finance-v2-section-title {
+  display: flex;
+
+  align-items: center;
+  gap: 13px;
+
+  margin-bottom: 20px;
+}
+
+.finance-v2-section-title > span {
+  display: inline-flex;
+
+  width: 34px;
+  height: 34px;
+
+  min-width: 34px;
+
+  align-items: center;
+  justify-content: center;
+
+  border-radius: 11px;
+
+  background:
+    var(--finance-green-soft);
+
+  color:
+    var(--finance-green);
+
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.finance-v2-section-title > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.finance-v2-section-title strong {
+  color:
+    var(--finance-green-dark);
+
+  font-size: 16px;
+  line-height: 1.2;
+  font-weight: 850;
+}
+
+.finance-v2-section-title small {
+  color:
+    var(--finance-muted);
+
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* =========================================================
+   ENTRADA
+   ========================================================= */
+
+.finance-v2-entry-grid {
+  display: grid;
+
+  grid-template-columns:
+    repeat(
+      4,
+      minmax(150px, 1fr)
+    );
+
+  gap: 16px;
+
+  align-items: end;
+}
+
+/* =========================================================
+   CAMPOS DO FINANCEIRO
+   ========================================================= */
+
+.finance-v2-planner label {
+  display: block;
+
+  color: #4b5e56;
+
+  font-size: 11px;
+  font-weight: 750;
+
+  line-height: 1.3;
+}
+
+.finance-v2-planner
+input[type="number"],
+.finance-v2-planner
+input[type="date"],
+.finance-v2-planner
+input[type="text"],
+.finance-v2-planner
+select {
+  width: 100%;
+
+  min-height: 46px;
+
+  margin-top: 7px;
+  padding: 10px 13px;
+
+  border:
+    1px solid
+    #dce5e0;
+
+  border-radius: 12px;
+
+  outline: none;
+
+  background: #ffffff;
+
+  color:
+    var(--finance-text);
+
+  font-size: 13px;
+  font-weight: 650;
+
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.finance-v2-planner
+input:focus,
+.finance-v2-planner
+select:focus {
+  border-color:
+    rgba(23, 107, 82, 0.48);
+
+  box-shadow:
+    0 0 0 4px
+    rgba(23, 107, 82, 0.07);
+}
+
+/* =========================================================
+   SALDO
+   ========================================================= */
+
+.finance-v2-balance-card {
+  display: grid;
+
+  grid-template-columns:
+    repeat(2, minmax(0, 1fr));
+
+  gap: 14px;
+
+  margin-top: 16px;
+}
+
+.finance-v2-balance-card > div {
+  display: flex;
+  flex-direction: column;
+
+  justify-content: center;
+
+  min-height: 84px;
+
+  padding: 17px 19px;
+
+  border:
+    1px solid
+    rgba(23, 107, 82, 0.10);
+
+  border-radius: 16px;
+
+  background:
+    #f8fbf9;
+}
+
+.finance-v2-balance-card span {
+  margin-bottom: 5px;
+
+  color:
+    #7a8882;
+
+  font-size: 9px;
+  font-weight: 850;
+
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.finance-v2-balance-card strong {
+  color:
+    var(--finance-green-dark);
+
+  font-size: 22px;
+  font-weight: 900;
+
+  letter-spacing: -0.02em;
+}
+
+/* =========================================================
+   CONFIGURAÇÃO DAS PARCELAS
+   ========================================================= */
+
+.finance-v2-toolbar {
+  display: grid;
+
+  grid-template-columns:
+    minmax(200px, 0.75fr)
+    minmax(420px, 1.5fr);
+
+  gap: 18px;
+
+  align-items: end;
+
+  margin-bottom: 16px;
+  padding: 16px;
+
+  border-radius: 15px;
+
+  background:
+    #f7faf8;
+}
+
+.finance-v2-toolbar-actions {
+  display: flex;
+
+  gap: 10px;
+
+  justify-content: flex-end;
+  align-items: center;
+
+  flex-wrap: wrap;
+}
+
+.finance-v2-toolbar-actions
+.secondary-action {
+  min-height: 42px;
+
+  padding:
+    10px 16px;
+
+  border:
+    1px solid
+    #d9e3de;
+
+  border-radius: 11px;
+
+  background:
+    #ffffff;
+
+  color:
+    #315d4e;
+
+  font-size: 11px;
+  font-weight: 800;
+
+  white-space: nowrap;
+
+  cursor: pointer;
+
+  transition:
+    all 140ms ease;
+}
+
+.finance-v2-toolbar-actions
+.secondary-action:hover {
+  transform:
+    translateY(-1px);
+
+  border-color:
+    rgba(23, 107, 82, 0.30);
+
+  box-shadow:
+    0 5px 14px
+    rgba(18, 52, 41, 0.06);
+}
+
+/* =========================================================
+   PARCELAS
+   ========================================================= */
+
+.finance-v2-schedule-list {
+  display: flex;
+
+  flex-direction: column;
+
+  gap: 10px;
+}
+
+.finance-v2-schedule-row {
+  display: grid;
+
+  grid-template-columns:
+    90px
+    minmax(150px, 1fr)
+    minmax(170px, 1fr)
+    minmax(120px, 0.65fr);
+
+  gap: 15px;
+
+  align-items: end;
+
+  width: 100%;
+
+  padding: 14px 16px;
+
+  border:
+    1px solid
+    #e1e8e4;
+
+  border-radius: 15px;
+
+  background:
+    #ffffff;
+}
+
+.finance-v2-schedule-row:hover {
+  border-color:
+    rgba(23, 107, 82, 0.20);
+
+  box-shadow:
+    0 6px 17px
+    rgba(17, 49, 39, 0.04);
+}
+
+.finance-v2-installment-index {
+  display: flex;
+
+  height: 46px;
+
+  flex-direction: column;
+
+  justify-content: center;
+}
+
+.finance-v2-installment-index span,
+.finance-v2-status span {
+  color:
+    #8a9691;
+
+  font-size: 8px;
+  font-weight: 850;
+
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.finance-v2-installment-index strong {
+  margin-top: 3px;
+
+  color:
+    var(--finance-green-dark);
+
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.finance-v2-status {
+  display: flex;
+
+  min-height: 46px;
+
+  flex-direction: column;
+
+  justify-content: center;
+
+  gap: 4px;
+
+  padding: 8px 12px;
+
+  border-radius: 11px;
+
+  background:
+    #fff7e8;
+}
+
+.finance-v2-status strong {
+  color:
+    var(--finance-warning);
+
+  font-size: 11px;
+  font-weight: 850;
+}
+
+/* =========================================================
+   CONFERÊNCIA
+   ========================================================= */
+
+.finance-v2-summary-grid {
+  display: grid;
+
+  grid-template-columns:
+    repeat(5, minmax(120px, 1fr));
+
+  gap: 11px;
+}
+
+.finance-v2-summary-grid > div {
+  min-width: 0;
+
+  padding: 15px;
+
+  border:
+    1px solid
+    #e1e8e4;
+
+  border-radius: 14px;
+
+  background:
+    #fafcfb;
+}
+
+.finance-v2-summary-grid span {
+  display: block;
+
+  margin-bottom: 7px;
+
+  color:
+    #818e88;
+
+  font-size: 8px;
+  font-weight: 850;
+
+  letter-spacing: 0.085em;
+  text-transform: uppercase;
+}
+
+.finance-v2-summary-grid strong {
+  display: block;
+
+  color:
+    #263e35;
+
+  font-size: 16px;
+  font-weight: 900;
+
+  white-space: nowrap;
+}
+
+.finance-v2-difference.ok {
+  border-color:
+    rgba(23, 107, 82, 0.20);
+
+  background:
+    #edf8f2;
+}
+
+.finance-v2-difference.ok strong {
+  color:
+    var(--finance-green);
+}
+
+.finance-v2-difference.warning {
+  border-color:
+    rgba(181, 58, 58, 0.22);
+
+  background:
+    #fff3f3;
+}
+
+.finance-v2-difference.warning strong {
+  color:
+    var(--finance-danger);
+}
+
+/* =========================================================
+   COBRANÇA AUTOMÁTICA
+   ========================================================= */
+
+.finance-v2-auto-charge-card {
+  display: grid;
+
+  grid-template-columns:
+    minmax(0, 1fr)
+    minmax(280px, 360px);
+
+  align-items: center;
+
+  gap: 18px;
+
+  border-color:
+    rgba(21, 104, 128, 0.13);
+
+  background:
+    linear-gradient(
+      135deg,
+      #f4fafb,
+      #fbfdfd
+    );
+}
+
+.finance-v2-auto-charge-card > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.finance-v2-auto-charge-card
+> div
+> strong {
+  color:
+    #174855;
+
+  font-size: 14px;
+  font-weight: 850;
+}
+
+.finance-v2-auto-charge-card
+> div
+> span {
+  color:
+    #71858b;
+
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.finance-v2-webhook-notice {
+  grid-column: 1 / -1;
+
+  padding:
+    9px 12px;
+
+  border:
+    1px solid
+    rgba(20, 94, 113, 0.10);
+
+  border-radius: 10px;
+
+  background:
+    rgba(255, 255, 255, 0.7);
+
+  color:
+    #5f777e;
+
+  font-size: 10px;
+}
+
+/* =========================================================
+   OBSERVAÇÕES
+   ========================================================= */
+
+.finance-v2-notes-section {
+  grid-column:
+    1 / -1 !important;
+
+  width: 100%;
+
+  margin-top: 22px;
+  padding: 22px;
+
+  border:
+    1px solid
+    rgba(26, 76, 60, 0.10);
+
+  border-radius: 19px;
+
+  background:
+    #ffffff;
+
+  box-shadow:
+    0 6px 20px
+    rgba(20, 52, 41, 0.03);
+}
+
+.finance-v2-notes-heading {
+  margin-bottom: 13px;
+}
+
+.finance-v2-notes-heading strong {
+  display: block;
+
+  margin-bottom: 3px;
+
+  color:
+    var(--finance-green-dark);
+
+  font-size: 15px;
+  font-weight: 850;
+}
+
+.finance-v2-notes-heading span {
+  color:
+    #818e88;
+
+  font-size: 11px;
+}
+
+.finance-v2-notes {
+  display: block !important;
+
+  width: 100% !important;
+
+  margin: 0 !important;
+}
+
+.finance-v2-notes textarea {
+  width: 100% !important;
+
+  min-height: 120px;
+
+  padding:
+    14px 16px;
+
+  border:
+    1px solid
+    #dce5e0;
+
+  border-radius: 13px;
+
+  resize: vertical;
+
+  background:
+    #fbfcfc;
+
+  color:
+    #253a32;
+
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.finance-v2-notes textarea:focus {
+  outline: none;
+
+  border-color:
+    rgba(23, 107, 82, 0.48);
+
+  box-shadow:
+    0 0 0 4px
+    rgba(23, 107, 82, 0.07);
+}
+
+/* =========================================================
+   TABELA DE LANÇAMENTOS
+   ========================================================= */
+
+.finance-page table {
+  width: 100%;
+
+  border-collapse:
+    separate;
+
+  border-spacing:
+    0;
+
+  overflow: hidden;
+
+  border-radius:
+    12px;
+}
+
+.finance-page table thead th {
+  padding:
+    11px 12px;
+
+  background:
+    linear-gradient(
+      90deg,
+      #075f68,
+      #087b82
+    );
+
+  color:
+    #ffffff;
+
+  font-size:
+    9px;
+
+  font-weight:
+    850;
+
+  letter-spacing:
+    0.065em;
+
+  text-transform:
+    uppercase;
+
+  border: 0;
+}
+
+.finance-page table tbody td {
+  padding:
+    13px 12px;
+
+  vertical-align:
+    middle;
+
+  border-bottom:
+    1px solid
+    #edf1ef;
+
+  background:
+    rgba(
+      255,
+      255,
+      255,
+      0.82
+    );
+
+  font-size:
+    11px;
+}
+
+.finance-page table tbody tr:last-child td {
+  border-bottom:
+    0;
+}
+
+.finance-page table tbody tr:hover td {
+  background:
+    #f8fbf9;
+}
+
+/* =========================================================
+   RESPONSIVIDADE
+   ========================================================= */
+
+@media (max-width: 1120px) {
+  .finance-v2-entry-grid {
+    grid-template-columns:
+      repeat(
+        2,
+        minmax(180px, 1fr)
+      );
+  }
+
+  .finance-v2-summary-grid {
+    grid-template-columns:
+      repeat(
+        3,
+        minmax(130px, 1fr)
+      );
+  }
+
+  .finance-v2-toolbar {
+    grid-template-columns:
+      1fr;
+  }
+
+  .finance-v2-toolbar-actions {
+    justify-content:
+      flex-start;
+  }
+}
+
+@media (max-width: 850px) {
+  .finance-installment-planner.finance-v2-planner {
+    padding:
+      20px;
+  }
+
+  .finance-v2-header {
+    grid-template-columns:
+      1fr;
+  }
+
+  .finance-switch-card {
+    width:
+      100%;
+
+    min-width:
+      0;
+  }
+
+  .finance-v2-schedule-row {
+    grid-template-columns:
+      70px
+      minmax(130px, 1fr)
+      minmax(150px, 1fr);
+  }
+
+  .finance-v2-status {
+    grid-column:
+      2 / -1;
+  }
+
+  .finance-v2-auto-charge-card {
+    grid-template-columns:
+      1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .finance-v2-entry-grid,
+  .finance-v2-balance-card,
+  .finance-v2-summary-grid,
+  .finance-v2-schedule-row {
+    grid-template-columns:
+      1fr;
+  }
+
+  .finance-v2-total-card {
+    grid-template-columns:
+      1fr;
+
+    grid-template-areas:
+      "label"
+      "value"
+      "hint";
+  }
+
+  .finance-v2-total-card
+  > strong {
+    margin:
+      7px 0 2px;
+  }
+
+  .finance-v2-status {
+    grid-column:
+      auto;
+  }
+
+  .finance-v2-toolbar-actions {
+    flex-direction:
+      column;
+
+    align-items:
+      stretch;
+  }
+
+  .finance-v2-toolbar-actions
+  .secondary-action {
+    width:
+      100%;
+  }
+}
+
+/* ===== FINANCEIRO V2 — PREMIUM FINAL 3D6 END ===== */
+
+/* ==========================================================
+   FINANCEIRO V2 — ESTRUTURA FULL WIDTH 3D7
+   ========================================================== */
+
+/*
+ * Agora o Plano de Recebimento está FORA das colunas
+ * superiores. Estas regras apenas garantem que use
+ * efetivamente todo o espaço disponível.
+ */
+
+.finance-installment-planner.finance-v2-planner {
+  display: block !important;
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  grid-column: auto !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+/*
+ * Observações segue exatamente a mesma largura.
+ */
+.finance-v2-notes-section {
+  display: block !important;
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+/*
+ * Cards internos nunca devem extrapolar o planejador.
+ */
+.finance-v2-planner > *,
+.finance-v2-entry-card,
+.finance-v2-installments-card,
+.finance-v2-summary-card,
+.finance-v2-auto-charge-card,
+.finance-v2-total-card,
+.finance-v2-balance-card {
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+

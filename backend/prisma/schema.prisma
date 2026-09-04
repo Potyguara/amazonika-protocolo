@@ -343,15 +343,16 @@ model Client {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  protocols           Protocol[]
-  appointments        Appointment[]
-  documents           Document[]
-  contracts           Contract[]
-  payments            Payment[]
-  proposals           Proposal[]
-  billingCharges      BillingCharge[]
-  fiscalDocuments     FiscalDocument[]
-  standaloneProposals StandaloneProposal[]
+  protocols             Protocol[]
+  appointments          Appointment[]
+  documents             Document[]
+  contracts             Contract[]
+  payments              Payment[]
+  proposals             Proposal[]
+  billingCharges        BillingCharge[]
+  fiscalDocuments       FiscalDocument[]
+  standaloneProposals   StandaloneProposal[]
+  financialTransactions FinancialTransaction[]
 }
 
 model ServiceType {
@@ -753,8 +754,24 @@ model FinancialTransaction {
   clientName String?
   notes      String?
 
+  // Cliente vinculado diretamente ao lançamento.
+  // Necessário para cobrança automática e notificações.
+  clientId Int?
+  client   Client? @relation(fields: [clientId], references: [id])
+
   protocolId Int?
   protocol   Protocol? @relation(fields: [protocolId], references: [id])
+
+  // =====================================================
+  // PARCELAMENTO
+  // =====================================================
+
+  // Mesmo identificador em todas as parcelas do serviço.
+  installmentGroupId String?
+
+  // Ex.: parcela 2 de 6.
+  installmentNumber Int?
+  totalInstallments Int?
 
   categoryId Int?
   category   FinancialCategory? @relation(fields: [categoryId], references: [id])
@@ -766,6 +783,42 @@ model FinancialTransaction {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // ==================================================
+  // COBRANÇA AUTOMÁTICA / PIX / WEBHOOK
+  // ==================================================
+
+  autoChargeEnabled Boolean @default(false)
+
+  // Provedor responsável pela cobrança.
+  // Ex.: BANCO_DO_BRASIL
+  paymentProvider String?
+
+  // Identificador da cobrança no provedor.
+  providerChargeId String?
+
+  // TXID Pix ou identificador equivalente.
+  providerTxId String?
+
+  // Estado da cobrança no provedor.
+  // Ex.: PENDING, ACTIVE, PAID, EXPIRED, CANCELLED
+  chargeStatus String?
+
+  chargeCreatedAt DateTime?
+  chargeExpiresAt DateTime?
+
+  // Momento confirmado pelo banco/webhook.
+  paymentConfirmedAt DateTime?
+
+  // Controle de avisos automáticos.
+  lastNotificationAt DateTime?
+  notificationCount  Int       @default(0)
+
+  // Último webhook válido recebido.
+  webhookLastReceivedAt DateTime?
+
+  @@index([clientId])
+  @@index([installmentGroupId])
 }
 
 model EmployeeSalary {

@@ -582,6 +582,7 @@ financeTransactions(params?: {
 
 createFinanceTransaction(data: {
   type: "ENTRADA" | "SAIDA";
+
   source:
     | "CONTRATO"
     | "SERVICO_AVULSO"
@@ -591,21 +592,88 @@ createFinanceTransaction(data: {
     | "IMPOSTO"
     | "TAXA"
     | "OUTRO";
-  status?: "PENDENTE" | "PAGO" | "CANCELADO";
+
+  status?:
+    | "PENDENTE"
+    | "PAGO"
+    | "CANCELADO";
+
   categoryId?: number | null;
   protocolId?: number | null;
+  clientId?: number | null;
+
   description: string;
+
+  /*
+   * Valor TOTAL do serviço.
+   */
   amount: number;
+
+  /*
+   * Mantidos para lançamento simples.
+   */
   dueDate?: string | null;
   paidAt?: string | null;
   competenceMonth?: string;
+
   clientName?: string | null;
   notes?: string | null;
+
+  /*
+   * ================================================
+   * FINANCEIRO V2
+   * ================================================
+   */
+
+  entryAmount?: number;
+
+  entryStatus?:
+    | "PENDENTE"
+    | "PAGO"
+    | "CANCELADO";
+
+  entryDueDate?: string | null;
+  entryPaidAt?: string | null;
+
+  entryAutoChargeEnabled?: boolean;
+
+  installments?: Array<{
+    /*
+     * Valor individual.
+     * As parcelas NÃO precisam ser iguais.
+     */
+    amount: number;
+
+    /*
+     * Vencimento individual.
+     */
+    dueDate: string;
+
+    /*
+     * Preparação Pix/webhook.
+     */
+    autoChargeEnabled?: boolean;
+  }>;
+
+  /*
+   * Campos antigos temporariamente aceitos
+   * durante a transição da interface.
+   */
+  installmentQty?: number;
+
+  installmentSchedule?: Array<{
+    dueDate: string;
+  }>;
+
+  autoChargeEnabled?: boolean;
 }) {
-  return request("/finance/transactions", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
+  return request(
+    "/finance/transactions",
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+    }
+  );
 },
 
 updateFinanceTransaction(
@@ -623,6 +691,7 @@ updateFinanceTransaction(
     status?: "PENDENTE" | "PAGO" | "CANCELADO";
     categoryId?: number | null;
     protocolId?: number | null;
+    clientId?: number | null;
     description?: string;
     amount?: number;
     dueDate?: string | null;
