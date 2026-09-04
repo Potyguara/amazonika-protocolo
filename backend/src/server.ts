@@ -23,6 +23,7 @@ import {
   createBbPixCharge,
   createBbPixDueCharge,
   getBbPixCharge,
+  getBbPixDueCharge,
 } from "./services/bbPixService";
 
 type UserRole = "CLIENTE" | "ATENDENTE" | "GERENTE" | "PROGRAMADOR";
@@ -5544,6 +5545,7 @@ type FinanceAutoChargeResult = {
   transactionId: number;
   status:
     | "CREATED"
+    | "RECOVERED"
     | "DRY_RUN"
     | "SKIPPED"
     | "ERROR";
@@ -5772,6 +5774,7 @@ async function processFinanceAutoCharges(
 
   let eligible = 0;
   let created = 0;
+  let recovered = 0;
   let skipped = 0;
   let errors = 0;
 
@@ -6002,6 +6005,11 @@ async function processFinanceAutoCharges(
        * financialTransactionId possui UNIQUE no banco,
        * impedindo duas BillingCharge para a mesma parcela.
        */
+      const billingChargeAlreadyExisted =
+        Boolean(
+          transaction.billingCharge
+        );
+
       let billingCharge =
         transaction.billingCharge;
 
@@ -6187,27 +6195,69 @@ async function processFinanceAutoCharges(
         billingCharge.txid ||
         txid;
 
-      const bbResult =
-        await createBbPixDueCharge({
-          txid:
-            effectiveTxid,
+      let bbResult: any = null;
+      let recoveredFromBb = false;
 
-          amountInCents:
-            transaction.amount,
+      /*
+       * ------------------------------------------------
+       * RECUPERAÇÃO IDEMPOTENTE
+       * ------------------------------------------------
+       *
+       * Cenário protegido:
+       *
+       * 1. BillingCharge foi criada localmente;
+       * 2. BB recebeu e criou a cobrança;
+       * 3. aplicação caiu antes de persistir a resposta;
+       * 4. worker é executado novamente.
+       *
+       * Nesse caso consultamos primeiro o mesmo TXID.
+       * Só emitimos uma nova PUT quando o BB responde 404.
+       */
+      if (billingChargeAlreadyExisted) {
+        try {
+          bbResult =
+            await getBbPixDueCharge(
+              effectiveTxid
+            );
 
-          dueDate:
-            transaction.dueDate,
+          recoveredFromBb =
+            true;
+        } catch (lookupError: any) {
+          const lookupStatus =
+            Number(
+              lookupError?.response?.status ||
+              0
+            );
 
-          debtorName:
-            client.name,
+          if (lookupStatus !== 404) {
+            throw lookupError;
+          }
+        }
+      }
 
-          debtorCpfCnpj:
-            client.cpfCnpj,
+      if (!bbResult) {
+        bbResult =
+          await createBbPixDueCharge({
+            txid:
+              effectiveTxid,
 
-          description:
-            transaction.description ||
-            `Cobrança financeira ${transaction.id}`,
-        });
+            amountInCents:
+              transaction.amount,
+
+            dueDate:
+              transaction.dueDate,
+
+            debtorName:
+              client.name,
+
+            debtorCpfCnpj:
+              client.cpfCnpj,
+
+            description:
+              transaction.description ||
+              `Cobrança financeira ${transaction.id}`,
+          });
+      }
 
       const providerChargeId =
         extractBbChargeId(
@@ -6339,7 +6389,9 @@ async function processFinanceAutoCharges(
             "SYSTEM",
 
           action:
-            "FINANCE_AUTO_BB_PIX_CREATED",
+            recoveredFromBb
+              ? "FINANCE_AUTO_BB_PIX_RECOVERED"
+              : "FINANCE_AUTO_BB_PIX_CREATED",
 
           entity:
             "BillingCharge",
@@ -6350,7 +6402,9 @@ async function processFinanceAutoCharges(
             ),
 
           description:
-            `Cobrança Pix BB criada automaticamente para o lançamento financeiro ${transaction.id}.`,
+            recoveredFromBb
+              ? `Cobrança Pix BB recuperada pelo TXID para o lançamento financeiro ${transaction.id}.`
+              : `Cobrança Pix BB criada automaticamente para o lançamento financeiro ${transaction.id}.`,
 
           metadata:
             JSON.stringify({
@@ -6389,14 +6443,25 @@ async function processFinanceAutoCharges(
         },
       });
 
-      created += 1;
+      if (recoveredFromBb) {
+        recovered += 1;
+      } else {
+        created += 1;
+      }
 
       results.push({
         transactionId:
           transaction.id,
 
         status:
-          "CREATED",
+          recoveredFromBb
+            ? "RECOVERED"
+            : "CREATED",
+
+        reason:
+          recoveredFromBb
+            ? "Cobrança já existente no Banco do Brasil foi recuperada pelo TXID sem nova emissão."
+            : undefined,
 
         txid:
           billingCharge.txid ||
@@ -6474,6 +6539,7 @@ async function processFinanceAutoCharges(
 
     eligible,
     created,
+    recovered,
     skipped,
     errors,
 
