@@ -525,7 +525,12 @@ model BillingCharge {
 
   description String
   amount      Int
-  dueDate     DateTime
+
+  // Financeiro V2: valor canônico da cobrança em centavos.
+  // Quando preenchido, tem precedência sobre o campo legado amount.
+  amountCents Int?
+
+  dueDate DateTime
 
   installmentNumber Int?
   totalInstallments Int?

@@ -4778,6 +4778,36 @@ function paymentAmountToCents(amount: number) {
   return Math.round(Number(amount || 0) * 100);
 }
 
+function billingChargeAmountToCents(charge: {
+  amount?: number | null;
+  amountCents?: number | null;
+}) {
+  if (
+    charge.amountCents !== null &&
+    charge.amountCents !== undefined
+  ) {
+    const cents = Number(charge.amountCents);
+
+    if (!Number.isInteger(cents) || cents <= 0) {
+      throw new Error(
+        "Valor em centavos da cobrança é inválido."
+      );
+    }
+
+    return cents;
+  }
+
+  const legacyAmount = Number(charge.amount || 0);
+
+  if (!Number.isFinite(legacyAmount) || legacyAmount <= 0) {
+    throw new Error(
+      "Valor legado da cobrança é inválido."
+    );
+  }
+
+  return Math.round(legacyAmount * 100);
+}
+
 function extractBbPixCopiaECola(result: any) {
   return result?.pixCopiaECola || result?.emv || result?.brCode || null;
 }
@@ -11240,7 +11270,8 @@ const description =
     ? `Parcela ${charge.installmentNumber || ""} ${charge.contract?.contractNumber || ""} ${charge.protocol.protocolNumber}`.trim()
     : `Entrada ${charge.contract?.contractNumber || ""} ${charge.protocol.protocolNumber}`.trim();
 
-const amountInCents = Math.round(Number(charge.amount) * 100);
+const amountInCents =
+  billingChargeAmountToCents(charge);
 
 const isInstallmentCharge = charge.chargeType === "PARCELA";
 
@@ -11510,7 +11541,8 @@ app.post(
               charge.protocol.protocolNumber
             }`.trim();
 
-      const amountInCents = Math.round(Number(charge.amount) * 100);
+      const amountInCents =
+  billingChargeAmountToCents(charge);
 
       const isInstallmentCharge = charge.chargeType === "PARCELA";
 
