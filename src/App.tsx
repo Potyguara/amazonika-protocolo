@@ -8652,6 +8652,14 @@ type BackendFinanceCategory = {
   active: boolean;
 };
 
+type BackendFinanceCatalogService = {
+  id: number;
+  code: string;
+  name: string;
+  acronym?: string | null;
+  active: boolean;
+};
+
 type BackendFinanceTransaction = {
   id: number;
   type: FinanceTransactionType;
@@ -8664,6 +8672,10 @@ type BackendFinanceTransaction = {
   competenceMonth?: string | null;
   clientId?: number | null;
   clientName?: string | null;
+
+  catalogServiceId?: number | null;
+  catalogService?: BackendFinanceCatalogService | null;
+
   notes?: string | null;
 
   installmentGroupId?: string | null;
@@ -8786,6 +8798,11 @@ function FinancePage() {
   const [salaries, setSalaries] = useState<BackendFinanceSalary[]>([]);
   const [categories, setCategories] = useState<BackendFinanceCategory[]>([]);
 
+  const [
+    financeCatalogServices,
+    setFinanceCatalogServices,
+  ] = useState<BackendFinanceCatalogService[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -8810,6 +8827,12 @@ function FinancePage() {
   const [transactionStatus, setTransactionStatus] =
     useState<FinanceTransactionStatus>("PENDENTE");
   const [transactionCategoryId, setTransactionCategoryId] = useState("");
+
+  const [
+    transactionCatalogServiceId,
+    setTransactionCatalogServiceId,
+  ] = useState("");
+
   const [transactionDescription, setTransactionDescription] = useState("");
   const [transactionAmount, setTransactionAmount] = useState("");
   const [transactionDueDate, setTransactionDueDate] = useState("");
@@ -8923,25 +8946,40 @@ function FinancePage() {
       setLoading(true);
       setError("");
 
-      const [summaryData, categoriesData, transactionsData, fixedCostsData, salariesData] =
-        await Promise.all([
-          api.financeSummary(month) as Promise<BackendFinanceSummary>,
-          api.financeCategories() as Promise<BackendFinanceCategory[]>,
-          api.financeTransactions({
-            month,
-            type: transactionTypeFilter || undefined,
-            status: transactionStatusFilter || undefined,
-            search: transactionSearch || undefined,
-          }) as Promise<BackendFinanceTransaction[]>,
-          api.financeFixedCosts() as Promise<BackendFinanceFixedCost[]>,
-          api.financeSalaries() as Promise<BackendFinanceSalary[]>,
-        ]);
+      const [
+        summaryData,
+        categoriesData,
+        transactionsData,
+        fixedCostsData,
+        salariesData,
+        catalogServicesData,
+      ] = await Promise.all([
+        api.financeSummary(month) as Promise<BackendFinanceSummary>,
+        api.financeCategories() as Promise<BackendFinanceCategory[]>,
+        api.financeTransactions({
+          month,
+          type: transactionTypeFilter || undefined,
+          status: transactionStatusFilter || undefined,
+          search: transactionSearch || undefined,
+        }) as Promise<BackendFinanceTransaction[]>,
+        api.financeFixedCosts() as Promise<BackendFinanceFixedCost[]>,
+        api.financeSalaries() as Promise<BackendFinanceSalary[]>,
+        api.catalogServices({
+          includeInactive: false,
+        }) as Promise<BackendFinanceCatalogService[]>,
+      ]);
 
       setSummary(summaryData);
       setCategories(categoriesData);
       setTransactions(transactionsData);
       setFixedCosts(fixedCostsData);
       setSalaries(salariesData);
+
+      setFinanceCatalogServices(
+        Array.isArray(catalogServicesData)
+          ? catalogServicesData
+          : []
+      );
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Erro ao carregar financeiro."
@@ -8983,6 +9021,7 @@ function FinancePage() {
     setTransactionSource("CONTRATO");
     setTransactionStatus("PENDENTE");
     setTransactionCategoryId("");
+    setTransactionCatalogServiceId("");
     setTransactionDescription("");
     setTransactionAmount("");
     setTransactionDueDate("");
@@ -9017,8 +9056,21 @@ function FinancePage() {
     setTransactionType(item.type);
     setTransactionSource(item.source);
     setTransactionStatus(item.status);
-    setTransactionCategoryId(item.category?.id ? String(item.category.id) : "");
-    setTransactionDescription(item.description || "");
+    setTransactionCategoryId(
+      item.category?.id
+        ? String(item.category.id)
+        : ""
+    );
+
+    setTransactionCatalogServiceId(
+      item.catalogServiceId
+        ? String(item.catalogServiceId)
+        : ""
+    );
+
+    setTransactionDescription(
+      item.description || ""
+    );
     setTransactionAmount(String(item.amount || ""));
     setTransactionDueDate(item.dueDate ? item.dueDate.slice(0, 10) : "");
     setTransactionPaidAt(item.paidAt ? item.paidAt.slice(0, 10) : "");
@@ -9422,8 +9474,18 @@ function FinancePage() {
         type: transactionType,
         source: transactionSource,
         status: transactionStatus,
-        categoryId: transactionCategoryId ? Number(transactionCategoryId) : null,
-        description: transactionDescription,
+        categoryId:
+          transactionCategoryId
+            ? Number(transactionCategoryId)
+            : null,
+
+        catalogServiceId:
+          transactionCatalogServiceId
+            ? Number(transactionCatalogServiceId)
+            : null,
+
+        description:
+          transactionDescription,
         amount: Number(transactionAmount),
         dueDate: transactionDueDate || null,
         paidAt:
@@ -9443,6 +9505,18 @@ function FinancePage() {
         notes:
           transactionNotes ||
           null,
+
+        /*
+         * Lançamento simples também pode gerar cobrança
+         * automática quando expressamente solicitado.
+         */
+        autoChargeEnabled:
+          !editingTransaction &&
+          !transactionInstallmentEnabled &&
+          transactionType === "ENTRADA" &&
+          transactionStatus !== "PAGO"
+            ? transactionAutoChargeEnabled
+            : undefined,
 
         /*
          * Só cria parcelas novas durante
@@ -10194,6 +10268,71 @@ async function handleDeleteSalary(id: number) {
                   </label>
 
                   <label>
+                    Serviço da empresa
+                    <select
+                      value={
+                        transactionCatalogServiceId
+                      }
+                      onChange={(event) => {
+                        const nextId =
+                          event.target.value;
+
+                        setTransactionCatalogServiceId(
+                          nextId
+                        );
+
+                        const selected =
+                          financeCatalogServices.find(
+                            (service) =>
+                              String(service.id) ===
+                              nextId
+                          );
+
+                        /*
+                         * Facilita o lançamento:
+                         * ao selecionar o serviço, preenche
+                         * a descrição apenas quando ainda vazia.
+                         */
+                        if (
+                          selected &&
+                          !transactionDescription.trim()
+                        ) {
+                          setTransactionDescription(
+                            selected.name
+                          );
+                        }
+                      }}
+                    >
+                      <option value="">
+                        Selecione...
+                      </option>
+
+                      {financeCatalogServices
+                        .filter(
+                          (service) =>
+                            service.active
+                        )
+                        .map(
+                          (service) => (
+                            <option
+                              key={service.id}
+                              value={service.id}
+                            >
+                              {service.name}
+                              {service.acronym
+                                ? ` (${service.acronym})`
+                                : ""}
+                            </option>
+                          )
+                        )}
+                    </select>
+
+                    <small>
+                      Lista vinculada ao Catálogo Técnico-Comercial.
+                    </small>
+                  </label>
+
+                  <label>
                     Categoria
                     <select
                       value={transactionCategoryId}
@@ -10939,6 +11078,7 @@ async function handleDeleteSalary(id: number) {
                   <th>Tipo</th>
                   <th>Descrição</th>
                   <th>Cliente/Protocolo</th>
+                  <th>Serviço</th>
                   <th>Categoria</th>
                   <th>Vencimento</th>
                   <th>Valor</th>
@@ -10976,8 +11116,19 @@ async function handleDeleteSalary(id: number) {
                       )}
                     </td>
 
-                    <td>{item.category?.name || "-"}</td>
-                    <td>{formatDate(item.dueDate)}</td>
+                    <td>
+                      {item.catalogService?.name ||
+                        item.protocol?.serviceType?.name ||
+                        "-"}
+                    </td>
+
+                    <td>
+                      {item.category?.name || "-"}
+                    </td>
+
+                    <td>
+                      {formatDate(item.dueDate)}
+                    </td>
                     <td>{money(item.amount)}</td>
 
                     <td>

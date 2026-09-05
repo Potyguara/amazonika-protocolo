@@ -601,6 +601,7 @@ createFinanceTransaction(data: {
   categoryId?: number | null;
   protocolId?: number | null;
   clientId?: number | null;
+  catalogServiceId?: number | null;
 
   description: string;
 
@@ -692,6 +693,7 @@ updateFinanceTransaction(
     categoryId?: number | null;
     protocolId?: number | null;
     clientId?: number | null;
+    catalogServiceId?: number | null;
     description?: string;
     amount?: number;
     dueDate?: string | null;

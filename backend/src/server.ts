@@ -5422,6 +5422,22 @@ function toIntMoney(value: any) {
   return Math.round(Number(value));
 }
 
+/*
+ * FinancialTransaction mantém a unidade histórica atual
+ * utilizada pela interface financeira.
+ *
+ * A conversão para centavos ocorre na borda bancária.
+ */
+function financeAmountToCents(value: any) {
+  const amount = Number(value || 0);
+
+  if (!Number.isFinite(amount)) {
+    return 0;
+  }
+
+  return Math.round(amount * 100);
+}
+
 function normalizeNullableDate(value: any) {
   if (!value) return null;
 
@@ -5733,6 +5749,9 @@ async function processFinanceAutoCharges(
           client:
             true,
 
+          catalogService:
+            true,
+
           billingCharge:
             true,
 
@@ -5899,7 +5918,14 @@ async function processFinanceAutoCharges(
         continue;
       }
 
+      const shouldSendFinanceDebtor =
+        String(
+          process.env.BB_SEND_DEBTOR ||
+            "false"
+        ).toLowerCase() === "true";
+
       if (
+        shouldSendFinanceDebtor &&
         !isValidFinancePixDocument(
           client.cpfCnpj
         )
@@ -5912,7 +5938,7 @@ async function processFinanceAutoCharges(
           status:
             "ERROR",
           reason:
-            "Cliente sem CPF/CNPJ válido para cobrança Pix com vencimento.",
+            "Cliente sem CPF/CNPJ válido para envio do devedor ao Pix.",
         });
 
         continue;
@@ -5941,26 +5967,13 @@ async function processFinanceAutoCharges(
           transaction.id
         );
 
-      if (!transaction.protocolId || !transaction.protocol) {
-        errors += 1;
-
-        results.push({
-          transactionId:
-            transaction.id,
-
-          status:
-            "ERROR",
-
-          reason:
-            "Cobrança automática exige protocolo vinculado ao lançamento financeiro.",
-        });
-
-        continue;
-      }
-
+      /*
+       * Financeiro V2:
+       * protocolo é opcional para lançamento direto.
+       */
       const contract =
         transaction.protocol
-          .contracts?.[0] ||
+          ?.contracts?.[0] ||
         null;
 
       const chargeType =
@@ -6018,7 +6031,8 @@ async function processFinanceAutoCharges(
           await prisma.billingCharge.create({
             data: {
               protocolId:
-                transaction.protocolId,
+                transaction.protocolId ||
+                null,
 
               clientId:
                 client.id,
@@ -6060,15 +6074,16 @@ async function processFinanceAutoCharges(
                */
               amount:
                 Math.round(
-                  transaction.amount /
-                    100
+                  transaction.amount
                 ),
 
               /*
-               * Valor canônico Financeiro V2.
+               * Valor bancário canônico em centavos.
                */
               amountCents:
-                transaction.amount,
+                financeAmountToCents(
+                  transaction.amount
+                ),
 
               dueDate:
                 transaction.dueDate,
@@ -6128,7 +6143,9 @@ async function processFinanceAutoCharges(
                   null,
 
                 amountCents:
-                  transaction.amount,
+                  financeAmountToCents(
+                    transaction.amount
+                  ),
 
                 dueDate:
                   dueDateOnly,
@@ -6242,7 +6259,9 @@ async function processFinanceAutoCharges(
               effectiveTxid,
 
             amountInCents:
-              transaction.amount,
+            financeAmountToCents(
+              transaction.amount
+            ),
 
             dueDate:
               transaction.dueDate,
@@ -6902,6 +6921,7 @@ app.get(
       },
       include: {
         category: true,
+        catalogService: true,
         protocol: {
           include: {
             client: true,
@@ -6935,6 +6955,7 @@ app.post(
         categoryId,
         protocolId,
         clientId,
+        catalogServiceId,
         description,
 
         /*
@@ -6959,6 +6980,9 @@ app.post(
         entryAutoChargeEnabled,
 
         installments,
+
+        // Lançamento simples também pode solicitar cobrança.
+        autoChargeEnabled,
       } = req.body;
 
       if (
@@ -7076,6 +7100,11 @@ app.post(
                   ? Number(clientId)
                   : null,
 
+              catalogServiceId:
+                catalogServiceId
+                  ? Number(catalogServiceId)
+                  : null,
+
               description:
                 String(
                   description
@@ -7113,7 +7142,23 @@ app.post(
                 null,
 
               autoChargeEnabled:
-                false,
+                type === "ENTRADA" &&
+                status !== "PAGO" &&
+                Boolean(autoChargeEnabled),
+
+              paymentProvider:
+                type === "ENTRADA" &&
+                status !== "PAGO" &&
+                autoChargeEnabled
+                  ? "BANCO_DO_BRASIL"
+                  : null,
+
+              chargeStatus:
+                type === "ENTRADA" &&
+                status !== "PAGO" &&
+                autoChargeEnabled
+                  ? "PENDING"
+                  : null,
             },
 
             include: {
@@ -7435,6 +7480,13 @@ app.post(
                           )
                         : null,
 
+                    catalogServiceId:
+                      catalogServiceId
+                        ? Number(
+                            catalogServiceId
+                          )
+                        : null,
+
                     description:
                       String(
                         description
@@ -7546,6 +7598,13 @@ app.post(
                       clientId
                         ? Number(
                             clientId
+                          )
+                        : null,
+
+                    catalogServiceId:
+                      catalogServiceId
+                        ? Number(
+                            catalogServiceId
                           )
                         : null,
 
@@ -7729,6 +7788,7 @@ app.put(
       categoryId,
       protocolId,
       clientId,
+      catalogServiceId,
       description,
       amount,
       dueDate,
@@ -7755,6 +7815,13 @@ app.put(
             ? undefined
             : clientId
             ? Number(clientId)
+            : null,
+
+        catalogServiceId:
+          catalogServiceId === undefined
+            ? undefined
+            : catalogServiceId
+            ? Number(catalogServiceId)
             : null,
 
         description,
