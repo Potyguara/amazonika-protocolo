@@ -7049,6 +7049,39 @@ app.post(
 
       /*
        * --------------------------------------------------
+       * COBRANÇA AUTOMÁTICA — CLIENTE OBRIGATÓRIO
+       * --------------------------------------------------
+       *
+       * Para controle financeiro manual, clientName livre
+       * continua aceito.
+       *
+       * Para Pix automático, exigimos Client real.
+       */
+      const automaticChargeRequested =
+        Boolean(autoChargeEnabled) ||
+        Boolean(entryAutoChargeEnabled) ||
+        (
+          Array.isArray(installments) &&
+          installments.some(
+            (item: any) =>
+              Boolean(
+                item?.autoChargeEnabled
+              )
+          )
+        );
+
+      if (
+        automaticChargeRequested &&
+        !selectedClient
+      ) {
+        return res.status(400).json({
+          message:
+            "Cobrança automática exige um cliente cadastrado e selecionado.",
+        });
+      }
+
+      /*
+       * --------------------------------------------------
        * DETECTA NOVO PLANO FINANCEIRO
        * --------------------------------------------------
        */

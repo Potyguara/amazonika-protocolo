@@ -9335,6 +9335,22 @@ function FinancePage() {
       }
 
       /*
+       * Cobrança automática exige vínculo real com
+       * um cliente cadastrado. Nome digitado livremente
+       * continua permitido apenas para controle manual.
+       */
+      if (
+        !editingTransaction &&
+        transactionType === "ENTRADA" &&
+        transactionAutoChargeEnabled &&
+        !transactionClientId
+      ) {
+        throw new Error(
+          "Para cobrança automática, selecione um cliente cadastrado usando Buscar cliente."
+        );
+      }
+
+      /*
        * ==================================================
        * FINANCEIRO V2 — COMPOSIÇÃO DO VALOR TOTAL
        * ==================================================
