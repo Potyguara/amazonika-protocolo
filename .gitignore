@@ -44,3 +44,14 @@ src/.env.*
 # Uploads
 backend/uploads/**
 uploads/documents/**
+# Backups locais de desenvolvimento
+*.before-*
+*.broken-*
+*.backup
+*.bak
+*.orig
+
+# Backups locais de banco SQLite
+*.db.before-*
+*.sqlite.before-*
+*.sqlite3.before-*
