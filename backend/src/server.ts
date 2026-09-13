@@ -15544,7 +15544,7 @@ const paidAmount =
           billingChargeId: charge.id,
           amount: paidAmount,
           paidAt,
-          protocolStatus: "EM_EXECUCAO",
+          protocolStatus: isEntryPayment ? "EM_EXECUCAO" : charge.protocol.status,
           deadlineDate: nextDeadline,
           receiptGenerated: Boolean(generatedReceipt),
           receiptEmailSent,
