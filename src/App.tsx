@@ -10046,6 +10046,21 @@ type BackendFinanceSummary = {
   }[];
 };
 
+type BackendFinanceAutoChargeSettings = {
+  id: number;
+  enabled: boolean;
+  issueDaysBeforeDue: number;
+  firstNoticeDaysBeforeDue: number;
+  secondNoticeDaysBeforeDue: number;
+  sendDueDateNotice: boolean;
+  overdueNoticeDaysAfterDue: number;
+  overdueNoticeRepeatEveryDays: number;
+  overdueNoticeMaxCount: number;
+  sendEmail: boolean;
+  sendWhatsapp: boolean;
+  defaultFiscalMode: "NOTA_FISCAL_ANTES" | "RECIBO_POSTERIOR";
+};
+
 type BackendProLaboreAdvance = {
   id: number;
   managerUserId: number;
@@ -10072,7 +10087,13 @@ function FinancePage() {
   const currentMonth = new Date().toISOString().slice(0, 7);
 
   const [activeTab, setActiveTab] = useState<
-    "OVERVIEW" | "TRANSACTIONS" | "FIXED_COSTS" | "SALARIES" | "CATEGORIES" | "PARTNERS"
+    | "OVERVIEW"
+    | "TRANSACTIONS"
+    | "AUTO_CHARGES"
+    | "FIXED_COSTS"
+    | "SALARIES"
+    | "CATEGORIES"
+    | "PARTNERS"
   >("OVERVIEW");
 
   const [month, setMonth] = useState(currentMonth);
@@ -10149,6 +10170,11 @@ function FinancePage() {
     transactionAutoChargeEnabled,
     setTransactionAutoChargeEnabled,
   ] = useState(false);
+
+  const [
+    autoChargeSettings,
+    setAutoChargeSettings,
+  ] = useState<BackendFinanceAutoChargeSettings | null>(null);
 
 
   /*
@@ -10239,6 +10265,7 @@ function FinancePage() {
         fixedCostsData,
         salariesData,
         catalogServicesData,
+        autoChargeSettingsData,
       ] = await Promise.all([
         api.financeSummary(month) as Promise<BackendFinanceSummary>,
         api.financeCategories() as Promise<BackendFinanceCategory[]>,
@@ -10253,6 +10280,7 @@ function FinancePage() {
         api.catalogServices({
           includeInactive: false,
         }) as Promise<BackendFinanceCatalogService[]>,
+        api.financeAutoChargeSettings() as Promise<BackendFinanceAutoChargeSettings>,
       ]);
 
       setSummary(summaryData);
@@ -10260,6 +10288,7 @@ function FinancePage() {
       setTransactions(transactionsData);
       setFixedCosts(fixedCostsData);
       setSalaries(salariesData);
+      setAutoChargeSettings(autoChargeSettingsData);
 
       setFinanceCatalogServices(
         Array.isArray(catalogServicesData)
@@ -10278,6 +10307,42 @@ function FinancePage() {
   useEffect(() => {
     loadFinance();
   }, [month]);
+
+  async function handleSaveAutoChargeSettings() {
+    if (!autoChargeSettings) return;
+
+    try {
+      setSaving(true);
+      setError("");
+      setSuccess("");
+
+      const updated =
+        (await api.updateFinanceAutoChargeSettings({
+          enabled: autoChargeSettings.enabled,
+          issueDaysBeforeDue: Number(autoChargeSettings.issueDaysBeforeDue),
+          firstNoticeDaysBeforeDue: Number(autoChargeSettings.firstNoticeDaysBeforeDue),
+          secondNoticeDaysBeforeDue: Number(autoChargeSettings.secondNoticeDaysBeforeDue),
+          sendDueDateNotice: autoChargeSettings.sendDueDateNotice,
+          overdueNoticeDaysAfterDue: Number(autoChargeSettings.overdueNoticeDaysAfterDue),
+          overdueNoticeRepeatEveryDays: Number(autoChargeSettings.overdueNoticeRepeatEveryDays),
+          overdueNoticeMaxCount: Number(autoChargeSettings.overdueNoticeMaxCount),
+          sendEmail: autoChargeSettings.sendEmail,
+          sendWhatsapp: autoChargeSettings.sendWhatsapp,
+          defaultFiscalMode: autoChargeSettings.defaultFiscalMode,
+        })) as BackendFinanceAutoChargeSettings;
+
+      setAutoChargeSettings(updated);
+      setSuccess("Configurações de cobranças automáticas salvas com sucesso.");
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao salvar configurações de cobranças automáticas."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
 
   function clearMessages() {
     setError("");
@@ -11296,6 +11361,13 @@ async function handleDeleteSalary(id: number) {
         </button>
 
         <button
+          className={activeTab === "AUTO_CHARGES" ? "active" : ""}
+          onClick={() => setActiveTab("AUTO_CHARGES")}
+        >
+          Cobranças automáticas
+        </button>
+
+        <button
           className={activeTab === "FIXED_COSTS" ? "active" : ""}
           onClick={() => setActiveTab("FIXED_COSTS")}
         >
@@ -11329,6 +11401,218 @@ async function handleDeleteSalary(id: number) {
       {!loading && activeTab === "PARTNERS" && (
         <PartnersFinanceTab />
       )}
+        {!loading && activeTab === "AUTO_CHARGES" && autoChargeSettings && (
+          <article className="panel">
+            <div className="panel-header">
+              <div>
+                <h2>Configurações de cobranças automáticas</h2>
+                <p>
+                  Defina os prazos de emissão Pix, lembretes antes do vencimento
+                  e avisos de atraso das cobranças financeiras.
+                </p>
+              </div>
+
+              <button
+                className="button primary"
+                onClick={handleSaveAutoChargeSettings}
+                disabled={saving}
+              >
+                {saving ? "Salvando..." : "Salvar configurações"}
+              </button>
+            </div>
+
+            <div className="protocol-form-grid">
+              <div className="form-section">
+                <label className="checkbox-line">
+                  <input
+                    type="checkbox"
+                    checked={autoChargeSettings.enabled}
+                    onChange={(event) =>
+                      setAutoChargeSettings({
+                        ...autoChargeSettings,
+                        enabled: event.target.checked,
+                      })
+                    }
+                  />
+                  Ativar cobranças automáticas
+                </label>
+
+                <label>
+                  Emitir Pix quantos dias antes do vencimento
+                  <input
+                    type="number"
+                    min="0"
+                    max="60"
+                    value={autoChargeSettings.issueDaysBeforeDue}
+                    onChange={(event) =>
+                      setAutoChargeSettings({
+                        ...autoChargeSettings,
+                        issueDaysBeforeDue: Number(event.target.value),
+                      })
+                    }
+                  />
+                </label>
+
+                <label>
+                  Primeiro aviso antes do vencimento
+                  <input
+                    type="number"
+                    min="0"
+                    max="60"
+                    value={autoChargeSettings.firstNoticeDaysBeforeDue}
+                    onChange={(event) =>
+                      setAutoChargeSettings({
+                        ...autoChargeSettings,
+                        firstNoticeDaysBeforeDue: Number(event.target.value),
+                      })
+                    }
+                  />
+                </label>
+
+                <label>
+                  Segundo aviso antes do vencimento
+                  <input
+                    type="number"
+                    min="0"
+                    max="60"
+                    value={autoChargeSettings.secondNoticeDaysBeforeDue}
+                    onChange={(event) =>
+                      setAutoChargeSettings({
+                        ...autoChargeSettings,
+                        secondNoticeDaysBeforeDue: Number(event.target.value),
+                      })
+                    }
+                  />
+                </label>
+              </div>
+
+              <div className="form-section">
+                <label className="checkbox-line">
+                  <input
+                    type="checkbox"
+                    checked={autoChargeSettings.sendDueDateNotice}
+                    onChange={(event) =>
+                      setAutoChargeSettings({
+                        ...autoChargeSettings,
+                        sendDueDateNotice: event.target.checked,
+                      })
+                    }
+                  />
+                  Enviar aviso no dia do vencimento
+                </label>
+
+                <label>
+                  Primeiro aviso após vencimento
+                  <input
+                    type="number"
+                    min="0"
+                    max="60"
+                    value={autoChargeSettings.overdueNoticeDaysAfterDue}
+                    onChange={(event) =>
+                      setAutoChargeSettings({
+                        ...autoChargeSettings,
+                        overdueNoticeDaysAfterDue: Number(event.target.value),
+                      })
+                    }
+                  />
+                </label>
+
+                <label>
+                  Repetir aviso de atraso a cada quantos dias
+                  <input
+                    type="number"
+                    min="1"
+                    max="30"
+                    value={autoChargeSettings.overdueNoticeRepeatEveryDays}
+                    onChange={(event) =>
+                      setAutoChargeSettings({
+                        ...autoChargeSettings,
+                        overdueNoticeRepeatEveryDays: Number(event.target.value),
+                      })
+                    }
+                  />
+                </label>
+
+                <label>
+                  Limite de avisos de atraso
+                  <input
+                    type="number"
+                    min="0"
+                    max="20"
+                    value={autoChargeSettings.overdueNoticeMaxCount}
+                    onChange={(event) =>
+                      setAutoChargeSettings({
+                        ...autoChargeSettings,
+                        overdueNoticeMaxCount: Number(event.target.value),
+                      })
+                    }
+                  />
+                </label>
+              </div>
+
+              <div className="form-section">
+                <label className="checkbox-line">
+                  <input
+                    type="checkbox"
+                    checked={autoChargeSettings.sendEmail}
+                    onChange={(event) =>
+                      setAutoChargeSettings({
+                        ...autoChargeSettings,
+                        sendEmail: event.target.checked,
+                      })
+                    }
+                  />
+                  Enviar avisos por e-mail
+                </label>
+
+                <label className="checkbox-line">
+                  <input
+                    type="checkbox"
+                    checked={autoChargeSettings.sendWhatsapp}
+                    onChange={(event) =>
+                      setAutoChargeSettings({
+                        ...autoChargeSettings,
+                        sendWhatsapp: event.target.checked,
+                      })
+                    }
+                  />
+                  Enviar avisos por WhatsApp
+                </label>
+
+                <label>
+                  Modo fiscal padrão
+                  <select
+                    value={autoChargeSettings.defaultFiscalMode}
+                    onChange={(event) =>
+                      setAutoChargeSettings({
+                        ...autoChargeSettings,
+                        defaultFiscalMode: event.target.value as
+                          | "NOTA_FISCAL_ANTES"
+                          | "RECIBO_POSTERIOR",
+                      })
+                    }
+                  >
+                    <option value="RECIBO_POSTERIOR">Recibo posterior</option>
+                    <option value="NOTA_FISCAL_ANTES">
+                      Nota fiscal antes da cobrança
+                    </option>
+                  </select>
+                </label>
+
+                <div className="panel soft-panel">
+                  <strong>Status</strong>
+                  <p>
+                    {autoChargeSettings.enabled
+                      ? "Automação ativa para cobranças elegíveis."
+                      : "Automação inativa. Nenhuma cobrança será emitida automaticamente."}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </article>
+        )}
+
+
 
       {!loading && summary && activeTab === "OVERVIEW" && (
         <>

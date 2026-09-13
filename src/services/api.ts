@@ -579,6 +579,30 @@ financeTransactions(params?: {
 
   return request(`/finance/transactions${query ? `?${query}` : ""}`);
 },
+  financeAutoChargeSettings() {
+    return request("/finance/auto-charge-settings");
+  },
+
+  updateFinanceAutoChargeSettings(data: {
+    enabled?: boolean;
+    issueDaysBeforeDue?: number;
+    firstNoticeDaysBeforeDue?: number;
+    secondNoticeDaysBeforeDue?: number;
+    sendDueDateNotice?: boolean;
+    overdueNoticeDaysAfterDue?: number;
+    overdueNoticeRepeatEveryDays?: number;
+    overdueNoticeMaxCount?: number;
+    sendEmail?: boolean;
+    sendWhatsapp?: boolean;
+    defaultFiscalMode?: "NOTA_FISCAL_ANTES" | "RECIBO_POSTERIOR";
+  }) {
+    return request("/finance/auto-charge-settings", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  },
+
+
 
 createFinanceTransaction(data: {
   type: "ENTRADA" | "PARCELA" | "SAIDA";
