@@ -601,6 +601,18 @@ financeTransactions(params?: {
       body: JSON.stringify(data),
     });
   },
+  processFinanceAutoCharges(data?: {
+    daysAhead?: number;
+    transactionId?: number;
+    dryRun?: boolean;
+  }) {
+    return request("/finance/auto-charges/process", {
+      method: "POST",
+      body: JSON.stringify(data || {}),
+    });
+  },
+
+
 
 
 
