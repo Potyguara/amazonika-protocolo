@@ -343,3 +343,112 @@ export async function getBbPixDueCharge(txid: string) {
   }
 }
 
+
+
+export async function updateBbPixDueChargeDueDate(input: {
+  txid: string;
+  dueDate: Date | string;
+}) {
+  const accessToken =
+    await getBbAccessToken();
+
+  const appKey =
+    requiredEnv("BB_APP_KEY");
+
+  const pixApiUrl =
+    requiredEnv("BB_PIX_API_URL");
+
+  const sanitizedTxid =
+    sanitizeTxid(input.txid);
+
+  if (!sanitizedTxid) {
+    throw new Error(
+      "TXID inválido para alteração da cobrança Pix com vencimento."
+    );
+  }
+
+  const dueDate =
+    new Date(input.dueDate);
+
+  if (
+    Number.isNaN(
+      dueDate.getTime()
+    )
+  ) {
+    throw new Error(
+      "Novo vencimento inválido para alteração da cobrança Pix."
+    );
+  }
+
+  const dataDeVencimento =
+    dueDate
+      .toISOString()
+      .slice(0, 10);
+
+  const url =
+    `${pixApiUrl.replace(/\/$/, "")}/cobv/${encodeURIComponent(
+      sanitizedTxid
+    )}`;
+
+  /*
+   * Alteramos SOMENTE o calendário.
+   *
+   * Valor, pagador e demais dados continuam
+   * pertencendo à cobrança original.
+   *
+   * O TXID também permanece o mesmo.
+   */
+  const payload = {
+    calendario: {
+      dataDeVencimento,
+      validadeAposVencimento: 30,
+    },
+  };
+
+  try {
+    const response =
+      await axios.patch(
+        url,
+        payload,
+        {
+          params: {
+            "gw-dev-app-key":
+              appKey,
+          },
+
+          headers: {
+            Authorization:
+              `Bearer ${accessToken}`,
+
+            "Content-Type":
+              "application/json",
+          },
+        }
+      );
+
+    return response.data;
+  } catch (error: any) {
+    console.error(
+      "ERRO DETALHADO BB PIX PATCH /cobv:",
+      {
+        message:
+          error?.message,
+
+        status:
+          error?.response?.status,
+
+        data:
+          error?.response?.data,
+
+        txid:
+          sanitizedTxid,
+
+        dataDeVencimento,
+
+        url,
+      }
+    );
+
+    throw error;
+  }
+}

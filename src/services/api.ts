@@ -1196,12 +1196,37 @@ createProposal(data: {
   description?: string | null;
   technicalScope?: string | null;
   paymentMode: string;
+
+  /*
+   * Campos-resumo mantidos por compatibilidade.
+   * A fonte detalhada das condições financeiras passa
+   * a ser paymentSchedule.
+   */
   entryAmount?: number;
   installmentQty?: number | null;
+
+  paymentSchedule: Array<{
+    type: "ENTRADA" | "PARCELA";
+    installmentNumber: number;
+    totalInstallments: number | null;
+
+    /*
+     * Valor enviado pela interface em REAIS.
+     * O backend converte para amountCents.
+     */
+    amount: number;
+
+    /*
+     * YYYY-MM-DD
+     */
+    dueDate: string;
+  }>;
+
   executionDays?: number | null;
   validUntil?: string | null;
   clientMessage?: string | null;
   internalNotes?: string | null;
+
   items: Array<{
     serviceName: string;
     description?: string | null;
@@ -1222,12 +1247,26 @@ updateProposal(
     description?: string | null;
     technicalScope?: string | null;
     paymentMode: string;
+
+    /*
+     * Campos-resumo mantidos por compatibilidade.
+     */
     entryAmount?: number;
     installmentQty?: number | null;
+
+    paymentSchedule: Array<{
+      type: "ENTRADA" | "PARCELA";
+      installmentNumber: number;
+      totalInstallments: number | null;
+      amount: number;
+      dueDate: string;
+    }>;
+
     executionDays?: number | null;
     validUntil?: string | null;
     clientMessage?: string | null;
     internalNotes?: string | null;
+
     items: Array<{
       serviceName: string;
       description?: string | null;
@@ -1297,6 +1336,23 @@ contractById(id: number) {
   return request(`/contracts/${id}`);
 },
 
+extendContractPaymentDueDate(
+  contractId: number,
+  scheduleId: number,
+  data: {
+    newDueDate: string;
+    justification: string;
+  }
+) {
+  return request(
+    `/contracts/${contractId}/payment-schedule/${scheduleId}/extend-due-date`,
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+    }
+  );
+},
+
 sendContract(id: number) {
   return request(`/contracts/${id}/send`, {
     method: "POST",
@@ -1321,7 +1377,6 @@ signPublicContract(
   });
 },
 generateEntryCharge(contractId: number, data?: {
-  dueDate?: string;
   description?: string;
   notes?: string;
 }) {
@@ -1444,8 +1499,6 @@ reissueBillingPix(id: number) {
 generateInstallmentCharges(
   contractId: number,
   data?: {
-    firstDueDate?: string;
-    intervalDays?: number;
     fiscalMode?: "NOTA_FISCAL_ANTES" | "RECIBO_POSTERIOR";
     notes?: string;
   }

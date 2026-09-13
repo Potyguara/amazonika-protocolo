@@ -195,6 +195,7 @@ model CatalogService {
   packageItems            ServicePackageItem[]
   standaloneProposalItems StandaloneProposalItem[]
   financialTransactions   FinancialTransaction[]
+  protocols               Protocol[]
 
   @@index([categoryId])
   @@index([name])
@@ -299,7 +300,11 @@ model User {
   billingChargesCreated         BillingCharge[]         @relation("BillingChargeCreatedBy")
   fiscalDocumentsCreated        FiscalDocument[]        @relation("FiscalDocumentCreatedBy")
   standaloneProposalsCreated    StandaloneProposal[]    @relation("StandaloneProposalCreatedBy")
-  passwordResetTokens           PasswordResetToken[]
+
+  paymentDueDateExtensionsCreated   PaymentDueDateExtension[] @relation("PaymentDueDateExtensionCreatedBy")
+  paymentDueDateExtensionsCancelled PaymentDueDateExtension[] @relation("PaymentDueDateExtensionCancelledBy")
+
+  passwordResetTokens PasswordResetToken[]
 }
 
 model PasswordResetToken {
@@ -365,7 +370,6 @@ model ServiceType {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  protocols      Protocol[]
   publicRequests PublicRequest[]
 }
 
@@ -391,8 +395,8 @@ model Protocol {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  client      Client      @relation(fields: [clientId], references: [id])
-  serviceType ServiceType @relation(fields: [serviceTypeId], references: [id])
+  client      Client         @relation(fields: [clientId], references: [id])
+  serviceType CatalogService @relation(fields: [serviceTypeId], references: [id])
 
   createdByUser   User? @relation("CreatedProtocols", fields: [createdByUserId], references: [id])
   responsibleUser User? @relation("ResponsibleProtocols", fields: [responsibleUserId], references: [id])
@@ -450,10 +454,16 @@ model Document {
   client   Client?   @relation(fields: [clientId], references: [id])
 }
 
+enum PaymentDueDateExtensionStatus {
+  ATIVA
+  CANCELADA
+  SUBSTITUIDA
+}
+
 model Contract {
   id Int @id @default(autoincrement())
 
-  protocolId  Int?
+  protocolId  Int
   clientId    Int
   proposalId  Int?
   createdById Int?
@@ -496,7 +506,7 @@ model Contract {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  protocol  Protocol? @relation(fields: [protocolId], references: [id])
+  protocol  Protocol  @relation(fields: [protocolId], references: [id])
   client    Client    @relation(fields: [clientId], references: [id])
   proposal  Proposal? @relation(fields: [proposalId], references: [id])
   createdBy User?     @relation("ContractCreatedBy", fields: [createdById], references: [id])
@@ -504,12 +514,95 @@ model Contract {
   payments        Payment[]
   billingCharges  BillingCharge[]
   fiscalDocuments FiscalDocument[]
+
+  // Snapshot imutável das condições financeiras
+  // aprovadas na proposta no momento da geração do contrato.
+  paymentSchedule ContractPaymentSchedule[]
+
+  // Prorrogações formais de vencimento.
+  paymentDueDateExtensions PaymentDueDateExtension[]
+}
+
+model ContractPaymentSchedule {
+  id Int @id @default(autoincrement())
+
+  contractId Int
+
+  type ProposalPaymentScheduleType
+
+  // Entrada = 0.
+  // Parcelas futuras = 1, 2, 3...
+  installmentNumber Int
+
+  // Quantidade de parcelas futuras.
+  // Para entrada pode ser null.
+  totalInstallments Int?
+
+  // Valor canônico desta etapa em CENTAVOS.
+  amountCents Int
+
+  // Vencimento exatamente como aprovado na proposta.
+  dueDate DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  dueDateExtensions PaymentDueDateExtension[]
+
+  @@unique([contractId, type, installmentNumber])
+  @@index([contractId])
+  @@index([dueDate])
+}
+
+model PaymentDueDateExtension {
+  id Int @id @default(autoincrement())
+
+  contractId                Int
+  contractPaymentScheduleId Int
+  billingChargeId           Int?
+
+  // Data que estava vigente no momento da prorrogação.
+  previousDueDate DateTime
+
+  // Novo vencimento formalmente autorizado.
+  newDueDate DateTime
+
+  // Justificativa obrigatória e auditável.
+  justification String
+
+  status PaymentDueDateExtensionStatus @default(ATIVA)
+
+  createdById Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  cancelledAt        DateTime?
+  cancelledById      Int?
+  cancellationReason String?
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  contractPaymentSchedule ContractPaymentSchedule @relation(fields: [contractPaymentScheduleId], references: [id], onDelete: Cascade)
+
+  billingCharge BillingCharge? @relation(fields: [billingChargeId], references: [id], onDelete: SetNull)
+
+  createdBy User? @relation("PaymentDueDateExtensionCreatedBy", fields: [createdById], references: [id])
+
+  cancelledBy User? @relation("PaymentDueDateExtensionCancelledBy", fields: [cancelledById], references: [id])
+
+  @@index([contractId])
+  @@index([contractPaymentScheduleId])
+  @@index([billingChargeId])
+  @@index([status])
+  @@index([newDueDate])
 }
 
 model BillingCharge {
   id Int @id @default(autoincrement())
 
-  protocolId  Int
+  protocolId  Int?
   clientId    Int
   contractId  Int?
   createdById Int?
@@ -583,7 +676,7 @@ model BillingCharge {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  protocol  Protocol  @relation(fields: [protocolId], references: [id])
+  protocol  Protocol? @relation(fields: [protocolId], references: [id])
   client    Client    @relation(fields: [clientId], references: [id])
   contract  Contract? @relation(fields: [contractId], references: [id])
   createdBy User?     @relation("BillingChargeCreatedBy", fields: [createdById], references: [id])
@@ -591,6 +684,8 @@ model BillingCharge {
   financialTransaction FinancialTransaction? @relation(fields: [financialTransactionId], references: [id])
 
   fiscalDocuments FiscalDocument[]
+
+  dueDateExtensions PaymentDueDateExtension[]
 
   @@index([protocolId])
   @@index([clientId])
@@ -1006,8 +1101,39 @@ model Proposal {
   client    Client   @relation(fields: [clientId], references: [id])
   createdBy User?    @relation("ProposalCreatedBy", fields: [createdById], references: [id])
 
-  items     ProposalItem[]
-  contracts Contract[]
+  items           ProposalItem[]
+  paymentSchedule ProposalPaymentSchedule[]
+  contracts       Contract[]
+}
+
+model ProposalPaymentSchedule {
+  id Int @id @default(autoincrement())
+
+  proposalId Int
+
+  type              ProposalPaymentScheduleType
+  // 0 = entrada; 1..N = parcelas.
+  installmentNumber Int
+  totalInstallments Int?
+
+  // Valor canônico desta etapa em CENTAVOS.
+  amountCents Int
+
+  dueDate DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  proposal Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+
+  @@unique([proposalId, installmentNumber])
+  @@index([proposalId])
+  @@index([dueDate])
+}
+
+enum ProposalPaymentScheduleType {
+  ENTRADA
+  PARCELA
 }
 
 model ProposalItem {

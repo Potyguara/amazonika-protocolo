@@ -408,6 +408,15 @@ type BackendProposal = {
     email: string;
   };
 
+  paymentSchedule?: Array<{
+    id?: number;
+    type: "ENTRADA" | "PARCELA";
+    installmentNumber: number;
+    totalInstallments?: number | null;
+    amountCents: number;
+    dueDate: string;
+  }>;
+
   items: BackendProposalItem[];
 };
 
@@ -416,6 +425,14 @@ type ProposalFormItem = {
   description: string;
   quantity: string;
   unitAmount: string;
+};
+
+type ProposalPaymentScheduleFormRow = {
+  type: "ENTRADA" | "PARCELA";
+  installmentNumber: number;
+  totalInstallments: number | null;
+  amount: string;
+  dueDate: string;
 };
 
 type BackendProposalHistory = {
@@ -785,6 +802,55 @@ type BackendContract = {
   };
 
   proposal?: BackendProposal | null;
+
+  paymentSchedule?: Array<{
+    id: number;
+    contractId: number;
+    type: "ENTRADA" | "PARCELA";
+    installmentNumber: number;
+    totalInstallments?: number | null;
+    amountCents: number;
+    dueDate: string;
+
+    dueDateExtensions?: Array<{
+      id: number;
+      contractId: number;
+      contractPaymentScheduleId: number;
+      billingChargeId?: number | null;
+
+      previousDueDate: string;
+      newDueDate: string;
+      justification: string;
+
+      status:
+        | "ATIVA"
+        | "SUBSTITUIDA"
+        | "CANCELADA";
+
+      createdById?: number | null;
+      createdAt: string;
+      updatedAt?: string;
+
+      cancelledAt?: string | null;
+      cancelledById?: number | null;
+      cancellationReason?: string | null;
+
+      createdBy?: {
+        id: number;
+        name: string;
+        email: string;
+      } | null;
+
+      cancelledBy?: {
+        id: number;
+        name: string;
+        email: string;
+      } | null;
+    }>;
+
+    createdAt?: string;
+    updatedAt?: string;
+  }>;
 
   createdBy?: {
     id: number;
@@ -1758,6 +1824,159 @@ function PublicContractPage() {
               </div>
 
               <p>{contract.paymentText || "-"}</p>
+
+              {contract.paymentSchedule &&
+                contract.paymentSchedule.length > 0 && (
+                  <div
+                    style={{
+                      marginTop: "24px",
+                      border: "1px solid #dfe7e2",
+                      borderRadius: "14px",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div
+                      style={{
+                        padding: "14px 16px",
+                        background: "#f4f8f5",
+                        borderBottom: "1px solid #dfe7e2",
+                      }}
+                    >
+                      <strong>Cronograma financeiro contratado</strong>
+                    </div>
+
+                    <div style={{ overflowX: "auto" }}>
+                      <table
+                        style={{
+                          width: "100%",
+                          borderCollapse: "collapse",
+                          minWidth: "520px",
+                        }}
+                      >
+                        <thead>
+                          <tr>
+                            <th
+                              style={{
+                                padding: "12px 16px",
+                                textAlign: "left",
+                                borderBottom: "1px solid #e4ebe7",
+                              }}
+                            >
+                              Etapa
+                            </th>
+
+                            <th
+                              style={{
+                                padding: "12px 16px",
+                                textAlign: "right",
+                                borderBottom: "1px solid #e4ebe7",
+                              }}
+                            >
+                              Valor
+                            </th>
+
+                            <th
+                              style={{
+                                padding: "12px 16px",
+                                textAlign: "right",
+                                borderBottom: "1px solid #e4ebe7",
+                              }}
+                            >
+                              Vencimento
+                            </th>
+                          </tr>
+                        </thead>
+
+                        <tbody>
+                          {contract.paymentSchedule.map((item) => {
+                            const label =
+                              item.type === "ENTRADA"
+                                ? "Entrada"
+                                : `Parcela ${item.installmentNumber}${
+                                    item.totalInstallments
+                                      ? ` de ${item.totalInstallments}`
+                                      : ""
+                                  }`;
+
+                            const amount =
+                              Number(item.amountCents || 0) / 100;
+
+                            const dueDate = new Date(item.dueDate);
+
+                            return (
+                              <tr key={item.id}>
+                                <td
+                                  style={{
+                                    padding: "12px 16px",
+                                    borderBottom: "1px solid #edf1ee",
+                                  }}
+                                >
+                                  <strong>{label}</strong>
+                                </td>
+
+                                <td
+                                  style={{
+                                    padding: "12px 16px",
+                                    textAlign: "right",
+                                    borderBottom: "1px solid #edf1ee",
+                                  }}
+                                >
+                                  {money(amount)}
+                                </td>
+
+                                <td
+                                  style={{
+                                    padding: "12px 16px",
+                                    textAlign: "right",
+                                    borderBottom: "1px solid #edf1ee",
+                                  }}
+                                >
+                                  {Number.isNaN(dueDate.getTime())
+                                    ? "-"
+                                    : dueDate.toLocaleDateString("pt-BR", {
+                                        timeZone: "America/Belem",
+                                      })}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+
+                        <tfoot>
+                          <tr>
+                            <td
+                              style={{
+                                padding: "14px 16px",
+                                fontWeight: 700,
+                              }}
+                            >
+                              Total contratado
+                            </td>
+
+                            <td
+                              style={{
+                                padding: "14px 16px",
+                                textAlign: "right",
+                                fontWeight: 700,
+                              }}
+                            >
+                              {money(
+                                contract.paymentSchedule.reduce(
+                                  (sum, item) =>
+                                    sum +
+                                    Number(item.amountCents || 0) / 100,
+                                  0
+                                )
+                              )}
+                            </td>
+
+                            <td />
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </div>
+                )}
             </div>
 
             <div className="contract-clause">
@@ -4458,6 +4677,11 @@ function ProposalPanel({
 
   const [entryAmount, setEntryAmount] = useState("");
   const [installmentQty, setInstallmentQty] = useState("3");
+
+  const [paymentSchedule, setPaymentSchedule] = useState<
+    ProposalPaymentScheduleFormRow[]
+  >([]);
+
   const [executionDays, setExecutionDays] = useState("30");
   const [validUntil, setValidUntil] = useState("");
   const [clientMessage, setClientMessage] = useState("");
@@ -4500,6 +4724,7 @@ function ProposalPanel({
     setPaymentMode("ENTRADA_PARCELAS");
     setEntryAmount("");
     setInstallmentQty("3");
+    setPaymentSchedule([]);
     setExecutionDays("30");
     setValidUntil(today);
     setClientMessage(
@@ -4535,6 +4760,21 @@ function ProposalPanel({
         ? String(proposal.installmentQty)
         : ""
     );
+
+    setPaymentSchedule(
+      (proposal.paymentSchedule || []).map((row) => ({
+        type: row.type,
+        installmentNumber: Number(row.installmentNumber || 0),
+        totalInstallments:
+          row.totalInstallments !== null &&
+          row.totalInstallments !== undefined
+            ? Number(row.totalInstallments)
+            : null,
+        amount: String(Number(row.amountCents || 0) / 100),
+        dueDate: row.dueDate ? row.dueDate.slice(0, 10) : today,
+      }))
+    );
+
     setExecutionDays(
       proposal.executionDays !== null && proposal.executionDays !== undefined
         ? String(proposal.executionDays)
@@ -4582,6 +4822,96 @@ function ProposalPanel({
     setItems((current) => current.filter((_, itemIndex) => itemIndex !== index));
   }
 
+  function addDaysToIsoDate(baseDate: string, days: number) {
+    const base = new Date(`${baseDate}T12:00:00.000Z`);
+    base.setUTCDate(base.getUTCDate() + days);
+    return base.toISOString().slice(0, 10);
+  }
+
+  function distributeCents(totalCents: number, quantity: number) {
+    if (quantity <= 0) return [];
+
+    const base = Math.floor(totalCents / quantity);
+    const remainder = totalCents - base * quantity;
+
+    return Array.from({ length: quantity }, (_, index) =>
+      base + (index < remainder ? 1 : 0)
+    );
+  }
+
+  function renumberPaymentSchedule(
+    rows: ProposalPaymentScheduleFormRow[]
+  ) {
+    const totalInstallments = rows.filter(
+      (row) => row.type === "PARCELA"
+    ).length;
+
+    let parcelNumber = 0;
+
+    return rows.map((row) => {
+      if (row.type === "ENTRADA") {
+        return {
+          ...row,
+          installmentNumber: 0,
+          totalInstallments: null,
+        };
+      }
+
+      parcelNumber += 1;
+
+      return {
+        ...row,
+        installmentNumber: parcelNumber,
+        totalInstallments,
+      };
+    });
+  }
+
+  function updatePaymentScheduleRow(
+    index: number,
+    field: "amount" | "dueDate",
+    value: string
+  ) {
+    setPaymentSchedule((current) =>
+      current.map((row, rowIndex) =>
+        rowIndex === index
+          ? {
+              ...row,
+              [field]: value,
+            }
+          : row
+      )
+    );
+  }
+
+  function removePaymentScheduleRow(index: number) {
+    setPaymentSchedule((current) =>
+      renumberPaymentSchedule(
+        current.filter((_, rowIndex) => rowIndex !== index)
+      )
+    );
+  }
+
+  function addPaymentInstallmentRow() {
+    setPaymentSchedule((current) => {
+      const lastDate =
+        current.length > 0
+          ? current[current.length - 1].dueDate || today
+          : today;
+
+      return renumberPaymentSchedule([
+        ...current,
+        {
+          type: "PARCELA",
+          installmentNumber: 1,
+          totalInstallments: 1,
+          amount: "",
+          dueDate: addDaysToIsoDate(lastDate, 30),
+        },
+      ]);
+    });
+  }
+
   const proposalTotal = items.reduce((sum, item) => {
     const quantity = Number(item.quantity || 1);
     const unitAmount = Number(item.unitAmount || 0);
@@ -4593,25 +4923,188 @@ function ProposalPanel({
     return sum + quantity * unitAmount;
   }, 0);
 
-  const entryValue =
-    paymentMode === "A_VISTA"
-      ? proposalTotal
-      : entryAmount
-      ? Number(entryAmount)
-      : Math.round(proposalTotal * 0.3);
+  const proposalTotalCents =
+    Math.round(proposalTotal * 100);
 
-  const installmentValue =
-    paymentMode !== "A_VISTA" && installmentQty && Number(installmentQty) > 0
-      ? Math.round((proposalTotal - entryValue) / Number(installmentQty))
-      : 0;
+  const paymentScheduleTotalCents =
+    paymentSchedule.reduce(
+      (sum, row) =>
+        sum +
+        Math.round(
+          Number(row.amount || 0) * 100
+        ),
+      0
+    );
+
+  const paymentScheduleDifferenceCents =
+    proposalTotalCents -
+    paymentScheduleTotalCents;
+
+  const paymentScheduleHasInvalidRow =
+    paymentSchedule.some(
+      (row) =>
+        !row.dueDate ||
+        !Number.isFinite(Number(row.amount)) ||
+        Number(row.amount) <= 0
+    );
+
+  const paymentScheduleEntries =
+    paymentSchedule.filter(
+      (row) => row.type === "ENTRADA"
+    );
+
+  const paymentScheduleInstallments =
+    paymentSchedule.filter(
+      (row) => row.type === "PARCELA"
+    );
+
+  const paymentScheduleStructureInvalid =
+    (paymentMode === "A_VISTA" &&
+      (
+        paymentSchedule.length !== 1 ||
+        paymentScheduleEntries.length !== 1
+      )) ||
+    (paymentMode === "ENTRADA_PARCELAS" &&
+      (
+        paymentScheduleEntries.length !== 1 ||
+        paymentScheduleInstallments.length < 1
+      )) ||
+    (paymentMode === "PARCELADO" &&
+      (
+        paymentScheduleEntries.length !== 0 ||
+        paymentScheduleInstallments.length < 1
+      )) ||
+    (paymentMode === "PERSONALIZADO" &&
+      paymentSchedule.length < 1);
 
   const hasInvalidProposalValues =
-    proposalTotal <= 0 ||
-    Number.isNaN(entryValue) ||
-    entryValue < 0 ||
-    entryValue > proposalTotal ||
-    (paymentMode === "ENTRADA_PARCELAS" &&
-      (!installmentQty || Number(installmentQty) <= 0));
+    proposalTotalCents <= 0 ||
+    paymentSchedule.length === 0 ||
+    paymentScheduleHasInvalidRow ||
+    paymentScheduleStructureInvalid ||
+    paymentScheduleDifferenceCents !== 0;
+
+  function rebuildPaymentSchedule() {
+    if (proposalTotalCents <= 0) {
+      setError(
+        "Informe primeiro os itens e valores da proposta."
+      );
+      return;
+    }
+
+    setError("");
+
+    if (paymentMode === "A_VISTA") {
+      setEntryAmount(String(proposalTotal));
+      setInstallmentQty("");
+
+      setPaymentSchedule([
+        {
+          type: "ENTRADA",
+          installmentNumber: 0,
+          totalInstallments: null,
+          amount: (proposalTotalCents / 100).toFixed(2),
+          dueDate: today,
+        },
+      ]);
+
+      return;
+    }
+
+    const quantity = Math.max(
+      1,
+      Math.floor(Number(installmentQty || 1))
+    );
+
+    if (paymentMode === "PARCELADO") {
+      const values =
+        distributeCents(
+          proposalTotalCents,
+          quantity
+        );
+
+      setEntryAmount("");
+
+      setPaymentSchedule(
+        values.map((amountCents, index) => ({
+          type: "PARCELA" as const,
+          installmentNumber: index + 1,
+          totalInstallments: quantity,
+          amount: (amountCents / 100).toFixed(2),
+          dueDate: addDaysToIsoDate(
+            today,
+            30 * (index + 1)
+          ),
+        }))
+      );
+
+      return;
+    }
+
+    const requestedEntry =
+      Number(entryAmount);
+
+    let entryCents =
+      Number.isFinite(requestedEntry) &&
+      requestedEntry > 0
+        ? Math.round(requestedEntry * 100)
+        : Math.round(
+            proposalTotalCents * 0.3
+          );
+
+    if (entryCents >= proposalTotalCents) {
+      entryCents =
+        Math.max(
+          1,
+          proposalTotalCents -
+            quantity
+        );
+    }
+
+    const remainingCents =
+      proposalTotalCents - entryCents;
+
+    const installments =
+      distributeCents(
+        remainingCents,
+        quantity
+      );
+
+    setEntryAmount(
+      (entryCents / 100).toFixed(2)
+    );
+
+    setInstallmentQty(
+      String(quantity)
+    );
+
+    setPaymentSchedule([
+      {
+        type: "ENTRADA",
+        installmentNumber: 0,
+        totalInstallments: null,
+        amount:
+          (entryCents / 100).toFixed(2),
+        dueDate: today,
+      },
+      ...installments.map(
+        (amountCents, index) => ({
+          type: "PARCELA" as const,
+          installmentNumber:
+            index + 1,
+          totalInstallments:
+            quantity,
+          amount:
+            (amountCents / 100).toFixed(2),
+          dueDate:
+            addDaysToIsoDate(
+              today,
+              30 * (index + 1)
+            ),
+        })
+      ),
+    ]);
+  }
 
   async function handleSaveProposal() {
     try {
@@ -4640,39 +5133,73 @@ function ProposalPanel({
         return sum + quantity * unitAmount;
       }, 0);
 
-      const entryValueToValidate =
-        paymentMode === "A_VISTA"
-          ? totalToValidate
-          : entryAmount
-          ? Number(entryAmount)
-          : Math.round(totalToValidate * 0.3);
-
       if (totalToValidate <= 0) {
-        throw new Error("O valor total da proposta deve ser maior que zero.");
-      }
-
-      if (Number.isNaN(entryValueToValidate)) {
-        throw new Error("Informe um valor de entrada válido.");
-      }
-
-      if (entryValueToValidate < 0) {
-        throw new Error("A entrada não pode ser negativa.");
-      }
-
-      if (entryValueToValidate > totalToValidate) {
         throw new Error(
-          "A entrada não pode ser maior que o valor total da proposta."
+          "O valor total da proposta deve ser maior que zero."
+        );
+      }
+
+      const totalToValidateCents =
+        Math.round(totalToValidate * 100);
+
+      const scheduleToValidate =
+        renumberPaymentSchedule(
+          paymentSchedule
+        );
+
+      if (scheduleToValidate.length === 0) {
+        throw new Error(
+          "Monte o cronograma financeiro antes de salvar a proposta."
+        );
+      }
+
+      const scheduleTotalCents =
+        scheduleToValidate.reduce(
+          (sum, row) =>
+            sum +
+            Math.round(
+              Number(row.amount || 0) * 100
+            ),
+          0
+        );
+
+      if (
+        scheduleToValidate.some(
+          (row) =>
+            !row.dueDate ||
+            !Number.isFinite(
+              Number(row.amount)
+            ) ||
+            Number(row.amount) <= 0
+        )
+      ) {
+        throw new Error(
+          "Todas as etapas financeiras precisam ter valor e vencimento válidos."
         );
       }
 
       if (
-        paymentMode === "ENTRADA_PARCELAS" &&
-        (!installmentQty || Number(installmentQty) <= 0)
+        scheduleTotalCents !==
+        totalToValidateCents
       ) {
         throw new Error(
-          "Informe a quantidade de parcelas para pagamento com entrada + parcelas."
+          `O cronograma financeiro precisa fechar exatamente em ${money(
+            totalToValidate
+          )}.`
         );
       }
+
+      const scheduleEntry =
+        scheduleToValidate.find(
+          (row) =>
+            row.type === "ENTRADA"
+        );
+
+      const scheduleInstallmentQty =
+        scheduleToValidate.filter(
+          (row) =>
+            row.type === "PARCELA"
+        ).length;
 
       const payload = {
         protocolId: protocol.id,
@@ -4680,13 +5207,32 @@ function ProposalPanel({
         description: description || null,
         technicalScope: technicalScope || null,
         paymentMode,
-        entryAmount: entryValueToValidate,
+
+        entryAmount:
+          scheduleEntry
+            ? Number(scheduleEntry.amount)
+            : 0,
+
         installmentQty:
-          paymentMode === "A_VISTA"
-            ? null
-            : installmentQty
-            ? Number(installmentQty)
+          scheduleInstallmentQty > 0
+            ? scheduleInstallmentQty
             : null,
+
+        paymentSchedule:
+          scheduleToValidate.map(
+            (row) => ({
+              type: row.type,
+              installmentNumber:
+                row.installmentNumber,
+              totalInstallments:
+                row.totalInstallments,
+              amount:
+                Number(row.amount),
+              dueDate:
+                row.dueDate,
+            })
+          ),
+
         executionDays: executionDays ? Number(executionDays) : null,
         validUntil: validUntil || null,
         clientMessage: clientMessage || null,
@@ -4932,25 +5478,45 @@ return (
             <select
               value={paymentMode}
               onChange={(event) => {
-                const value = event.target
-                  .value as BackendProposal["paymentMode"];
+                const value =
+                  event.target.value as BackendProposal["paymentMode"];
 
                 setPaymentMode(value);
+                setPaymentSchedule([]);
 
                 if (value === "A_VISTA") {
                   setEntryAmount("");
                   setInstallmentQty("");
-                }
-
-                if (value === "ENTRADA_PARCELAS" && !installmentQty) {
+                } else if (
+                  value === "ENTRADA_PARCELAS" ||
+                  value === "PERSONALIZADO"
+                ) {
+                  if (!installmentQty) {
+                    setInstallmentQty("3");
+                  }
+                } else if (
+                  value === "PARCELADO" &&
+                  !installmentQty
+                ) {
                   setInstallmentQty("3");
                 }
               }}
             >
-              <option value="A_VISTA">À vista</option>
-              <option value="ENTRADA_PARCELAS">Entrada + parcelas</option>
-              <option value="PARCELADO">Parcelado</option>
-              <option value="PERSONALIZADO">Personalizado</option>
+              <option value="A_VISTA">
+                À vista
+              </option>
+
+              <option value="ENTRADA_PARCELAS">
+                Entrada + parcelas
+              </option>
+
+              <option value="PARCELADO">
+                Parcelado sem entrada
+              </option>
+
+              <option value="PERSONALIZADO">
+                Personalizado
+              </option>
             </select>
           </label>
 
@@ -4958,33 +5524,204 @@ return (
             Entrada
             <input
               type="number"
+              min="0"
+              step="0.01"
               value={
-                paymentMode === "A_VISTA" ? String(proposalTotal) : entryAmount
+                paymentMode === "A_VISTA"
+                  ? String(proposalTotal)
+                  : entryAmount
               }
-              onChange={(event) => setEntryAmount(event.target.value)}
-              placeholder="30% automático se vazio"
-              disabled={paymentMode === "A_VISTA"}
+              onChange={(event) =>
+                setEntryAmount(
+                  event.target.value
+                )
+              }
+              placeholder="Ex.: 3000,00"
+              disabled={
+                paymentMode === "A_VISTA" ||
+                paymentMode === "PARCELADO"
+              }
             />
           </label>
 
           <label>
-            Número de parcelas
+            Quantidade de parcelas futuras
             <input
               type="number"
+              min="1"
+              step="1"
               value={installmentQty}
-              onChange={(event) => setInstallmentQty(event.target.value)}
-              disabled={paymentMode === "A_VISTA"}
+              onChange={(event) =>
+                setInstallmentQty(
+                  event.target.value
+                )
+              }
+              disabled={
+                paymentMode === "A_VISTA"
+              }
             />
           </label>
 
           <div className="proposal-total-card">
-            <span>Total da proposta</span>
-            <strong>{money(proposalTotal)}</strong>
+            <span>
+              Valor total da proposta
+            </span>
+
+            <strong>
+              {money(proposalTotal)}
+            </strong>
+
             <small>
-              Entrada: {money(entryValue)} · Parcela estimada:{" "}
-              {money(installmentValue)}
+              O cronograma abaixo precisa
+              totalizar exatamente esse valor.
             </small>
           </div>
+        </div>
+
+        <div className="proposal-item-card">
+          <div className="panel-header">
+            <div>
+              <h3>
+                Cronograma financeiro
+              </h3>
+
+              <p>
+                Defina agora os valores e
+                vencimentos que serão apresentados
+                ao cliente na proposta e,
+                posteriormente, no contrato.
+              </p>
+            </div>
+
+            <button
+              className="mini-button"
+              type="button"
+              onClick={rebuildPaymentSchedule}
+            >
+              Montar / atualizar cronograma
+            </button>
+          </div>
+
+          {paymentSchedule.length === 0 ? (
+            <div className="panel">
+              Selecione a forma de pagamento
+              e clique em
+              <strong>
+                {" "}Montar / atualizar cronograma
+              </strong>.
+            </div>
+          ) : (
+            <>
+              {paymentSchedule.map(
+                (row, index) => (
+                  <div
+                    className="proposal-item-card"
+                    key={`${row.type}-${row.installmentNumber}-${index}`}
+                  >
+                    <div className="proposal-item-grid">
+                      <label>
+                        Etapa
+                        <input
+                          value={
+                            row.type === "ENTRADA"
+                              ? paymentMode === "A_VISTA"
+                                ? "Pagamento à vista"
+                                : "Entrada"
+                              : `Parcela ${row.installmentNumber}/${row.totalInstallments || 1}`
+                          }
+                          disabled
+                        />
+                      </label>
+
+                      <label>
+                        Valor
+                        <input
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          value={row.amount}
+                          onChange={(event) =>
+                            updatePaymentScheduleRow(
+                              index,
+                              "amount",
+                              event.target.value
+                            )
+                          }
+                        />
+                      </label>
+
+                      <label>
+                        Vencimento
+                        <input
+                          type="date"
+                          value={row.dueDate}
+                          onChange={(event) =>
+                            updatePaymentScheduleRow(
+                              index,
+                              "dueDate",
+                              event.target.value
+                            )
+                          }
+                        />
+                      </label>
+                    </div>
+
+                    {paymentMode === "PERSONALIZADO" &&
+                      row.type === "PARCELA" &&
+                      paymentScheduleInstallments.length > 1 && (
+                        <div className="proposal-item-footer">
+                          <button
+                            className="mini-button danger"
+                            type="button"
+                            onClick={() =>
+                              removePaymentScheduleRow(index)
+                            }
+                          >
+                            Remover parcela
+                          </button>
+                        </div>
+                      )}
+                  </div>
+                )
+              )}
+
+              {paymentMode === "PERSONALIZADO" && (
+                <div className="form-actions">
+                  <button
+                    className="secondary-action"
+                    type="button"
+                    onClick={addPaymentInstallmentRow}
+                  >
+                    + Adicionar parcela
+                  </button>
+                </div>
+              )}
+
+              <div className="proposal-total-card">
+                <span>
+                  Conferência do cronograma
+                </span>
+
+                <strong>
+                  {money(
+                    paymentScheduleTotalCents /
+                      100
+                  )}
+                </strong>
+
+                <small>
+                  Total da proposta:{" "}
+                  {money(proposalTotal)}
+                  {" · "}
+                  Diferença:{" "}
+                  {money(
+                    paymentScheduleDifferenceCents /
+                      100
+                  )}
+                </small>
+              </div>
+            </>
+          )}
         </div>
 
         <label>
@@ -5007,8 +5744,10 @@ return (
 
         {hasInvalidProposalValues && (
           <div className="panel error-panel">
-            Verifique os valores da proposta: o total deve ser maior que zero, a
-            entrada não pode ser negativa e não pode ser maior que o valor total.
+            O cronograma financeiro ainda não está válido.
+            Todas as etapas precisam possuir valor e vencimento,
+            e o total programado deve ser exatamente igual ao
+            valor total da proposta.
           </div>
         )}
 
@@ -5526,10 +6265,6 @@ function BillingPanel({
   onReload?: () => Promise<void> | void;
 }) {
   const today = new Date().toISOString().slice(0, 10);
-  const defaultDueDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
-    .toISOString()
-    .slice(0, 10);
-
   const [contracts, setContracts] = useState<BackendContract[]>([]);
   const [charges, setCharges] = useState<BackendBillingCharge[]>([]);
 
@@ -5539,28 +6274,26 @@ function BillingPanel({
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  const [dueDate, setDueDate] = useState(defaultDueDate);
-  const [chargeDescription, setChargeDescription] = useState("");
-
-  const defaultFirstInstallmentDueDate = new Date(
-  Date.now() + 30 * 24 * 60 * 60 * 1000
-)
-  .toISOString()
-  .slice(0, 10);
-
-const [firstInstallmentDueDate, setFirstInstallmentDueDate] = useState(
-  defaultFirstInstallmentDueDate
-);
-
-const [installmentIntervalDays, setInstallmentIntervalDays] = useState("30");
-
 const [installmentFiscalMode, setInstallmentFiscalMode] =
   useState<"NOTA_FISCAL_ANTES" | "RECIBO_POSTERIOR">("RECIBO_POSTERIOR");
 
-const [installmentNotes, setInstallmentNotes] = useState("");
-
   const [selectedFiscalMode, setSelectedFiscalMode] =
     useState<"NOTA_FISCAL_ANTES" | "RECIBO_POSTERIOR">("NOTA_FISCAL_ANTES");
+
+  const [
+    extendingScheduleId,
+    setExtendingScheduleId,
+  ] = useState<number | null>(null);
+
+  const [
+    extensionNewDueDate,
+    setExtensionNewDueDate,
+  ] = useState("");
+
+  const [
+    extensionJustification,
+    setExtensionJustification,
+  ] = useState("");
 
   const [documentFile, setDocumentFile] = useState<File | null>(null);
   const [documentType, setDocumentType] =
@@ -5597,28 +6330,39 @@ const [installmentNotes, setInstallmentNotes] = useState("");
     loadData();
   }, [protocol.id]);
 
-  const signedContract = contracts.find(
-    (contract) => contract.status === "ASSINADO"
-  );
-const activeCharge = charges.find(
+  const signedContract = [...contracts]
+    .filter((contract) => contract.status === "ASSINADO")
+    .sort((a, b) => b.id - a.id)[0];
+
+  const currentContractCharges = signedContract
+    ? charges.filter(
+        (charge) => charge.contractId === signedContract.id
+      )
+    : [];
+
+const activeCharge = currentContractCharges.find(
   (charge) =>
-    charge.contractId === signedContract?.id &&
     charge.status !== "PAGA" &&
     charge.status !== "CANCELADA" &&
     charge.status !== "VENCIDA" &&
     charge.status !== "ERRO"
 );
 
-const entryChargePaid = charges.some(
+const entryChargePaid = currentContractCharges.some(
   (charge) =>
-    charge.contractId === signedContract?.id &&
     charge.chargeType === "ENTRADA" &&
     charge.status === "PAGA"
 );
 
-const installmentCharges = charges.filter(
+const entryChargeExists = currentContractCharges.some(
   (charge) =>
-    charge.contractId === signedContract?.id &&
+    charge.chargeType === "ENTRADA" &&
+    charge.status !== "CANCELADA" &&
+    charge.status !== "ERRO"
+);
+
+const installmentCharges = currentContractCharges.filter(
+  (charge) =>
     charge.chargeType === "PARCELA" &&
     charge.status !== "CANCELADA" &&
     charge.status !== "ERRO"
@@ -5635,6 +6379,102 @@ const proposalInstallmentQty =
   signedContract?.proposal?.installmentQty !== undefined
     ? Number(signedContract.proposal.installmentQty)
     : 0;
+
+  function openDueDateExtension(
+    scheduleId: number,
+    effectiveDueDate: string
+  ) {
+    setError("");
+    setSuccess("");
+
+    setExtendingScheduleId(
+      scheduleId
+    );
+
+    setExtensionNewDueDate(
+      effectiveDueDate
+        ? effectiveDueDate.slice(0, 10)
+        : ""
+    );
+
+    setExtensionJustification("");
+  }
+
+  function closeDueDateExtension() {
+    setExtendingScheduleId(null);
+    setExtensionNewDueDate("");
+    setExtensionJustification("");
+  }
+
+  async function handleExtendDueDate(
+    scheduleId: number
+  ) {
+    if (!signedContract) {
+      setError(
+        "Nenhum contrato assinado foi encontrado."
+      );
+      return;
+    }
+
+    if (!extensionNewDueDate) {
+      setError(
+        "Informe o novo vencimento."
+      );
+      return;
+    }
+
+    if (
+      extensionJustification.trim().length <
+      10
+    ) {
+      setError(
+        "Informe uma justificativa com pelo menos 10 caracteres."
+      );
+      return;
+    }
+
+    const confirmed =
+      window.confirm(
+        "Confirma a prorrogação deste vencimento? A alteração ficará registrada no histórico do contrato."
+      );
+
+    if (!confirmed) return;
+
+    try {
+      setSaving(true);
+      setError("");
+      setSuccess("");
+
+      await api.extendContractPaymentDueDate(
+        signedContract.id,
+        scheduleId,
+        {
+          newDueDate:
+            extensionNewDueDate,
+
+          justification:
+            extensionJustification.trim(),
+        }
+      );
+
+      setSuccess(
+        "Vencimento prorrogado com sucesso."
+      );
+
+      closeDueDateExtension();
+
+      await loadData();
+      await onReload?.();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao prorrogar vencimento."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function handleGenerateEntryCharge() {
     if (!signedContract) {
@@ -5654,11 +6494,8 @@ const proposalInstallmentQty =
       setSuccess("");
 
       await api.generateEntryCharge(signedContract.id, {
-        dueDate,
-        description:
-          chargeDescription ||
-          `Entrada do contrato ${signedContract.contractNumber}`,
-      });
+      description: `Entrada referente ao contrato ${signedContract.contractNumber}`,
+    });
 
       setSuccess("Cobrança da entrada criada com sucesso.");
       await loadData();
@@ -5703,9 +6540,7 @@ const proposalInstallmentQty =
   }
 
   const confirmed = window.confirm(
-    `Deseja gerar ${proposalInstallmentQty} parcela(s) do saldo de ${money(
-      contractBalanceValue
-    )} para o contrato ${signedContract.contractNumber}?`
+    `Deseja liberar as cobranças das parcelas exatamente conforme o cronograma financeiro do contrato ${signedContract.contractNumber}?`
   );
 
   if (!confirmed) return;
@@ -5716,22 +6551,18 @@ const proposalInstallmentQty =
     setSuccess("");
 
     await api.generateInstallmentCharges(signedContract.id, {
-      firstDueDate: firstInstallmentDueDate,
-      intervalDays: Number(installmentIntervalDays || 30),
       fiscalMode: installmentFiscalMode,
-      notes:
-        installmentNotes ||
-        "Parcelas do saldo geradas após entrega/finalização dos serviços.",
+      notes: "Cobranças liberadas conforme cronograma financeiro contratado.",
     });
 
-    setSuccess("Parcelas do saldo geradas com sucesso.");
+    setSuccess("Cobranças das parcelas liberadas conforme o contrato.");
     await loadData();
     await onReload?.();
   } catch (err) {
     setError(
       err instanceof Error
         ? err.message
-        : "Erro ao gerar parcelas do saldo."
+        : "Erro ao liberar cobranças das parcelas."
     );
   } finally {
     setSaving(false);
@@ -5915,28 +6746,24 @@ const confirmed = window.confirm(
     <article className="panel billing-panel no-print">
       <div className="panel-header">
         <div>
-          <h2>Cobrança da entrada</h2>
+          <h2>Cobranças do contrato atual</h2>
           <p>
-            Após a assinatura do contrato, anexe a Nota Fiscal ou defina recibo
-            posterior, emita a cobrança e envie ao cliente.
+            Execute as cobranças conforme o cronograma financeiro já aprovado
+            e congelado no contrato. Valores e vencimentos não são editáveis.
           </p>
         </div>
 
-        <button
-          className="button primary"
-          type="button"
-          disabled={saving || !signedContract || Boolean(activeCharge)}
-          onClick={handleGenerateEntryCharge}
-          title={
-            !signedContract
-              ? "É necessário contrato assinado."
-              : activeCharge
-              ? "Já existe cobrança ativa para este contrato."
-              : "Gerar cobrança da entrada"
-          }
-        >
-          Gerar cobrança
-        </button>
+        {signedContract && !entryChargeExists && (
+          <button
+            className="button primary"
+            type="button"
+            disabled={saving}
+            onClick={handleGenerateEntryCharge}
+            title="Preparar cobrança da entrada conforme o contrato"
+          >
+            Preparar cobrança da entrada
+          </button>
+        )}
       </div>
 
       {saving && (
@@ -5955,290 +6782,471 @@ const confirmed = window.confirm(
 
       {!loading && !signedContract && (
         <div className="info-panel">
-          A cobrança da entrada será liberada após o contrato estar assinado.
+          Nenhum contrato assinado está disponível para cobrança neste protocolo.
         </div>
       )}
 
       {!loading && signedContract && !activeCharge && (
-        <div className="billing-create-box">
-          <div>
-            <span>Contrato assinado</span>
-            <strong>{signedContract.contractNumber}</strong>
-            <small>
-             
-  Entrada prevista: {money(signedContract.entryAmount || 0)}
-</small>
-           
-          </div>
-
-          <div className="form-row">
-            <label>
-              Vencimento da cobrança
-              <input
-                type="date"
-                value={dueDate}
-                onChange={(event) => setDueDate(event.target.value)}
-              />
-            </label>
-
-            <label>
-              Descrição
-              <input
-                value={chargeDescription}
-                onChange={(event) => setChargeDescription(event.target.value)}
-                placeholder={`Entrada do contrato ${signedContract.contractNumber}`}
-              />
-            </label>
-          </div>
+        <div className="info-panel">
+          A entrada contratual ainda não possui cobrança preparada.
         </div>
       )}
 
       {!loading && signedContract && (
   <div className="billing-create-box installment-create-box">
     <div>
-      <span>Parcelas do saldo</span>
+      <span>Cronograma financeiro do contrato</span>
       <strong>{signedContract.contractNumber}</strong>
-
       <small>
-        Valor total: {money(contractTotalValue)} · Entrada:{" "}
-        {money(contractEntryValue)} · Saldo: {money(contractBalanceValue)}
-      </small>
-
-      <small>
-        Parcelas previstas:{" "}
-        {proposalInstallmentQty > 0
-          ? `${proposalInstallmentQty} parcela(s)`
-          : "não configuradas"}
+        Valores e vencimentos definidos na proposta aceita e congelados no contrato.
       </small>
     </div>
 
-    {!entryChargePaid && (
+    {signedContract.paymentSchedule &&
+    signedContract.paymentSchedule.length > 0 ? (
+      <div style={{ marginTop: "16px", display: "grid", gap: "10px" }}>
+        {signedContract.paymentSchedule.map((item) => {
+          const relatedCharge = charges.find(
+            (charge) =>
+              charge.contractId === signedContract.id &&
+              (
+                (item.type === "ENTRADA" &&
+                  charge.chargeType === "ENTRADA") ||
+                (item.type === "PARCELA" &&
+                  charge.chargeType === "PARCELA" &&
+                  charge.installmentNumber === item.installmentNumber)
+              )
+          );
+
+          const label =
+            item.type === "ENTRADA"
+              ? "Entrada"
+              : `Parcela ${item.installmentNumber}${
+                  item.totalInstallments
+                    ? ` de ${item.totalInstallments}`
+                    : ""
+                }`;
+
+          const originalDueDate =
+            new Date(item.dueDate);
+
+          const activeExtension =
+            (item.dueDateExtensions || []).find(
+              (extension) =>
+                extension.status === "ATIVA"
+            ) || null;
+
+          const effectiveDueDateValue =
+            activeExtension?.newDueDate ||
+            item.dueDate;
+
+          const effectiveDueDate =
+            new Date(
+              effectiveDueDateValue
+            );
+
+          const hasExtension =
+            Boolean(activeExtension);
+
+          const canExtend =
+            relatedCharge?.status !==
+            "PAGA";
+
+          return (
+            <div
+              key={item.id}
+              style={{
+                border: "1px solid #e1e9e4",
+                borderRadius: "12px",
+                padding: "12px 14px",
+                display: "grid",
+                gridTemplateColumns:
+                  "minmax(130px, 1.4fr) minmax(100px, 1fr) minmax(170px, 1.2fr) minmax(120px, 1fr) minmax(150px, auto)",
+                gap: "12px",
+                alignItems: "center",
+              }}
+            >
+              <div>
+                <strong>{label}</strong>
+              </div>
+
+              <div>
+                <small>Valor</small>
+                <div>{money(Number(item.amountCents || 0) / 100)}</div>
+              </div>
+
+              <div>
+                <small>
+                  {hasExtension
+                    ? "Vencimento vigente"
+                    : "Vencimento"}
+                </small>
+
+                <div>
+                  {Number.isNaN(
+                    effectiveDueDate.getTime()
+                  )
+                    ? "-"
+                    : effectiveDueDate.toLocaleDateString(
+                        "pt-BR",
+                        {
+                          timeZone:
+                            "America/Belem",
+                        }
+                      )}
+                </div>
+
+                {hasExtension && (
+                  <>
+                    <small
+                      style={{
+                        display: "block",
+                        marginTop: "5px",
+                        color: "#6b7280",
+                      }}
+                    >
+                      Original:{" "}
+                      {Number.isNaN(
+                        originalDueDate.getTime()
+                      )
+                        ? "-"
+                        : originalDueDate.toLocaleDateString(
+                            "pt-BR",
+                            {
+                              timeZone:
+                                "America/Belem",
+                            }
+                          )}
+                    </small>
+
+                    <span
+                      className="badge"
+                      style={{
+                        display: "inline-block",
+                        marginTop: "6px",
+                      }}
+                    >
+                      PRORROGADO
+                    </span>
+                  </>
+                )}
+              </div>
+
+              <div>
+                <small>Status</small>
+                <div>
+                  {relatedCharge
+                    ? billingStatusLabel(relatedCharge.status)
+                    : item.type === "ENTRADA"
+                    ? "Aguardando preparação"
+                    : entryChargePaid
+                    ? "Disponível para liberação"
+                    : "Aguardando pagamento da entrada"}
+                </div>
+              </div>
+
+              <div>
+                {canExtend ? (
+                  <button
+                    className="mini-button"
+                    type="button"
+                    disabled={saving}
+                    onClick={() =>
+                      openDueDateExtension(
+                        item.id,
+                        effectiveDueDateValue
+                      )
+                    }
+                  >
+                    Prorrogar vencimento
+                  </button>
+                ) : (
+                  <small>
+                    Pagamento liquidado
+                  </small>
+                )}
+              </div>
+
+              {extendingScheduleId ===
+                item.id && (
+                <div
+                  style={{
+                    gridColumn: "1 / -1",
+                    borderTop:
+                      "1px solid #e1e9e4",
+                    paddingTop: "14px",
+                    marginTop: "2px",
+                  }}
+                >
+                  <div
+                    className="form-row"
+                    style={{
+                      alignItems: "flex-end",
+                    }}
+                  >
+                    <label>
+                      Novo vencimento
+                      <input
+                        type="date"
+                        value={
+                          extensionNewDueDate
+                        }
+                        min={
+                          effectiveDueDateValue
+                            ? effectiveDueDateValue.slice(
+                                0,
+                                10
+                              )
+                            : undefined
+                        }
+                        onChange={(event) =>
+                          setExtensionNewDueDate(
+                            event.target.value
+                          )
+                        }
+                      />
+                    </label>
+
+                    <label
+                      style={{
+                        flex: 1,
+                      }}
+                    >
+                      Justificativa da prorrogação
+                      <textarea
+                        value={
+                          extensionJustification
+                        }
+                        onChange={(event) =>
+                          setExtensionJustification(
+                            event.target.value
+                          )
+                        }
+                        placeholder="Informe o motivo da alteração do vencimento."
+                        rows={3}
+                      />
+                    </label>
+                  </div>
+
+                  {activeExtension && (
+                    <div
+                      className="info-panel"
+                      style={{
+                        marginTop: "10px",
+                      }}
+                    >
+                      <strong>
+                        Prorrogação atualmente vigente
+                      </strong>
+
+                      <div>
+                        Motivo:{" "}
+                        {
+                          activeExtension.justification
+                        }
+                      </div>
+
+                      {activeExtension.createdBy
+                        ?.name && (
+                        <div>
+                          Autorizada por:{" "}
+                          {
+                            activeExtension
+                              .createdBy.name
+                          }
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {(item.dueDateExtensions ||
+                    []).length > 0 && (
+                    <details
+                      style={{
+                        marginTop: "10px",
+                      }}
+                    >
+                      <summary>
+                        Histórico de prorrogações (
+                        {
+                          item
+                            .dueDateExtensions!
+                            .length
+                        }
+                        )
+                      </summary>
+
+                      <div
+                        style={{
+                          marginTop: "8px",
+                          display: "grid",
+                          gap: "8px",
+                        }}
+                      >
+                        {(
+                          item.dueDateExtensions ||
+                          []
+                        ).map(
+                          (extension) => (
+                            <div
+                              key={
+                                extension.id
+                              }
+                              style={{
+                                padding:
+                                  "10px 12px",
+                                border:
+                                  "1px solid #e1e9e4",
+                                borderRadius:
+                                  "10px",
+                              }}
+                            >
+                              <strong>
+                                {new Date(
+                                  extension.previousDueDate
+                                ).toLocaleDateString(
+                                  "pt-BR",
+                                  {
+                                    timeZone:
+                                      "America/Belem",
+                                  }
+                                )}
+                                {" → "}
+                                {new Date(
+                                  extension.newDueDate
+                                ).toLocaleDateString(
+                                  "pt-BR",
+                                  {
+                                    timeZone:
+                                      "America/Belem",
+                                  }
+                                )}
+                              </strong>
+
+                              <div>
+                                {
+                                  extension.justification
+                                }
+                              </div>
+
+                              <small>
+                                Status:{" "}
+                                {
+                                  extension.status
+                                }
+                                {extension
+                                  .createdBy
+                                  ?.name
+                                  ? ` · ${extension.createdBy.name}`
+                                  : ""}
+                              </small>
+                            </div>
+                          )
+                        )}
+                      </div>
+                    </details>
+                  )}
+
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "8px",
+                      marginTop: "12px",
+                      justifyContent:
+                        "flex-end",
+                    }}
+                  >
+                    <button
+                      className="mini-button"
+                      type="button"
+                      disabled={saving}
+                      onClick={
+                        closeDueDateExtension
+                      }
+                    >
+                      Cancelar
+                    </button>
+
+                    <button
+                      className="button primary"
+                      type="button"
+                      disabled={saving}
+                      onClick={() =>
+                        handleExtendDueDate(
+                          item.id
+                        )
+                      }
+                    >
+                      Confirmar prorrogação
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    ) : (
       <div className="warning-panel">
-        A geração das parcelas será liberada após a entrada estar marcada como
-        paga.
+        Este contrato não possui cronograma financeiro detalhado.
+      </div>
+    )}
+
+    {!entryChargePaid && (
+      <div className="info-panel" style={{ marginTop: "14px" }}>
+        As cobranças das parcelas serão liberadas somente após a confirmação
+        do pagamento da entrada. Os valores permanecem imutáveis. Eventual
+        prorrogação de vencimento exige justificativa e fica registrada no histórico
+        contratual.
       </div>
     )}
 
     {entryChargePaid && hasInstallmentCharges && (
-      <div className="info-panel">
-        As parcelas do saldo já foram geradas para este contrato.
+      <div className="success-panel" style={{ marginTop: "14px" }}>
+        As cobranças das parcelas já foram preparadas conforme o contrato.
       </div>
     )}
 
     {entryChargePaid && !hasInstallmentCharges && (
-      <>
-        <div className="form-row">
-          <label>
-            Primeiro vencimento
-            <input
-              type="date"
-              value={firstInstallmentDueDate}
-              onChange={(event) =>
-                setFirstInstallmentDueDate(event.target.value)
-              }
-            />
-          </label>
-
-          <label>
-            Intervalo entre parcelas em dias
-            <input
-              type="number"
-              value={installmentIntervalDays}
-              onChange={(event) =>
-                setInstallmentIntervalDays(event.target.value)
-              }
-              placeholder="30"
-            />
-          </label>
-
-          <label>
-            Documento fiscal das parcelas
-            <select
-              value={installmentFiscalMode}
-              onChange={(event) =>
-                setInstallmentFiscalMode(
-                  event.target.value as
-                    | "NOTA_FISCAL_ANTES"
-                    | "RECIBO_POSTERIOR"
-                )
-              }
-            >
-              <option value="RECIBO_POSTERIOR">
-                Emitir Pix e gerar recibo após pagamento
-              </option>
-              <option value="NOTA_FISCAL_ANTES">
-                Exigir Nota Fiscal antes de cada cobrança
-              </option>
-            </select>
-          </label>
-        </div>
-
+      <div style={{ marginTop: "16px" }}>
         <label>
-          Observações das parcelas
-          <textarea
-            rows={2}
-            value={installmentNotes}
-            onChange={(event) => setInstallmentNotes(event.target.value)}
-            placeholder="Ex: Parcelas do saldo após entrega dos serviços."
-          />
+          Modo fiscal das parcelas
+          <select
+            value={installmentFiscalMode}
+            onChange={(event) =>
+              setInstallmentFiscalMode(
+                event.target.value as
+                  | "NOTA_FISCAL_ANTES"
+                  | "RECIBO_POSTERIOR"
+              )
+            }
+          >
+            <option value="RECIBO_POSTERIOR">
+              Emitir Pix e gerar recibo após pagamento
+            </option>
+            <option value="NOTA_FISCAL_ANTES">
+              Exigir Nota Fiscal antes de cada cobrança
+            </option>
+          </select>
         </label>
 
         <button
           className="button primary"
           type="button"
-          disabled={
-            saving ||
-            !entryChargePaid ||
-            hasInstallmentCharges ||
-            !proposalInstallmentQty ||
-            contractBalanceValue <= 0
-          }
+          style={{ marginTop: "12px" }}
+          disabled={saving}
           onClick={handleGenerateInstallmentCharges}
         >
-          Gerar parcelas do saldo
+          Liberar cobranças das parcelas
         </button>
-      </>
+      </div>
     )}
   </div>
 )}
 
-      {!loading && charges.length > 0 && (
-  <div className="table-wrap billing-history-table">
-    <h3>Histórico de cobranças</h3>
-
-    <table className="data-table">
-      <thead>
-        <tr>
-          <th>Cobrança</th>
-          <th>Contrato</th>
-          <th>Status</th>
-          <th>Valor</th>
-          <th>Vencimento</th>
-          <th>Pago em</th>
-          <th>Documento fiscal</th>
-          <th>Ações</th>
-        </tr>
-      </thead>
-
-      <tbody>
-        {charges.map((charge) => {
-          const receipt = (charge.fiscalDocuments || []).find(
-            (document) =>
-              document.status === "ANEXADO" &&
-              document.type === "RECIBO" &&
-              document.moment === "POS_PAGAMENTO"
-          );
-
-          const invoice = (charge.fiscalDocuments || []).find(
-            (document) =>
-              document.status === "ANEXADO" &&
-              document.type === "NOTA_FISCAL"
-          );
-
-          const mainDocument = receipt || invoice;
-
-          return (
-            <tr key={`billing-history-${charge.id}`}>
-<td>
-  <strong>
-    #{charge.id} ·{" "}
-    {charge.chargeType === "PARCELA"
-      ? `Parcela ${charge.installmentNumber || "-"}`
-      : charge.chargeType === "ENTRADA"
-      ? "Entrada"
-      : "Avulsa"}
-  </strong>
-  <small className="table-small">{charge.description}</small>
-</td>
-              <td>{charge.contract?.contractNumber || "-"}</td>
-
-              <td>
-                <span
-                  className={`badge billing-${billingStatusClass(
-                    charge.status
-                  )}`}
-                >
-                  {billingStatusLabel(charge.status)}
-                </span>
-              </td>
-
-              <td>{money(charge.amount)}</td>
-
-              <td>{formatDate(charge.dueDate)}</td>
-
-              <td>{charge.paidAt ? formatDateTime(charge.paidAt) : "-"}</td>
-
-              <td>
-                {mainDocument ? (
-                  <a
-                    className="mini-button"
-                    href={api.fileUrl(mainDocument.filePath)}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {fiscalDocumentTypeLabel(mainDocument.type)}
-                  </a>
-                ) : (
-                  "-"
-                )}
-              </td>
-
-              <td>
-                <div className="table-actions">
-                  {(charge.status === "EMITIDA" ||
-                    charge.status === "ENVIADA" ||
-                    charge.status === "PAGA") && (
-                    <a
-                      className="mini-button"
-                      href={`/cobranca/${charge.id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Ver cobrança
-                    </a>
-                  )}
-
-                  <button
-                    className="mini-button"
-                    type="button"
-                    onClick={() => copyChargeLink(charge)}
-                  >
-                    Copiar link
-                  </button>
-
-                  <button
-                    className="mini-button"
-                    type="button"
-                    onClick={() =>
-                      openWhatsappShare({
-                        phone:
-                          protocol.client.whatsapp ||
-                          protocol.client.phone,
-
-                        message:
-                          `Olá, ${protocol.client.name}. ` +
-                          `Segue a cobrança referente a ${charge.description}:`,
-
-                        pathOrUrl:
-                          `/cobranca/${charge.id}`,
-                      })
-                    }
-                  >
-                    WhatsApp
-                  </button>
-                </div>
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  </div>
-)}
-
-      {!loading && charges.length > 0 && (
+      {!loading && currentContractCharges.length > 0 && (
         <div className="billing-charge-list">
-          {charges.map((charge) => {
+          {currentContractCharges.map((charge) => {
             const hasInvoice = (charge.fiscalDocuments || []).some(
               (document) =>
                 document.status === "ANEXADO" &&
@@ -6587,12 +7595,236 @@ const confirmed = window.confirm(
         </div>
       )}
 
-      {!loading && charges.length === 0 && (
-        <p>Nenhuma cobrança gerada para este protocolo.</p>
+      {!loading &&
+        signedContract &&
+        currentContractCharges.length === 0 && (
+          <p>
+            Nenhuma cobrança foi preparada ainda para o contrato{" "}
+            <strong>{signedContract.contractNumber}</strong>.
+          </p>
+        )}
+    </article>
+  );
+}
+
+
+function BillingHistoryPanel({
+  protocol,
+}: {
+  protocol: BackendProtocol;
+}) {
+  const [charges, setCharges] = useState<BackendBillingCharge[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  async function loadBillingHistory() {
+    try {
+      setLoading(true);
+      setError("");
+
+      const chargesData = (await api.billingCharges(
+        protocol.id
+      )) as BackendBillingCharge[];
+
+      setCharges(Array.isArray(chargesData) ? chargesData : []);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao carregar histórico de cobranças."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadBillingHistory();
+  }, [protocol.id]);
+
+  function copyHistoricalChargeLink(charge: BackendBillingCharge) {
+    const url = `${window.location.origin}/cobranca/${charge.id}`;
+
+    navigator.clipboard
+      .writeText(url)
+      .then(() => {
+        setError("");
+        setSuccess("Link público da cobrança copiado.");
+      })
+      .catch(() => {
+        setSuccess("");
+        setError("Não foi possível copiar o link da cobrança.");
+      });
+  }
+
+  return (
+    <article className="panel billing-history-panel no-print">
+      <div className="panel-header">
+        <div>
+          <h2>Histórico de cobranças</h2>
+          <p>
+            Registro das cobranças vinculadas a este protocolo, incluindo
+            contratos anteriores, vencimentos, pagamentos e documentos.
+          </p>
+        </div>
+
+        <span>{charges.length} cobrança(s)</span>
+      </div>
+
+      {success && <div className="panel success-panel">{success}</div>}
+      {error && <div className="panel error-panel">{error}</div>}
+
+      {loading && <p>Carregando histórico de cobranças...</p>}
+
+      {!loading && !error && charges.length === 0 && (
+        <p>Nenhuma cobrança registrada para este protocolo.</p>
+      )}
+
+      {!loading && !error && charges.length > 0 && (
+        <div className="table-wrap billing-history-table">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Cobrança</th>
+                <th>Contrato</th>
+                <th>Status</th>
+                <th>Valor</th>
+                <th>Vencimento</th>
+                <th>Pago em</th>
+                <th>Documento fiscal</th>
+                <th>Ações</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {charges.map((charge) => {
+                const receipt = (charge.fiscalDocuments || []).find(
+                  (document) =>
+                    document.status === "ANEXADO" &&
+                    document.type === "RECIBO" &&
+                    document.moment === "POS_PAGAMENTO"
+                );
+
+                const invoice = (charge.fiscalDocuments || []).find(
+                  (document) =>
+                    document.status === "ANEXADO" &&
+                    document.type === "NOTA_FISCAL"
+                );
+
+                const mainDocument = receipt || invoice;
+
+                return (
+                  <tr key={`billing-history-${charge.id}`}>
+                    <td>
+                      <strong>
+                        #{charge.id} ·{" "}
+                        {charge.chargeType === "PARCELA"
+                          ? `Parcela ${charge.installmentNumber || "-"}`
+                          : charge.chargeType === "ENTRADA"
+                          ? "Entrada"
+                          : "Avulsa"}
+                      </strong>
+
+                      <small className="table-small">
+                        {charge.description}
+                      </small>
+                    </td>
+
+                    <td>{charge.contract?.contractNumber || "-"}</td>
+
+                    <td>
+                      <span
+                        className={`badge billing-${billingStatusClass(
+                          charge.status
+                        )}`}
+                      >
+                        {billingStatusLabel(charge.status)}
+                      </span>
+                    </td>
+
+                    <td>{money(charge.amount)}</td>
+
+                    <td>{formatDate(charge.dueDate)}</td>
+
+                    <td>
+                      {charge.paidAt
+                        ? formatDateTime(charge.paidAt)
+                        : "-"}
+                    </td>
+
+                    <td>
+                      {mainDocument ? (
+                        <a
+                          className="mini-button"
+                          href={api.fileUrl(mainDocument.filePath)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {fiscalDocumentTypeLabel(mainDocument.type)}
+                        </a>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+
+                    <td>
+                      <div className="table-actions">
+                        {(charge.status === "EMITIDA" ||
+                          charge.status === "ENVIADA" ||
+                          charge.status === "PAGA") && (
+                          <a
+                            className="mini-button"
+                            href={`/cobranca/${charge.id}`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Ver cobrança
+                          </a>
+                        )}
+
+                        <button
+                          className="mini-button"
+                          type="button"
+                          onClick={() =>
+                            copyHistoricalChargeLink(charge)
+                          }
+                        >
+                          Copiar link
+                        </button>
+
+                        <button
+                          className="mini-button"
+                          type="button"
+                          onClick={() =>
+                            openWhatsappShare({
+                              phone:
+                                protocol.client.whatsapp ||
+                                protocol.client.phone,
+
+                              message:
+                                `Olá, ${protocol.client.name}. ` +
+                                `Segue a cobrança referente a ${charge.description}:`,
+
+                              pathOrUrl: `/cobranca/${charge.id}`,
+                            })
+                          }
+                        >
+                          WhatsApp
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </article>
   );
 }
+
 
 function PublicProposalPage() {
   const { token } = useParams();
@@ -8225,6 +9457,35 @@ return (
     )}
 
 {canAccessCommercialFlow && (
+      <details className="protocol-flow-stage protocol-flow-stage--billing-history">
+        <summary className="protocol-flow-stage-summary">
+          <div className="protocol-flow-stage-icon">
+            <History size={21} strokeWidth={1.9} />
+          </div>
+
+          <div className="protocol-flow-stage-copy">
+            <strong>Histórico de cobranças</strong>
+            <span>
+              Cobranças anteriores, vencimentos, pagamentos e documentos fiscais.
+            </span>
+          </div>
+
+          <div className="protocol-flow-stage-action">
+            <span>Ver detalhes</span>
+            <ChevronDown
+              size={16}
+              className="protocol-flow-stage-chevron"
+            />
+          </div>
+        </summary>
+
+        <div className="protocol-flow-stage-body">
+          <BillingHistoryPanel protocol={protocol} />
+        </div>
+      </details>
+    )}
+
+{canAccessCommercialFlow && (
       <details className="protocol-flow-stage protocol-flow-stage--history">
         <summary className="protocol-flow-stage-summary">
           <div className="protocol-flow-stage-icon">
@@ -8706,6 +9967,17 @@ type BackendFinanceTransaction = {
   notificationCount?: number;
   webhookLastReceivedAt?: string | null;
 
+  billingCharge?: {
+    id: number;
+    contractId?: number | null;
+    chargeType?: "ENTRADA" | "PARCELA" | "AVULSA";
+    status?: string;
+    amount?: number;
+    dueDate?: string | null;
+    installmentNumber?: number | null;
+    totalInstallments?: number | null;
+  } | null;
+
 };
 
 type BackendFinanceFixedCost = {
@@ -9051,6 +10323,14 @@ function FinancePage() {
   }
 
   function startEditTransaction(item: BackendFinanceTransaction) {
+    if (item.billingCharge) {
+      setSuccess("");
+      setError(
+        `Este lançamento está vinculado à cobrança #${item.billingCharge.id} e é protegido pelo contrato. Altere seu estado pelo fluxo de Cobranças.`
+      );
+      return;
+    }
+
     setEditingTransaction(item);
     setShowTransactionForm(true);
     setTransactionType(item.type);
@@ -11157,15 +12437,24 @@ async function handleDeleteSalary(id: number) {
 
 <td>
   <div className="table-actions">
-    <button
-      className="mini-button"
-      type="button"
-      onClick={() => startEditTransaction(item)}
-    >
-      Editar
-    </button>
+    {item.billingCharge ? (
+      <span
+        className="mini-button"
+        title={`Lançamento originado pela cobrança #${item.billingCharge.id}`}
+      >
+        🔒 Contratual
+      </span>
+    ) : (
+      <button
+        className="mini-button"
+        type="button"
+        onClick={() => startEditTransaction(item)}
+      >
+        Editar
+      </button>
+    )}
 
-    {item.status !== "PAGO" && (
+    {!item.billingCharge && item.status !== "PAGO" && (
       <button
         className="mini-button"
         type="button"
@@ -11175,7 +12464,7 @@ async function handleDeleteSalary(id: number) {
       </button>
     )}
 
-    {item.status !== "CANCELADO" && (
+    {!item.billingCharge && item.status !== "CANCELADO" && (
       <button
         className="mini-button"
         type="button"
@@ -11185,13 +12474,15 @@ async function handleDeleteSalary(id: number) {
       </button>
     )}
 
-    <button
-      className="mini-button danger"
-      type="button"
-      onClick={() => handleDeleteTransaction(item.id)}
-    >
-      Excluir
-    </button>
+    {!item.billingCharge && (
+      <button
+        className="mini-button danger"
+        type="button"
+        onClick={() => handleDeleteTransaction(item.id)}
+      >
+        Excluir
+      </button>
+    )}
   </div>
 </td>
                   </tr>

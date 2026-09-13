@@ -3,7 +3,10 @@ import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { PrismaClient } from "@prisma/client";
+import {
+  PrismaClient,
+  ProposalPaymentScheduleType,
+} from "@prisma/client";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
@@ -24,6 +27,7 @@ import {
   createBbPixDueCharge,
   getBbPixCharge,
   getBbPixDueCharge,
+  updateBbPixDueChargeDueDate,
 } from "./services/bbPixService";
 
 type UserRole = "CLIENTE" | "ATENDENTE" | "GERENTE" | "PROGRAMADOR";
@@ -137,6 +141,50 @@ function generateFakeLinhaDigitavel(chargeId: number) {
   const base = String(chargeId).padStart(10, "0");
   return `00190.00009 ${base}.000001 00000.000000 1 00000000000000`;
 }
+
+async function getEffectiveContractPaymentDueDate(
+  scheduleId: number
+) {
+  const schedule =
+    await prisma.contractPaymentSchedule.findUnique({
+      where: {
+        id: scheduleId,
+      },
+      include: {
+        dueDateExtensions: {
+          where: {
+            status: "ATIVA",
+          },
+          orderBy: {
+            createdAt: "desc",
+          },
+          take: 1,
+        },
+      },
+    });
+
+  if (!schedule) {
+    throw new Error(
+      "Etapa do cronograma financeiro do contrato não encontrada."
+    );
+  }
+
+  const activeExtension =
+    schedule.dueDateExtensions[0] || null;
+
+  return {
+    schedule,
+    originalDueDate:
+      schedule.dueDate,
+
+    effectiveDueDate:
+      activeExtension?.newDueDate ||
+      schedule.dueDate,
+
+    activeExtension,
+  };
+}
+
 
 async function createProposalHistory(data: {
   protocolId: number;
@@ -1726,6 +1774,13 @@ function buildContractHtmlSnapshot(params: {
   paymentMode: string;
   installmentQty?: number | null;
   installmentAmount?: number | null;
+  paymentSchedule: Array<{
+    type: "ENTRADA" | "PARCELA";
+    installmentNumber: number;
+    totalInstallments: number | null;
+    amountCents: number;
+    dueDate: Date;
+  }>;
   objectText: string;
   obligationsText: string;
   paymentText: string;
@@ -1738,6 +1793,46 @@ function buildContractHtmlSnapshot(params: {
           params.installmentAmount
         )}`
       : "Não aplicável";
+
+  const paymentScheduleRows = params.paymentSchedule
+    .map((item) => {
+      const label =
+        item.type === "ENTRADA"
+          ? "Entrada"
+          : `Parcela ${item.installmentNumber}${
+              item.totalInstallments
+                ? ` de ${item.totalInstallments}`
+                : ""
+            }`;
+
+      return `
+        <tr>
+          <td>${label}</td>
+          <td>${formatCurrencyBRFromCents(item.amountCents)}</td>
+          <td>${formatDateBR(item.dueDate)}</td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  const paymentScheduleHtml =
+    params.paymentSchedule.length > 0
+      ? `
+        <h3>Cronograma financeiro contratado</h3>
+        <table style="width:100%;border-collapse:collapse;">
+          <thead>
+            <tr>
+              <th style="text-align:left;">Etapa</th>
+              <th style="text-align:left;">Valor</th>
+              <th style="text-align:left;">Vencimento</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${paymentScheduleRows}
+          </tbody>
+        </table>
+      `
+      : "";
 
   return `
     <section>
@@ -1773,6 +1868,8 @@ function buildContractHtmlSnapshot(params: {
       <p><strong>Forma de pagamento:</strong> ${params.paymentMode}</p>
       <p><strong>Parcelamento:</strong> ${installments}</p>
       <p>${params.paymentText}</p>
+
+      ${paymentScheduleHtml}
 
       <h2>Prazo</h2>
       <p>${params.deadlineText}</p>
@@ -1813,6 +1910,12 @@ app.post(
               sortOrder: "asc",
             },
           },
+          paymentSchedule: {
+            orderBy: [
+              { dueDate: "asc" },
+              { installmentNumber: "asc" },
+            ],
+          },
         },
       });
 
@@ -1845,6 +1948,29 @@ app.post(
         });
       }
 
+      if (!proposal.paymentSchedule || proposal.paymentSchedule.length === 0) {
+        return res.status(400).json({
+          message:
+            "A proposta aceita não possui cronograma financeiro detalhado. Revise a proposta antes de gerar o contrato.",
+        });
+      }
+
+      const scheduleTotalCents = proposal.paymentSchedule.reduce(
+        (sum, item) => sum + Number(item.amountCents || 0),
+        0
+      );
+
+      const proposalTotalCents = Math.round(
+        Number(proposal.totalAmount || 0) * 100
+      );
+
+      if (scheduleTotalCents !== proposalTotalCents) {
+        return res.status(400).json({
+          message:
+            "O cronograma financeiro da proposta não corresponde ao valor total aprovado.",
+        });
+      }
+
       const company = await getCompanySettings();
 
       const contractNumber = await generateContractNumber();
@@ -1857,19 +1983,27 @@ app.post(
         req.body?.obligationsText ||
         "A CONTRATADA compromete-se a executar os serviços conforme escopo técnico aprovado na proposta comercial, observadas as informações, documentos e condições fornecidas pelo CONTRATANTE. O CONTRATANTE compromete-se a fornecer documentos, informações e acessos necessários à adequada execução dos serviços.";
 
-const paymentText =
-  req.body?.paymentText ||
-  (proposal.paymentMode === "ENTRADA_PARCELAS"
-    ? `O pagamento será realizado com entrada de ${formatCurrencyBRFromFloat(
-        proposal.entryAmount
-      )}, devida após a assinatura do contrato, e saldo remanescente parcelado em ${
-        proposal.installmentQty || 1
-      } parcela(s), com vencimentos definidos após a conclusão ou entrega dos serviços contratados, mediante emissão das respectivas cobranças ao CONTRATANTE.`
-    : proposal.paymentMode === "A_VISTA"
-    ? `O pagamento será realizado à vista, no valor total de ${formatCurrencyBRFromFloat(
-        proposal.totalAmount
-      )}, conforme condições aprovadas na proposta ${proposal.proposalNumber}.`
-    : `O pagamento seguirá as condições comerciais aprovadas na proposta ${proposal.proposalNumber}.`);
+      const paymentScheduleText = proposal.paymentSchedule
+        .map((item) => {
+          const label =
+            item.type === "ENTRADA"
+              ? "Entrada"
+              : `Parcela ${item.installmentNumber}${
+                  item.totalInstallments
+                    ? ` de ${item.totalInstallments}`
+                    : ""
+                }`;
+
+          return `${label}: ${formatCurrencyBRFromCents(
+            item.amountCents
+          )}, vencimento em ${formatDateBR(item.dueDate)}`;
+        })
+        .join("; ");
+
+      const paymentText =
+        req.body?.paymentText ||
+        `O pagamento observará integralmente o cronograma financeiro aprovado na proposta ${proposal.proposalNumber}: ${paymentScheduleText}. Os valores e vencimentos integram as condições comerciais deste contrato.`;
+
       const deadlineText =
         req.body?.deadlineText ||
         (proposal.executionDays
@@ -1896,6 +2030,13 @@ const paymentText =
         paymentMode: proposal.paymentMode,
         installmentQty: proposal.installmentQty,
         installmentAmount: proposal.installmentAmount,
+        paymentSchedule: proposal.paymentSchedule.map((item) => ({
+          type: item.type,
+          installmentNumber: item.installmentNumber,
+          totalInstallments: item.totalInstallments,
+          amountCents: item.amountCents,
+          dueDate: item.dueDate,
+        })),
         objectText,
         obligationsText,
         paymentText,
@@ -1934,6 +2075,16 @@ paymentMode: proposal.paymentMode,
             : null,
 
           notes: `Contrato gerado automaticamente a partir da proposta ${proposal.proposalNumber}.`,
+
+          paymentSchedule: {
+            create: proposal.paymentSchedule.map((item) => ({
+              type: item.type,
+              installmentNumber: item.installmentNumber,
+              totalInstallments: item.totalInstallments,
+              amountCents: item.amountCents,
+              dueDate: item.dueDate,
+            })),
+          },
         },
         include: {
           client: true,
@@ -1943,6 +2094,35 @@ paymentMode: proposal.paymentMode,
             },
           },
           proposal: true,
+          paymentSchedule: {
+            orderBy: [
+              { dueDate: "asc" },
+              { installmentNumber: "asc" },
+            ],
+            include: {
+              dueDateExtensions: {
+                orderBy: {
+                  createdAt: "desc",
+                },
+                include: {
+                  createdBy: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+                  cancelledBy: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
           createdBy: {
             select: {
               id: true,
@@ -2053,6 +2233,35 @@ app.get(
               },
             },
           },
+          paymentSchedule: {
+            orderBy: [
+              { dueDate: "asc" },
+              { installmentNumber: "asc" },
+            ],
+            include: {
+              dueDateExtensions: {
+                orderBy: {
+                  createdAt: "desc",
+                },
+                include: {
+                  createdBy: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+                  cancelledBy: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
           createdBy: {
             select: {
               id: true,
@@ -2109,6 +2318,35 @@ app.get(
             },
           },
           proposal: true,
+          paymentSchedule: {
+            orderBy: [
+              { dueDate: "asc" },
+              { installmentNumber: "asc" },
+            ],
+            include: {
+              dueDateExtensions: {
+                orderBy: {
+                  createdAt: "desc",
+                },
+                include: {
+                  createdBy: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+                  cancelledBy: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
           payments: true,
         },
       });
@@ -2353,6 +2591,12 @@ app.get("/public/contracts/:token", async (req, res) => {
               },
             },
           },
+        },
+        paymentSchedule: {
+          orderBy: [
+            { dueDate: "asc" },
+            { installmentNumber: "asc" },
+          ],
         },
       },
     });
@@ -3853,12 +4097,51 @@ app.get(
 );
 
 app.get("/service-types", async (_req, res) => {
-  const services = await prisma.serviceType.findMany({
-    where: { active: true },
-    orderBy: { name: "asc" },
+  /*
+   * Fonte única de serviços do SIS Amazonika:
+   * Catálogo Técnico-Comercial.
+   *
+   * Mantemos a rota /service-types por compatibilidade
+   * com as telas existentes.
+   */
+  const services = await prisma.catalogService.findMany({
+    where: {
+      active: true,
+    },
+    orderBy: [
+      {
+        category: {
+          sortOrder: "asc",
+        },
+      },
+      {
+        sortOrder: "asc",
+      },
+      {
+        name: "asc",
+      },
+    ],
+    include: {
+      category: true,
+    },
   });
 
-  return res.json(services);
+  return res.json(
+    services.map((service) => ({
+      id: service.id,
+      name: service.name,
+      description:
+        service.shortDescription ||
+        service.proposalDescription ||
+        null,
+      active: service.active,
+
+      code: service.code,
+      acronym: service.acronym,
+      categoryId: service.categoryId,
+      category: service.category,
+    }))
+  );
 });
 
 app.post(
@@ -6922,6 +7205,20 @@ app.get(
       include: {
         category: true,
         catalogService: true,
+
+        billingCharge: {
+          select: {
+            id: true,
+            contractId: true,
+            chargeType: true,
+            status: true,
+            amount: true,
+            dueDate: true,
+            installmentNumber: true,
+            totalInstallments: true,
+          },
+        },
+
         protocol: {
           include: {
             client: true,
@@ -7831,6 +8128,73 @@ app.put(
       notes,
     } = req.body;
 
+    const currentTransaction =
+      await prisma.financialTransaction.findUnique({
+        where: {
+          id,
+        },
+        include: {
+          billingCharge: {
+            select: {
+              id: true,
+              contractId: true,
+              chargeType: true,
+              status: true,
+              amount: true,
+              dueDate: true,
+            },
+          },
+        },
+      });
+
+    if (!currentTransaction) {
+      return res.status(404).json({
+        message: "Lançamento financeiro não encontrado.",
+      });
+    }
+
+    /*
+     * Um lançamento derivado de BillingCharge é reflexo
+     * contábil/financeiro de uma obrigação contratual.
+     *
+     * O Financeiro não pode reescrever o contrato.
+     */
+    if (currentTransaction.billingCharge) {
+      const protectedFields = [
+        "type",
+        "source",
+        "protocolId",
+        "clientId",
+        "catalogServiceId",
+        "description",
+        "amount",
+        "dueDate",
+        "paidAt",
+        "status",
+      ];
+
+      const attemptedProtectedFields =
+        protectedFields.filter(
+          (field) =>
+            Object.prototype.hasOwnProperty.call(
+              req.body || {},
+              field
+            )
+        );
+
+      if (attemptedProtectedFields.length > 0) {
+        return res.status(409).json({
+          message:
+            "Este lançamento foi originado por uma cobrança contratual. Valor, vencimento, status e vínculos são definidos pelo fluxo do contrato e não podem ser alterados manualmente no Financeiro.",
+          code: "CONTRACTUAL_TRANSACTION_LOCKED",
+          billingChargeId:
+            currentTransaction.billingCharge.id,
+          protectedFields:
+            attemptedProtectedFields,
+        });
+      }
+    }
+
     const finalDueDate = normalizeNullableDate(dueDate);
     const finalPaidAt = normalizeNullableDate(paidAt);
 
@@ -7902,34 +8266,81 @@ app.patch(
   authMiddleware,
   requireRoles(["GERENTE", "PROGRAMADOR"]),
   async (req: any, res) => {
-    const id = Number(req.params.id);
+    try {
+      const id = Number(req.params.id);
 
-    const transaction = await prisma.financialTransaction.update({
-      where: { id },
-      data: {
-        status: "PAGO",
-        paidAt: new Date(),
-      },
-      include: {
-        category: true,
-        protocol: true,
-      },
-    });
+      if (!id) {
+        return res.status(400).json({
+          message: "ID do lançamento inválido.",
+        });
+      }
 
-    await prisma.auditLog.create({
-      data: {
-        userId: req.user?.id || null,
-        userName: req.user?.name || null,
-        userEmail: req.user?.email || null,
-        userRole: req.user?.role || null,
-        action: "PAY_FINANCIAL_TRANSACTION",
-        entity: "FinancialTransaction",
-        entityId: String(transaction.id),
-        description: `Transação financeira marcada como paga: ${transaction.description}.`,
-      },
-    });
+      const currentTransaction =
+        await prisma.financialTransaction.findUnique({
+          where: { id },
+          include: {
+            billingCharge: {
+              select: {
+                id: true,
+                contractId: true,
+                chargeType: true,
+                status: true,
+              },
+            },
+          },
+        });
 
-    return res.json(transaction);
+      if (!currentTransaction) {
+        return res.status(404).json({
+          message: "Lançamento financeiro não encontrado.",
+        });
+      }
+
+      if (currentTransaction.billingCharge) {
+        return res.status(409).json({
+          message:
+            "Este lançamento pertence a uma cobrança contratual. O pagamento deve ser confirmado exclusivamente pelo fluxo de Cobranças para preservar contrato, recibo, histórico e conciliação financeira.",
+          code: "CONTRACTUAL_TRANSACTION_LOCKED",
+          billingChargeId: currentTransaction.billingCharge.id,
+        });
+      }
+
+      const transaction = await prisma.financialTransaction.update({
+        where: { id },
+        data: {
+          status: "PAGO",
+          paidAt: new Date(),
+        },
+        include: {
+          category: true,
+          protocol: true,
+        },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          userId: req.user?.id || null,
+          userName: req.user?.name || null,
+          userEmail: req.user?.email || null,
+          userRole: req.user?.role || null,
+          action: "PAY_FINANCIAL_TRANSACTION",
+          entity: "FinancialTransaction",
+          entityId: String(transaction.id),
+          description: `Transação financeira marcada como paga: ${transaction.description}.`,
+        },
+      });
+
+      return res.json(transaction);
+    } catch (error) {
+      console.error("Erro ao marcar lançamento financeiro como pago:", error);
+
+      return res.status(500).json({
+        message:
+          error instanceof Error
+            ? error.message
+            : "Erro ao marcar lançamento financeiro como pago.",
+      });
+    }
   }
 );
 
@@ -7951,11 +8362,30 @@ app.delete(
 
       const transaction = await prisma.financialTransaction.findUnique({
         where: { id },
+        include: {
+          billingCharge: {
+            select: {
+              id: true,
+              contractId: true,
+              chargeType: true,
+              status: true,
+            },
+          },
+        },
       });
 
       if (!transaction) {
         return res.status(404).json({
           message: "Lançamento financeiro não encontrado.",
+        });
+      }
+
+      if (transaction.billingCharge) {
+        return res.status(409).json({
+          message:
+            "Este lançamento pertence a uma cobrança contratual e não pode ser excluído pelo Financeiro. Qualquer alteração deve ocorrer pelo fluxo de Cobranças.",
+          code: "CONTRACTUAL_TRANSACTION_LOCKED",
+          billingChargeId: transaction.billingCharge.id,
         });
       }
 
@@ -9744,6 +10174,244 @@ app.delete(
   }
 );
 
+
+type ProposalPaymentScheduleInput = {
+  type?: "ENTRADA" | "PARCELA";
+  installmentNumber?: number | null;
+  totalInstallments?: number | null;
+  amount?: number;
+  dueDate?: string;
+};
+
+function normalizeProposalPaymentSchedule(
+  input: unknown,
+  totalAmount: number,
+  paymentMode: string
+) {
+  if (!Array.isArray(input) || input.length === 0) {
+    throw new Error(
+      "Informe o cronograma financeiro completo da proposta."
+    );
+  }
+
+  const rows = input as ProposalPaymentScheduleInput[];
+
+  const normalized = rows.map((row, index) => {
+    const type: ProposalPaymentScheduleType | null =
+      row?.type === "ENTRADA"
+        ? ProposalPaymentScheduleType.ENTRADA
+        : row?.type === "PARCELA"
+        ? ProposalPaymentScheduleType.PARCELA
+        : null;
+
+    if (!type) {
+      throw new Error(
+        `Tipo inválido na etapa financeira ${index + 1}.`
+      );
+    }
+
+    const amount = Number(row?.amount);
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error(
+        `Valor inválido na etapa financeira ${index + 1}.`
+      );
+    }
+
+    if (!row?.dueDate) {
+      throw new Error(
+        `Informe o vencimento da etapa financeira ${index + 1}.`
+      );
+    }
+
+    const dueDate = new Date(`${String(row.dueDate).slice(0, 10)}T12:00:00.000Z`);
+
+    if (Number.isNaN(dueDate.getTime())) {
+      throw new Error(
+        `Vencimento inválido na etapa financeira ${index + 1}.`
+      );
+    }
+
+    const installmentNumber =
+      type === "ENTRADA"
+        ? 0
+        : Number(row?.installmentNumber);
+
+    if (
+      !Number.isInteger(installmentNumber) ||
+      installmentNumber < 0
+    ) {
+      throw new Error(
+        `Número inválido na etapa financeira ${index + 1}.`
+      );
+    }
+
+    const totalInstallments =
+      row?.totalInstallments === null ||
+      row?.totalInstallments === undefined
+        ? null
+        : Number(row.totalInstallments);
+
+    if (
+      totalInstallments !== null &&
+      (
+        !Number.isInteger(totalInstallments) ||
+        totalInstallments < 0
+      )
+    ) {
+      throw new Error(
+        `Quantidade total de parcelas inválida na etapa financeira ${index + 1}.`
+      );
+    }
+
+    return {
+      type,
+      installmentNumber,
+      totalInstallments,
+      amountCents: Math.round(amount * 100),
+      dueDate,
+    };
+  });
+
+  const entries =
+    normalized.filter(
+      (row) => row.type === "ENTRADA"
+    );
+
+  const installments =
+    normalized
+      .filter(
+        (row) => row.type === "PARCELA"
+      )
+      .sort(
+        (a, b) =>
+          Number(a.installmentNumber) -
+          Number(b.installmentNumber)
+      );
+
+  if (entries.length > 1) {
+    throw new Error(
+      "O cronograma financeiro pode possuir somente uma entrada."
+    );
+  }
+
+  if (
+    paymentMode === "ENTRADA_PARCELAS" &&
+    entries.length !== 1
+  ) {
+    throw new Error(
+      "Pagamento com entrada + parcelas exige uma entrada."
+    );
+  }
+
+  if (
+    paymentMode === "ENTRADA_PARCELAS" &&
+    installments.length === 0
+  ) {
+    throw new Error(
+      "Pagamento com entrada + parcelas exige pelo menos uma parcela futura."
+    );
+  }
+
+  if (
+    paymentMode === "PARCELADO" &&
+    entries.length > 0
+  ) {
+    throw new Error(
+      "Pagamento parcelado sem entrada não deve possuir etapa do tipo entrada."
+    );
+  }
+
+  if (
+    paymentMode === "PARCELADO" &&
+    installments.length === 0
+  ) {
+    throw new Error(
+      "Pagamento parcelado exige pelo menos uma parcela."
+    );
+  }
+
+  if (
+    paymentMode === "A_VISTA" &&
+    (
+      normalized.length !== 1 ||
+      entries.length !== 1
+    )
+  ) {
+    throw new Error(
+      "Pagamento à vista deve possuir uma única etapa financeira."
+    );
+  }
+
+  for (let i = 0; i < installments.length; i += 1) {
+    const expected = i + 1;
+
+    if (
+      installments[i].installmentNumber !==
+      expected
+    ) {
+      throw new Error(
+        `As parcelas devem ser numeradas sequencialmente de 1 a ${installments.length}.`
+      );
+    }
+  }
+
+  const installmentCount =
+    installments.length;
+
+  for (const installment of installments) {
+    if (
+      installment.totalInstallments !== null &&
+      installment.totalInstallments !==
+        installmentCount
+    ) {
+      throw new Error(
+        "A quantidade total informada nas parcelas não confere com o cronograma."
+      );
+    }
+  }
+
+  const totalScheduleCents =
+    normalized.reduce(
+      (sum, row) =>
+        sum + row.amountCents,
+      0
+    );
+
+  const proposalTotalCents =
+    Math.round(
+      Number(totalAmount || 0) * 100
+    );
+
+  if (
+    totalScheduleCents !==
+    proposalTotalCents
+  ) {
+    throw new Error(
+      `O cronograma financeiro soma R$ ${(totalScheduleCents / 100).toFixed(2)}, mas o valor total da proposta é R$ ${(proposalTotalCents / 100).toFixed(2)}.`
+    );
+  }
+
+  return {
+    normalized,
+    entryAmount:
+      entries.length > 0
+        ? entries[0].amountCents / 100
+        : 0,
+    installmentQty:
+      installmentCount,
+    installmentAmount:
+      installmentCount > 0 &&
+      installments.every(
+        (row) =>
+          row.amountCents ===
+          installments[0].amountCents
+      )
+        ? installments[0].amountCents / 100
+        : null,
+  };
+}
+
 // ------------------------------------------------------
 // PROPOSTAS COMERCIAIS
 // ------------------------------------------------------
@@ -9782,6 +10450,17 @@ app.get(
               sortOrder: "asc",
             },
           },
+
+          paymentSchedule: {
+            orderBy: [
+              {
+                dueDate: "asc",
+              },
+              {
+                installmentNumber: "asc",
+              },
+            ],
+          },
         },
       });
 
@@ -9811,9 +10490,12 @@ app.put(
       }
 
       const existing = await prisma.proposal.findUnique({
-        where: { id },
+        where: {
+          id,
+        },
         include: {
           items: true,
+          paymentSchedule: true,
           protocol: true,
           client: true,
         },
@@ -9840,8 +10522,7 @@ app.put(
         description,
         technicalScope,
         paymentMode,
-        entryAmount,
-        installmentQty,
+        paymentSchedule,
         executionDays,
         validUntil,
         clientMessage,
@@ -9849,7 +10530,7 @@ app.put(
         items,
       } = req.body;
 
-      if (!title) {
+      if (!title || !String(title).trim()) {
         return res.status(400).json({
           message: "Título da proposta é obrigatório.",
         });
@@ -9861,156 +10542,325 @@ app.put(
         });
       }
 
-      const { normalizedItems, totalAmount } = calculateProposalTotals(items);
+      const {
+        normalizedItems,
+        totalAmount,
+      } = calculateProposalTotals(
+        items
+      );
 
       if (totalAmount <= 0) {
-  return res.status(400).json({
-    message: "O valor total da proposta deve ser maior que zero.",
-  });
-}
+        return res.status(400).json({
+          message:
+            "O valor total da proposta deve ser maior que zero.",
+        });
+      }
 
+      const paymentModeValue =
+        paymentMode ||
+        existing.paymentMode ||
+        "ENTRADA_PARCELAS";
 
+      let normalizedScheduleResult:
+        ReturnType<
+          typeof normalizeProposalPaymentSchedule
+        >;
 
+      try {
+        normalizedScheduleResult =
+          normalizeProposalPaymentSchedule(
+            paymentSchedule,
+            totalAmount,
+            paymentModeValue
+          );
+      } catch (scheduleError: any) {
+        return res.status(400).json({
+          message:
+            scheduleError?.message ||
+            "Cronograma financeiro inválido.",
+        });
+      }
 
-      const finalEntryAmount =
-        entryAmount !== undefined && entryAmount !== null && entryAmount !== ""
-          ? toIntMoney(entryAmount)
-          : Math.round(totalAmount * 0.3);
+      /*
+       * Os campos abaixo permanecem sincronizados
+       * por compatibilidade com o fluxo antigo.
+       *
+       * A fonte oficial do detalhamento financeiro,
+       * entretanto, passa a ser ProposalPaymentSchedule.
+       */
+      const scheduleEntryAmount =
+        normalizedScheduleResult.entryAmount;
 
-          if (finalEntryAmount < 0) {
-  return res.status(400).json({
-    message: "O valor da entrada não pode ser negativo.",
-  });
-}
+      const scheduleInstallmentQty =
+        normalizedScheduleResult.installmentQty;
 
-if (finalEntryAmount > totalAmount) {
-  return res.status(400).json({
-    message: "O valor da entrada não pode ser maior que o valor total da proposta.",
-  });
-}
+      const scheduleInstallmentAmount =
+        normalizedScheduleResult.installmentAmount;
 
-      const finalInstallmentQty =
-        installmentQty !== undefined &&
-        installmentQty !== null &&
-        installmentQty !== ""
-          ? Number(installmentQty)
-          : null;
-
-      const installmentAmount =
-        finalInstallmentQty && finalInstallmentQty > 0
-          ? Math.round((totalAmount - finalEntryAmount) / finalInstallmentQty)
-          : null;
-
-          if (finalInstallmentQty !== null && finalInstallmentQty < 0) {
-  return res.status(400).json({
-    message: "A quantidade de parcelas não pode ser negativa.",
-  });
-}
-
-if (
-  paymentMode === "ENTRADA_PARCELAS" &&
-  (!finalInstallmentQty || finalInstallmentQty <= 0)
-) {
-  return res.status(400).json({
-    message: "Informe a quantidade de parcelas para pagamento com entrada + parcelas.",
-  });
-}
-
-if (paymentMode === "A_VISTA" && finalEntryAmount !== totalAmount) {
-  return res.status(400).json({
-    message: "Para pagamento à vista, o valor da entrada deve ser igual ao valor total.",
-  });
-}
-
-
-
-      await prisma.proposalItem.deleteMany({
-        where: {
-          proposalId: id,
-        },
-      });
-
-      const proposal = await prisma.proposal.update({
-        where: { id },
-        data: {
-          title: String(title).trim(),
-          description: description || null,
-          technicalScope: technicalScope || null,
-          paymentMode: paymentMode || "ENTRADA_PARCELAS",
-
-          totalAmount,
-          entryAmount: finalEntryAmount,
-          installmentQty: finalInstallmentQty,
-          installmentAmount,
-
-          executionDays: executionDays ? Number(executionDays) : null,
-          validUntil: validUntil ? new Date(validUntil) : null,
-
-          clientMessage: clientMessage || existing.clientMessage || null,
-          internalNotes: internalNotes || null,
-
-          items: {
-            create: normalizedItems,
+      /*
+       * Nested writes do Prisma:
+       *
+       * - remove itens antigos;
+       * - recria itens;
+       * - remove cronograma antigo;
+       * - recria cronograma;
+       * - atualiza cabeçalho;
+       *
+       * Tudo pertence à mesma operação de atualização
+       * da Proposal, evitando proposta parcialmente salva.
+       */
+      const proposal =
+        await prisma.proposal.update({
+          where: {
+            id,
           },
-        },
-        include: {
-          client: true,
-          protocol: true,
-          items: {
-            orderBy: {
-              sortOrder: "asc",
+
+          data: {
+            title:
+              String(title).trim(),
+
+            description:
+              description || null,
+
+            technicalScope:
+              technicalScope || null,
+
+            paymentMode:
+              paymentModeValue,
+
+            totalAmount,
+
+            entryAmount:
+              scheduleEntryAmount,
+
+            installmentQty:
+              scheduleInstallmentQty,
+
+            installmentAmount:
+              scheduleInstallmentAmount,
+
+            executionDays:
+              executionDays
+                ? Number(executionDays)
+                : null,
+
+            validUntil:
+              validUntil
+                ? new Date(validUntil)
+                : null,
+
+            clientMessage:
+              clientMessage ||
+              existing.clientMessage ||
+              null,
+
+            internalNotes:
+              internalNotes || null,
+
+            items: {
+              deleteMany: {},
+              create:
+                normalizedItems,
+            },
+
+            paymentSchedule: {
+              deleteMany: {},
+              create:
+                normalizedScheduleResult.normalized,
             },
           },
-        },
-      });
+
+          include: {
+            client: true,
+
+            protocol: {
+              include: {
+                serviceType: true,
+              },
+            },
+
+            items: {
+              orderBy: {
+                sortOrder: "asc",
+              },
+            },
+
+            paymentSchedule: {
+              orderBy: [
+                {
+                  dueDate: "asc",
+                },
+                {
+                  installmentNumber:
+                    "asc",
+                },
+              ],
+            },
+          },
+        });
 
       await prisma.auditLog.create({
         data: {
-          userId: req.user?.id || null,
-          userName: req.user?.name || null,
-          userEmail: req.user?.email || null,
-          userRole: req.user?.role || null,
-          action: "UPDATE_PROPOSAL",
-          entity: "Proposal",
-          entityId: String(proposal.id),
-          description: `Proposta ${proposal.proposalNumber} atualizada.`,
-          ipAddress: req.ip,
+          userId:
+            req.user?.id || null,
+
+          userName:
+            req.user?.name || null,
+
+          userEmail:
+            req.user?.email || null,
+
+          userRole:
+            req.user?.role || null,
+
+          action:
+            "UPDATE_PROPOSAL",
+
+          entity:
+            "Proposal",
+
+          entityId:
+            String(proposal.id),
+
+          description:
+            `Proposta ${proposal.proposalNumber} atualizada.`,
+
+          ipAddress:
+            req.ip,
+
+          metadata:
+            JSON.stringify({
+              paymentMode:
+                proposal.paymentMode,
+
+              totalAmount:
+                proposal.totalAmount,
+
+              entryAmount:
+                proposal.entryAmount,
+
+              installmentQty:
+                proposal.installmentQty,
+
+              paymentSchedule:
+                proposal.paymentSchedule.map(
+                  (row) => ({
+                    type:
+                      row.type,
+
+                    installmentNumber:
+                      row.installmentNumber,
+
+                    totalInstallments:
+                      row.totalInstallments,
+
+                    amountCents:
+                      row.amountCents,
+
+                    dueDate:
+                      row.dueDate,
+                  })
+                ),
+            }),
         },
       });
 
-      if (existing.status === "AJUSTE_SOLICITADO") {
+      if (
+        existing.status ===
+        "AJUSTE_SOLICITADO"
+      ) {
         await createProposalHistory({
-          protocolId: proposal.protocolId,
-          proposalId: proposal.id,
-          eventType: "PROPOSTA_AJUSTADA",
-          title: `Proposta ${proposal.proposalNumber} ajustada pela equipe`,
+          protocolId:
+            proposal.protocolId,
+
+          proposalId:
+            proposal.id,
+
+          eventType:
+            "PROPOSTA_AJUSTADA",
+
+          title:
+            `Proposta ${proposal.proposalNumber} ajustada pela equipe`,
+
           description:
             "A proposta foi revisada pela equipe após solicitação de ajuste do cliente.",
-          senderName: req.user?.name || null,
-          senderEmail: req.user?.email || null,
-          createdById: req.user?.id || null,
+
+          senderName:
+            req.user?.name || null,
+
+          senderEmail:
+            req.user?.email || null,
+
+          createdById:
+            req.user?.id || null,
+
           metadata: {
-            proposalNumber: proposal.proposalNumber,
-            previousTotalAmount: existing.totalAmount,
-            newTotalAmount: proposal.totalAmount,
-            previousEntryAmount: existing.entryAmount,
-            newEntryAmount: proposal.entryAmount,
-            previousClientMessage: existing.clientMessage || null,
-            currentClientMessage: proposal.clientMessage || null,
+            proposalNumber:
+              proposal.proposalNumber,
+
+            previousTotalAmount:
+              existing.totalAmount,
+
+            newTotalAmount:
+              proposal.totalAmount,
+
+            previousEntryAmount:
+              existing.entryAmount,
+
+            newEntryAmount:
+              proposal.entryAmount,
+
+            previousClientMessage:
+              existing.clientMessage ||
+              null,
+
+            currentClientMessage:
+              proposal.clientMessage ||
+              null,
+
+            paymentMode:
+              proposal.paymentMode,
+
+            paymentSchedule:
+              proposal.paymentSchedule.map(
+                (row) => ({
+                  type:
+                    row.type,
+
+                  installmentNumber:
+                    row.installmentNumber,
+
+                  totalInstallments:
+                    row.totalInstallments,
+
+                  amountCents:
+                    row.amountCents,
+
+                  dueDate:
+                    row.dueDate,
+                })
+              ),
           },
         });
       }
 
-      return res.json(proposal);
+      return res.json(
+        proposal
+      );
     } catch (error) {
-      console.error("Erro ao atualizar proposta:", error);
+      console.error(
+        "Erro ao atualizar proposta:",
+        error
+      );
 
       return res.status(500).json({
-        message: "Erro ao atualizar proposta.",
+        message:
+          "Erro ao atualizar proposta.",
       });
     }
   }
 );
+
 
 app.post(
   "/proposals",
@@ -10026,6 +10876,7 @@ app.post(
         paymentMode,
         entryAmount,
         installmentQty,
+        paymentSchedule,
         executionDays,
         validUntil,
         clientMessage,
@@ -10112,10 +10963,21 @@ if (
   });
 }
 
-      const installmentAmount =
-        finalInstallmentQty && finalInstallmentQty > 0
-          ? Math.round((totalAmount - finalEntryAmount) / finalInstallmentQty)
-          : null;
+      const normalizedScheduleResult =
+        normalizeProposalPaymentSchedule(
+          paymentSchedule,
+          totalAmount,
+          paymentMode || "ENTRADA_PARCELAS"
+        );
+
+      const scheduleEntryAmount =
+        normalizedScheduleResult.entryAmount;
+
+      const scheduleInstallmentQty =
+        normalizedScheduleResult.installmentQty;
+
+      const scheduleInstallmentAmount =
+        normalizedScheduleResult.installmentAmount;
 
       const proposalNumber = await generateProposalNumber();
 
@@ -10133,9 +10995,9 @@ if (
           paymentMode: paymentMode || "ENTRADA_PARCELAS",
 
           totalAmount,
-          entryAmount: finalEntryAmount,
-          installmentQty: finalInstallmentQty,
-          installmentAmount,
+          entryAmount: scheduleEntryAmount,
+          installmentQty: scheduleInstallmentQty,
+          installmentAmount: scheduleInstallmentAmount,
 
           executionDays: executionDays ? Number(executionDays) : null,
           validUntil: validUntil ? new Date(validUntil) : null,
@@ -10155,6 +11017,10 @@ if (
           items: {
             create: normalizedItems,
           },
+
+          paymentSchedule: {
+            create: normalizedScheduleResult.normalized,
+          },
         },
         include: {
           client: true,
@@ -10162,6 +11028,12 @@ if (
           items: {
             orderBy: {
               sortOrder: "asc",
+            },
+          },
+
+          paymentSchedule: {
+            orderBy: {
+              installmentNumber: "asc",
             },
           },
         },
@@ -10204,150 +11076,6 @@ if (
 
       return res.status(500).json({
         message: "Erro ao criar proposta.",
-      });
-    }
-  }
-);
-
-app.put(
-  "/proposals/:id",
-  authMiddleware,
-  requireRoles(["GERENTE", "PROGRAMADOR"]),
-  async (req: any, res) => {
-    try {
-      const id = Number(req.params.id);
-
-      const existing = await prisma.proposal.findUnique({
-        where: { id },
-        include: {
-          items: true,
-          protocol: true,
-        },
-      });
-
-      if (!existing) {
-        return res.status(404).json({
-          message: "Proposta não encontrada.",
-        });
-      }
-
-      if (existing.status !== "RASCUNHO" && existing.status !== "AJUSTE_SOLICITADO") {
-        return res.status(400).json({
-          message: "Somente propostas em rascunho ou com ajuste solicitado podem ser editadas.",
-        });
-      }
-
-      const {
-        title,
-        description,
-        technicalScope,
-        paymentMode,
-        entryAmount,
-        installmentQty,
-        executionDays,
-        validUntil,
-        clientMessage,
-        internalNotes,
-        items,
-      } = req.body;
-
-      if (!Array.isArray(items) || items.length === 0) {
-        return res.status(400).json({
-          message: "Inclua pelo menos um item na proposta.",
-        });
-      }
-
-      const { normalizedItems, totalAmount } = calculateProposalTotals(items);
-
-const finalEntryAmount =
-  paymentMode === "A_VISTA"
-    ? totalAmount
-    : entryAmount !== undefined && entryAmount !== null && entryAmount !== ""
-    ? toIntMoney(entryAmount)
-    : Math.round(totalAmount * 0.3);
-
-                  if (finalEntryAmount < 0) {
-  return res.status(400).json({
-    message: "O valor da entrada não pode ser negativo.",
-  });
-}
-
-if (finalEntryAmount > totalAmount) {
-  return res.status(400).json({
-    message: "O valor da entrada não pode ser maior que o valor total da proposta.",
-  });
-}
-
-
-      const finalInstallmentQty = installmentQty
-        ? Number(installmentQty)
-        : null;
-
-      const installmentAmount =
-        finalInstallmentQty && finalInstallmentQty > 0
-          ? Math.round((totalAmount - finalEntryAmount) / finalInstallmentQty)
-          : null;
-
-      await prisma.proposalItem.deleteMany({
-        where: {
-          proposalId: id,
-        },
-      });
-
-      const proposal = await prisma.proposal.update({
-        where: { id },
-        data: {
-          title,
-          description: description || null,
-          technicalScope: technicalScope || null,
-          paymentMode: paymentMode || "ENTRADA_PARCELAS",
-
-          totalAmount,
-          entryAmount: finalEntryAmount,
-          installmentQty: finalInstallmentQty,
-          installmentAmount,
-
-          executionDays: executionDays ? Number(executionDays) : null,
-          validUntil: validUntil ? new Date(validUntil) : null,
-
-          clientMessage: clientMessage || null,
-          internalNotes: internalNotes || null,
-
-          items: {
-            create: normalizedItems,
-          },
-        },
-        include: {
-          client: true,
-          protocol: true,
-          items: {
-            orderBy: {
-              sortOrder: "asc",
-            },
-          },
-        },
-      });
-
-      await prisma.auditLog.create({
-        data: {
-          userId: req.user?.id || null,
-          userName: req.user?.name || null,
-          userEmail: req.user?.email || null,
-          userRole: req.user?.role || null,
-          action: "UPDATE_PROPOSAL",
-          entity: "Proposal",
-          entityId: String(proposal.id),
-          description: `Proposta ${proposal.proposalNumber} atualizada.`,
-          ipAddress: req.ip,
-        },
-      });
-
-      return res.json(proposal);
-    } catch (error) {
-      console.error("Erro ao atualizar proposta:", error);
-
-      return res.status(500).json({
-        message: "Erro ao atualizar proposta.",
       });
     }
   }
@@ -10940,6 +11668,1577 @@ app.get(
 );
 
 app.post(
+  "/contracts/:id/payment-schedule/:scheduleId/extend-due-date",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  async (req: AuthRequest, res) => {
+    try {
+      const contractId =
+        Number(req.params.id);
+
+      const scheduleId =
+        Number(req.params.scheduleId);
+
+      if (!contractId) {
+        return res.status(400).json({
+          message:
+            "ID do contrato inválido.",
+        });
+      }
+
+      if (!scheduleId) {
+        return res.status(400).json({
+          message:
+            "ID da etapa financeira inválido.",
+        });
+      }
+
+      const justification =
+        String(
+          req.body?.justification ||
+          ""
+        ).trim();
+
+      if (
+        justification.length < 10
+      ) {
+        return res.status(400).json({
+          message:
+            "Informe uma justificativa para a prorrogação com pelo menos 10 caracteres.",
+        });
+      }
+
+      const rawNewDueDate =
+        String(
+          req.body?.newDueDate ||
+          ""
+        ).slice(0, 10);
+
+      if (!rawNewDueDate) {
+        return res.status(400).json({
+          message:
+            "Informe o novo vencimento.",
+        });
+      }
+
+      /*
+       * Meio-dia UTC evita deslocamento acidental
+       * da data contratual entre fusos.
+       */
+      const newDueDate =
+        new Date(
+          `${rawNewDueDate}T12:00:00.000Z`
+        );
+
+      if (
+        Number.isNaN(
+          newDueDate.getTime()
+        )
+      ) {
+        return res.status(400).json({
+          message:
+            "Novo vencimento inválido.",
+        });
+      }
+
+      const contract =
+        await prisma.contract.findUnique({
+          where: {
+            id: contractId,
+          },
+          include: {
+            client: true,
+
+            protocol: {
+              include: {
+                serviceType: true,
+              },
+            },
+
+            proposal: true,
+
+            paymentSchedule: {
+              where: {
+                id: scheduleId,
+              },
+              include: {
+                dueDateExtensions: {
+                  where: {
+                    status: "ATIVA",
+                  },
+                  orderBy: {
+                    createdAt:
+                      "desc",
+                  },
+                },
+              },
+            },
+
+            billingCharges: true,
+          },
+        });
+
+      if (!contract) {
+        return res.status(404).json({
+          message:
+            "Contrato não encontrado.",
+        });
+      }
+
+      if (
+        contract.status !==
+        "ASSINADO"
+      ) {
+        return res.status(400).json({
+          message:
+            "Somente contratos assinados podem ter vencimentos prorrogados.",
+        });
+      }
+
+      const schedule =
+        contract.paymentSchedule[0];
+
+      if (!schedule) {
+        return res.status(404).json({
+          message:
+            "A etapa financeira informada não pertence a este contrato.",
+        });
+      }
+
+      /*
+       * Localiza exatamente a BillingCharge correspondente,
+       * caso ela já tenha sido preparada.
+       */
+      const matchingCharge =
+        contract.billingCharges.find(
+          (charge) => {
+            if (
+              schedule.type ===
+              "ENTRADA"
+            ) {
+              return (
+                charge.chargeType ===
+                  "ENTRADA" &&
+                charge.status !==
+                  "CANCELADA" &&
+                charge.status !==
+                  "ERRO"
+              );
+            }
+
+            return (
+              charge.chargeType ===
+                "PARCELA" &&
+              Number(
+                charge.installmentNumber
+              ) ===
+                Number(
+                  schedule.installmentNumber
+                ) &&
+              charge.status !==
+                "CANCELADA" &&
+              charge.status !==
+                "ERRO"
+            );
+          }
+        ) || null;
+
+      /*
+       * Pagamento liquidado nunca pode ser prorrogado.
+       */
+      if (
+        matchingCharge?.status ===
+        "PAGA"
+      ) {
+        return res.status(409).json({
+          message:
+            "Esta etapa já está paga e não pode ter o vencimento prorrogado.",
+          code:
+            "PAYMENT_ALREADY_PAID",
+          billingChargeId:
+            matchingCharge.id,
+        });
+      }
+
+      /*
+       * Cobrança já emitida:
+       *
+       * Para cobrança Pix com vencimento do Banco do Brasil,
+       * NÃO geramos novo TXID.
+       *
+       * O mesmo /cobv/{txid} será alterado através de PATCH,
+       * preservando:
+       *
+       * - TXID;
+       * - valor;
+       * - pagador;
+       * - vínculo contratual;
+       * - histórico da cobrança.
+       */
+      const hasBankEmission =
+        Boolean(
+          matchingCharge &&
+          (
+            matchingCharge.status === "EMITIDA" ||
+            matchingCharge.status === "ENVIADA" ||
+            matchingCharge.status === "VENCIDA" ||
+            matchingCharge.txid ||
+            matchingCharge.externalId
+          )
+        );
+
+      if (
+        hasBankEmission &&
+        matchingCharge?.provider !== "BANCO_DO_BRASIL"
+      ) {
+        return res.status(409).json({
+          message:
+            "Esta cobrança já foi emitida, mas não pertence ao provedor Banco do Brasil. O vencimento não pode ser alterado automaticamente.",
+          code:
+            "BILLING_PROVIDER_UNSUPPORTED_FOR_EXTENSION",
+          billingChargeId:
+            matchingCharge?.id || null,
+          provider:
+            matchingCharge?.provider || null,
+        });
+      }
+
+      if (
+        hasBankEmission &&
+        !matchingCharge?.txid
+      ) {
+        return res.status(409).json({
+          message:
+            "A cobrança já possui emissão bancária, mas não possui TXID registrado. A prorrogação automática foi bloqueada para evitar divergência com o Banco do Brasil.",
+          code:
+            "BILLING_TXID_REQUIRED_FOR_EXTENSION",
+          billingChargeId:
+            matchingCharge?.id || null,
+        });
+      }
+
+      const currentExtension =
+        schedule
+          .dueDateExtensions[0] ||
+        null;
+
+      const effectiveDueDate =
+        currentExtension?.newDueDate ||
+        schedule.dueDate;
+
+      if (
+        newDueDate.getTime() <=
+        new Date(
+          effectiveDueDate
+        ).getTime()
+      ) {
+        return res.status(400).json({
+          message:
+            "O novo vencimento deve ser posterior ao vencimento atualmente vigente.",
+        });
+      }
+
+      /*
+       * =====================================================
+       * SINCRONIZAÇÃO COM BANCO DO BRASIL
+       * =====================================================
+       *
+       * Regra:
+       *
+       * 1. Se ainda não houve emissão bancária:
+       *    altera somente o estado local.
+       *
+       * 2. Se já existe /cobv emitida:
+       *    altera PRIMEIRO o vencimento no BB.
+       *
+       * 3. Confirma a cobrança no BB pelo mesmo TXID.
+       *
+       * 4. Somente depois grava a prorrogação local.
+       *
+       * Não geramos novo TXID.
+       */
+      let bbDueDateUpdateResult: any =
+        null;
+
+      let bbDueDateConfirmation: any =
+        null;
+
+      if (
+        hasBankEmission &&
+        matchingCharge?.txid
+      ) {
+        try {
+          bbDueDateUpdateResult =
+            await updateBbPixDueChargeDueDate({
+              txid:
+                matchingCharge.txid,
+
+              dueDate:
+                newDueDate,
+            });
+
+          /*
+           * Read-after-write.
+           *
+           * Não confiamos apenas no retorno do PATCH.
+           * Consultamos a mesma cobv pelo TXID.
+           */
+          bbDueDateConfirmation =
+            await getBbPixDueCharge(
+              matchingCharge.txid
+            );
+
+          const confirmedDueDate =
+            String(
+              bbDueDateConfirmation
+                ?.calendario
+                ?.dataDeVencimento ||
+              ""
+            ).slice(0, 10);
+
+          const expectedDueDate =
+            newDueDate
+              .toISOString()
+              .slice(0, 10);
+
+          if (
+            confirmedDueDate !==
+            expectedDueDate
+          ) {
+            throw new Error(
+              `O Banco do Brasil não confirmou o novo vencimento. Esperado: ${expectedDueDate}; retornado: ${confirmedDueDate || "não informado"}.`
+            );
+          }
+        } catch (bbError: any) {
+          console.error(
+            "Erro ao prorrogar cobrança /cobv no Banco do Brasil:",
+            {
+              billingChargeId:
+                matchingCharge.id,
+
+              txid:
+                matchingCharge.txid,
+
+              previousDueDate:
+                effectiveDueDate,
+
+              newDueDate,
+
+              message:
+                bbError?.message,
+
+              status:
+                bbError?.response?.status,
+
+              data:
+                bbError?.response?.data,
+            }
+          );
+
+          return res.status(502).json({
+            message:
+              "O Banco do Brasil não confirmou a alteração do vencimento. Nenhuma alteração local foi realizada.",
+
+            code:
+              "BB_DUE_DATE_EXTENSION_FAILED",
+
+            billingChargeId:
+              matchingCharge.id,
+
+            txid:
+              matchingCharge.txid,
+
+            bbStatus:
+              bbError?.response?.status ||
+              null,
+
+            bbData:
+              bbError?.response?.data ||
+              null,
+          });
+        }
+      }
+
+      /*
+       * =====================================================
+       * TRANSAÇÃO LOCAL
+       * =====================================================
+       *
+       * - preserva cronograma original;
+       * - substitui eventual prorrogação ativa;
+       * - cria nova prorrogação;
+       * - sincroniza BillingCharge;
+       * - sincroniza lançamento financeiro pendente.
+       *
+       * Caso a transação local falhe depois de o BB já ter
+       * sido alterado, fazemos uma tentativa compensatória
+       * de restaurar o vencimento anterior no BB.
+       */
+      let extension;
+
+      try {
+        extension =
+          await prisma.$transaction(
+            async (tx) => {
+            if (currentExtension) {
+              await tx.paymentDueDateExtension.update({
+                where: {
+                  id:
+                    currentExtension.id,
+                },
+                data: {
+                  status:
+                    "SUBSTITUIDA",
+                },
+              });
+            }
+
+            const created =
+              await tx.paymentDueDateExtension.create({
+                data: {
+                  contractId:
+                    contract.id,
+
+                  contractPaymentScheduleId:
+                    schedule.id,
+
+                  billingChargeId:
+                    matchingCharge?.id ||
+                    null,
+
+                  previousDueDate:
+                    effectiveDueDate,
+
+                  newDueDate,
+
+                  justification,
+
+                  status:
+                    "ATIVA",
+
+                  createdById:
+                    req.user?.id ||
+                    null,
+                },
+              });
+
+            if (matchingCharge) {
+              await tx.billingCharge.update({
+                where: {
+                  id:
+                    matchingCharge.id,
+                },
+                data: {
+                  dueDate:
+                    newDueDate,
+
+                  /*
+                   * Uma cobrança vencida que recebeu novo
+                   * vencimento futuro deixa de estar vencida.
+                   *
+                   * Se ela já havia sido enviada ao cliente,
+                   * volta para ENVIADA. Caso contrário,
+                   * volta para EMITIDA.
+                   */
+                  ...(matchingCharge.status ===
+                  "VENCIDA"
+                    ? {
+                        status:
+                          matchingCharge.sentToClientAt
+                            ? "ENVIADA"
+                            : "EMITIDA",
+                      }
+                    : {}),
+                },
+              });
+
+              if (
+                matchingCharge
+                  .financialTransactionId
+              ) {
+                const financialTransaction =
+                  await tx.financialTransaction.findUnique({
+                    where: {
+                      id:
+                        matchingCharge
+                          .financialTransactionId,
+                    },
+                  });
+
+                if (
+                  financialTransaction &&
+                  financialTransaction.status ===
+                    "PENDENTE"
+                ) {
+                  await tx.financialTransaction.update({
+                    where: {
+                      id:
+                        financialTransaction.id,
+                    },
+                    data: {
+                      dueDate:
+                        newDueDate,
+
+                      competenceMonth:
+                        getCompetenceMonthFromDate(
+                          newDueDate
+                        ),
+                    },
+                  });
+                }
+              }
+            }
+
+              return created;
+            }
+          );
+      } catch (localError) {
+        /*
+         * COMPENSAÇÃO:
+         *
+         * Banco alterado + banco local falhou.
+         * Tentamos devolver a /cobv ao vencimento que
+         * estava vigente antes desta operação.
+         */
+        if (
+          hasBankEmission &&
+          matchingCharge?.txid
+        ) {
+          try {
+            await updateBbPixDueChargeDueDate({
+              txid:
+                matchingCharge.txid,
+
+              dueDate:
+                effectiveDueDate,
+            });
+
+            console.warn(
+              "Prorrogação local falhou; vencimento da cobrança foi restaurado no Banco do Brasil.",
+              {
+                billingChargeId:
+                  matchingCharge.id,
+
+                txid:
+                  matchingCharge.txid,
+
+                restoredDueDate:
+                  effectiveDueDate,
+              }
+            );
+          } catch (rollbackError: any) {
+            console.error(
+              "ERRO CRÍTICO: falha local e também falha ao restaurar vencimento no Banco do Brasil.",
+              {
+                billingChargeId:
+                  matchingCharge.id,
+
+                txid:
+                  matchingCharge.txid,
+
+                intendedRollbackDueDate:
+                  effectiveDueDate,
+
+                rollbackMessage:
+                  rollbackError?.message,
+
+                rollbackStatus:
+                  rollbackError
+                    ?.response
+                    ?.status,
+
+                rollbackData:
+                  rollbackError
+                    ?.response
+                    ?.data,
+              }
+            );
+          }
+        }
+
+        throw localError;
+      }
+
+      const stageLabel =
+        schedule.type ===
+        "ENTRADA"
+          ? "entrada"
+          : `parcela ${schedule.installmentNumber}/${
+              schedule.totalInstallments ||
+              "-"
+            }`;
+
+      await createProposalHistory({
+        protocolId:
+          contract.protocolId,
+
+        proposalId:
+          contract.proposalId ||
+          null,
+
+        eventType:
+          "VENCIMENTO_PRORROGADO",
+
+        title:
+          `Vencimento da ${stageLabel} prorrogado`,
+
+        description:
+          `O vencimento da ${stageLabel} do contrato ${contract.contractNumber} foi prorrogado mediante justificativa registrada no sistema.`,
+
+        senderName:
+          req.user?.name ||
+          null,
+
+        senderEmail:
+          req.user?.email ||
+          null,
+
+        createdById:
+          req.user?.id ||
+          null,
+
+        metadata: {
+          extensionId:
+            extension.id,
+
+          contractId:
+            contract.id,
+
+          contractNumber:
+            contract.contractNumber,
+
+          contractPaymentScheduleId:
+            schedule.id,
+
+          billingChargeId:
+            matchingCharge?.id ||
+            null,
+
+          type:
+            schedule.type,
+
+          installmentNumber:
+            schedule.installmentNumber,
+
+          originalDueDate:
+            schedule.dueDate,
+
+          previousDueDate:
+            effectiveDueDate,
+
+          newDueDate,
+
+          justification,
+
+          bankDueDateUpdated:
+            Boolean(
+              hasBankEmission &&
+              matchingCharge?.txid
+            ),
+
+          bankTxid:
+            matchingCharge?.txid ||
+            null,
+
+          bbDueDateUpdateResult:
+            bbDueDateUpdateResult ||
+            null,
+
+          bbDueDateConfirmation:
+            bbDueDateConfirmation ||
+            null,
+        },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          userId:
+            req.user?.id ||
+            null,
+
+          userName:
+            req.user?.name ||
+            null,
+
+          userEmail:
+            req.user?.email ||
+            null,
+
+          userRole:
+            req.user?.role ||
+            null,
+
+          action:
+            "EXTEND_CONTRACT_PAYMENT_DUE_DATE",
+
+          entity:
+            "PaymentDueDateExtension",
+
+          entityId:
+            String(
+              extension.id
+            ),
+
+          description:
+            `Vencimento da ${stageLabel} do contrato ${contract.contractNumber} prorrogado.`,
+
+          ipAddress:
+            req.ip,
+
+          metadata:
+            safeJson({
+              contractId:
+                contract.id,
+
+              contractNumber:
+                contract.contractNumber,
+
+              contractPaymentScheduleId:
+                schedule.id,
+
+              billingChargeId:
+                matchingCharge?.id ||
+                null,
+
+              originalDueDate:
+                schedule.dueDate,
+
+              previousDueDate:
+                effectiveDueDate,
+
+              newDueDate,
+
+              justification,
+
+              bankDueDateUpdated:
+                Boolean(
+                  hasBankEmission &&
+                  matchingCharge?.txid
+                ),
+
+              bankTxid:
+                matchingCharge?.txid ||
+                null,
+
+              bbDueDateUpdateResult:
+                bbDueDateUpdateResult ||
+                null,
+
+              bbDueDateConfirmation:
+                bbDueDateConfirmation ||
+                null,
+            }),
+        },
+      });
+
+
+      /*
+       * =====================================================
+       * NOTIFICAÇÃO AO CLIENTE
+       * =====================================================
+       *
+       * Esta etapa é deliberadamente NÃO TRANSACIONAL.
+       *
+       * Neste ponto:
+       * - o Banco do Brasil já confirmou a alteração,
+       *   quando aplicável;
+       * - a transação local já foi concluída;
+       * - o histórico administrativo já foi gravado.
+       *
+       * Portanto uma eventual falha de SMTP NÃO desfaz
+       * a prorrogação financeira.
+       */
+      let extensionEmailResult: {
+        sent: boolean;
+        messageId?: string | null;
+        error?: string | null;
+      } = {
+        sent: false,
+      };
+
+      if (contract.client.email) {
+        try {
+          const settings =
+            await getSmtpSettings();
+
+          const company =
+            await getCompanySettings();
+
+          const transporter =
+            await createTransporterFromSettings();
+
+          if (!transporter) {
+            throw new Error(
+              "SMTP não configurado para envio da notificação de prorrogação."
+            );
+          }
+
+          const stageEmailLabel =
+            schedule.type === "ENTRADA"
+              ? "Entrada"
+              : `Parcela ${schedule.installmentNumber}${
+                  schedule.totalInstallments
+                    ? ` de ${schedule.totalInstallments}`
+                    : ""
+                }`;
+
+          const previousDueDateFormatted =
+            formatDateBR(
+              effectiveDueDate
+            );
+
+          const newDueDateFormatted =
+            formatDateBR(
+              newDueDate
+            );
+
+          const amountFormatted =
+            formatCurrencyBRFromCents(
+              schedule.amountCents
+            );
+
+          /*
+           * Só mostramos acesso direto à cobrança quando ela
+           * realmente está disponível para o cliente.
+           *
+           * Cobrança apenas preparada não recebe botão.
+           */
+          const clientChargeAvailable =
+            Boolean(
+              matchingCharge &&
+              (
+                matchingCharge.status ===
+                  "EMITIDA" ||
+                matchingCharge.status ===
+                  "ENVIADA" ||
+                matchingCharge.status ===
+                  "VENCIDA"
+              ) &&
+              matchingCharge.txid
+            );
+
+          const chargeUrl =
+            clientChargeAvailable &&
+            matchingCharge
+              ? getChargePublicUrl(
+                  matchingCharge.id
+                )
+              : null;
+
+          const chargeAccessHtml =
+            chargeUrl
+              ? `
+                <div
+                  style="
+                    margin:26px 0;
+                    text-align:center;
+                  "
+                >
+                  <a
+                    href="${escapeHtml(chargeUrl)}"
+                    target="_blank"
+                    style="
+                      display:inline-block;
+                      background:#123c32;
+                      color:#ffffff;
+                      text-decoration:none;
+                      padding:14px 26px;
+                      border-radius:999px;
+                      font-weight:bold;
+                    "
+                  >
+                    Acessar cobrança
+                  </a>
+                </div>
+
+                <p
+                  style="
+                    font-size:13px;
+                    color:#64748b;
+                    line-height:1.5;
+                  "
+                >
+                  Caso o botão não funcione, copie e cole
+                  este endereço no navegador:<br>
+                  ${escapeHtml(chargeUrl)}
+                </p>
+              `
+              : `
+                <div
+                  style="
+                    background:#f8fafc;
+                    border:1px solid #e2e8f0;
+                    border-radius:14px;
+                    padding:16px 18px;
+                    margin:20px 0;
+                    color:#475569;
+                    line-height:1.6;
+                  "
+                >
+                  A cobrança desta etapa ainda não está
+                  disponível para pagamento. Ela será
+                  disponibilizada conforme o fluxo financeiro
+                  previsto no contrato.
+                </div>
+              `;
+
+          const html = `
+            <div
+              style="
+                font-family:Arial,sans-serif;
+                background:#f4f7f5;
+                padding:24px;
+              "
+            >
+              <div
+                style="
+                  max-width:760px;
+                  margin:0 auto;
+                  background:#ffffff;
+                  border-radius:20px;
+                  overflow:hidden;
+                  border:1px solid #dbe7df;
+                "
+              >
+                <div
+                  style="
+                    background:#123c32;
+                    color:#ffffff;
+                    padding:26px;
+                  "
+                >
+                  <div
+                    style="
+                      font-size:12px;
+                      text-transform:uppercase;
+                      letter-spacing:.08em;
+                      color:#d8f3e5;
+                      margin-bottom:8px;
+                    "
+                  >
+                    Atualização financeira contratual
+                  </div>
+
+                  <h1
+                    style="
+                      margin:0;
+                      font-size:24px;
+                    "
+                  >
+                    Novo vencimento autorizado
+                  </h1>
+
+                  <p
+                    style="
+                      margin:8px 0 0;
+                      color:#d8f3e5;
+                    "
+                  >
+                    ${escapeHtml(
+                      company.companyName ||
+                      "AMAZONIKA Engenharia & Meio Ambiente"
+                    )}
+                  </p>
+                </div>
+
+                <div
+                  style="
+                    padding:28px;
+                    color:#1f2937;
+                  "
+                >
+                  <p>
+                    Prezado(a)
+                    <strong>${escapeHtml(
+                      contract.client.name
+                    )}</strong>,
+                  </p>
+
+                  <p
+                    style="
+                      line-height:1.65;
+                    "
+                  >
+                    Informamos que foi autorizada uma
+                    prorrogação de vencimento referente ao
+                    contrato
+                    <strong>${escapeHtml(
+                      contract.contractNumber
+                    )}</strong>.
+                  </p>
+
+                  <div
+                    style="
+                      background:#f8fbf9;
+                      border:1px solid #dfe7e2;
+                      border-radius:16px;
+                      padding:18px;
+                      margin:20px 0;
+                    "
+                  >
+                    <p>
+                      <strong>Contrato:</strong>
+                      ${escapeHtml(
+                        contract.contractNumber
+                      )}
+                    </p>
+
+                    <p>
+                      <strong>Protocolo:</strong>
+                      ${escapeHtml(
+                        contract.protocol
+                          .protocolNumber
+                      )}
+                    </p>
+
+                    <p>
+                      <strong>Serviço:</strong>
+                      ${escapeHtml(
+                        contract.protocol
+                          .serviceType
+                          .name
+                      )}
+                    </p>
+
+                    <p>
+                      <strong>Etapa:</strong>
+                      ${escapeHtml(
+                        stageEmailLabel
+                      )}
+                    </p>
+
+                    <p>
+                      <strong>Valor:</strong>
+                      ${escapeHtml(
+                        amountFormatted
+                      )}
+                    </p>
+                  </div>
+
+                  <div
+                    style="
+                      background:#effaf5;
+                      border:1px solid #b9e5cf;
+                      border-radius:16px;
+                      padding:18px;
+                      margin:20px 0;
+                    "
+                  >
+                    <p
+                      style="
+                        margin:0 0 12px;
+                        font-weight:bold;
+                        color:#123c32;
+                      "
+                    >
+                      Alteração do vencimento
+                    </p>
+
+                    <p>
+                      <strong>Vencimento anterior:</strong>
+                      ${escapeHtml(
+                        previousDueDateFormatted
+                      )}
+                    </p>
+
+                    <p>
+                      <strong>Novo vencimento vigente:</strong>
+                      <span
+                        style="
+                          color:#0f766e;
+                          font-weight:bold;
+                        "
+                      >
+                        ${escapeHtml(
+                          newDueDateFormatted
+                        )}
+                      </span>
+                    </p>
+                  </div>
+
+                  <p
+                    style="
+                      line-height:1.65;
+                    "
+                  >
+                    O valor contratado
+                    <strong>não foi alterado</strong>.
+                    A modificação refere-se exclusivamente
+                    ao vencimento desta etapa financeira.
+                  </p>
+
+                  ${chargeAccessHtml}
+
+                  <div
+                    style="
+                      margin-top:28px;
+                      padding-top:18px;
+                      border-top:1px solid #e5e7eb;
+                      color:#64748b;
+                      font-size:13px;
+                      line-height:1.6;
+                    "
+                  >
+                    Esta é uma comunicação automática
+                    vinculada ao histórico financeiro do
+                    contrato ${escapeHtml(
+                      contract.contractNumber
+                    )}.
+                  </div>
+                </div>
+              </div>
+            </div>
+          `;
+
+          const info =
+            await transporter.sendMail({
+              from:
+                settings.smtpFrom,
+
+              to:
+                contract.client.email,
+
+              subject:
+                `Novo vencimento autorizado — ${contract.contractNumber}`,
+
+              html,
+
+              attachments:
+                getEmailImageAttachments(),
+            });
+
+          extensionEmailResult = {
+            sent: true,
+            messageId:
+              info.messageId ||
+              null,
+          };
+
+          /*
+           * Histórico independente da própria prorrogação.
+           */
+          try {
+            await createProposalHistory({
+              protocolId:
+                contract.protocolId,
+
+              proposalId:
+                contract.proposalId ||
+                null,
+
+              eventType:
+                "NOTIFICACAO_PRORROGACAO_ENVIADA",
+
+              title:
+                `Notificação de prorrogação enviada ao cliente`,
+
+              description:
+                `O novo vencimento da ${stageEmailLabel.toLowerCase()} do contrato ${contract.contractNumber} foi comunicado por e-mail ao cliente.`,
+
+              recipient:
+                contract.client.email,
+
+              senderName:
+                req.user?.name ||
+                null,
+
+              senderEmail:
+                req.user?.email ||
+                null,
+
+              createdById:
+                req.user?.id ||
+                null,
+
+              metadata: {
+                extensionId:
+                  extension.id,
+
+                contractId:
+                  contract.id,
+
+                contractNumber:
+                  contract.contractNumber,
+
+                contractPaymentScheduleId:
+                  schedule.id,
+
+                billingChargeId:
+                  matchingCharge?.id ||
+                  null,
+
+                recipient:
+                  contract.client.email,
+
+                previousDueDate:
+                  effectiveDueDate,
+
+                newDueDate,
+
+                amountCents:
+                  schedule.amountCents,
+
+                messageId:
+                  info.messageId ||
+                  null,
+
+                accepted:
+                  info.accepted,
+
+                rejected:
+                  info.rejected,
+
+                chargeUrl:
+                  chargeUrl ||
+                  null,
+              },
+            });
+          } catch (
+            historyError
+          ) {
+            console.error(
+              "Falha ao registrar histórico do envio da notificação de prorrogação:",
+              historyError
+            );
+          }
+
+          /*
+           * AuditLog do envio.
+           */
+          try {
+            await prisma.auditLog.create({
+              data: {
+                userId:
+                  req.user?.id ||
+                  null,
+
+                userName:
+                  req.user?.name ||
+                  null,
+
+                userEmail:
+                  req.user?.email ||
+                  null,
+
+                userRole:
+                  req.user?.role ||
+                  null,
+
+                action:
+                  "SEND_PAYMENT_DUE_DATE_EXTENSION_EMAIL",
+
+                entity:
+                  "PaymentDueDateExtension",
+
+                entityId:
+                  String(
+                    extension.id
+                  ),
+
+                description:
+                  `Notificação do novo vencimento do contrato ${contract.contractNumber} enviada ao cliente.`,
+
+                ipAddress:
+                  req.ip,
+
+                metadata:
+                  safeJson({
+                    extensionId:
+                      extension.id,
+
+                    contractId:
+                      contract.id,
+
+                    contractPaymentScheduleId:
+                      schedule.id,
+
+                    billingChargeId:
+                      matchingCharge?.id ||
+                      null,
+
+                    recipient:
+                      contract.client.email,
+
+                    previousDueDate:
+                      effectiveDueDate,
+
+                    newDueDate,
+
+                    messageId:
+                      info.messageId ||
+                      null,
+
+                    chargeUrl:
+                      chargeUrl ||
+                      null,
+                  }),
+              },
+            });
+          } catch (
+            auditError
+          ) {
+            console.error(
+              "Falha ao registrar AuditLog do e-mail de prorrogação:",
+              auditError
+            );
+          }
+        } catch (
+          emailError: any
+        ) {
+          const emailErrorMessage =
+            emailError?.message ||
+            "Erro desconhecido no envio da notificação.";
+
+          extensionEmailResult = {
+            sent: false,
+            error:
+              emailErrorMessage,
+          };
+
+          console.error(
+            "Prorrogação concluída, mas a notificação por e-mail falhou:",
+            {
+              extensionId:
+                extension.id,
+
+              contractId:
+                contract.id,
+
+              recipient:
+                contract.client.email,
+
+              message:
+                emailErrorMessage,
+            }
+          );
+
+          /*
+           * A falha do e-mail NÃO altera nem desfaz
+           * a prorrogação já realizada.
+           */
+          try {
+            await createProposalHistory({
+              protocolId:
+                contract.protocolId,
+
+              proposalId:
+                contract.proposalId ||
+                null,
+
+              eventType:
+                "NOTIFICACAO_PRORROGACAO_FALHOU",
+
+              title:
+                "Falha no envio da notificação de prorrogação",
+
+              description:
+                `O vencimento foi prorrogado com sucesso, porém não foi possível enviar a comunicação automática para ${contract.client.email}.`,
+
+              recipient:
+                contract.client.email,
+
+              senderName:
+                req.user?.name ||
+                null,
+
+              senderEmail:
+                req.user?.email ||
+                null,
+
+              createdById:
+                req.user?.id ||
+                null,
+
+              metadata: {
+                extensionId:
+                  extension.id,
+
+                contractId:
+                  contract.id,
+
+                contractNumber:
+                  contract.contractNumber,
+
+                contractPaymentScheduleId:
+                  schedule.id,
+
+                billingChargeId:
+                  matchingCharge?.id ||
+                  null,
+
+                recipient:
+                  contract.client.email,
+
+                previousDueDate:
+                  effectiveDueDate,
+
+                newDueDate,
+
+                error:
+                  emailErrorMessage,
+              },
+            });
+          } catch (
+            failureHistoryError
+          ) {
+            console.error(
+              "Falha adicional ao registrar histórico da falha de e-mail:",
+              failureHistoryError
+            );
+          }
+        }
+      } else {
+        extensionEmailResult = {
+          sent: false,
+          error:
+            "Cliente sem e-mail cadastrado.",
+        };
+
+        /*
+         * Ausência de e-mail também não bloqueia
+         * a alteração financeira.
+         */
+        try {
+          await createProposalHistory({
+            protocolId:
+              contract.protocolId,
+
+            proposalId:
+              contract.proposalId ||
+              null,
+
+            eventType:
+              "NOTIFICACAO_PRORROGACAO_FALHOU",
+
+            title:
+              "Cliente sem e-mail para notificação da prorrogação",
+
+            description:
+              "O vencimento foi prorrogado, mas o cliente não possui e-mail cadastrado para recebimento da comunicação automática.",
+
+            senderName:
+              req.user?.name ||
+              null,
+
+            senderEmail:
+              req.user?.email ||
+              null,
+
+            createdById:
+              req.user?.id ||
+              null,
+
+            metadata: {
+              extensionId:
+                extension.id,
+
+              contractId:
+                contract.id,
+
+              contractNumber:
+                contract.contractNumber,
+
+              contractPaymentScheduleId:
+                schedule.id,
+
+              billingChargeId:
+                matchingCharge?.id ||
+                null,
+
+              previousDueDate:
+                effectiveDueDate,
+
+              newDueDate,
+
+              reason:
+                "CLIENT_EMAIL_NOT_REGISTERED",
+            },
+          });
+        } catch (
+          noEmailHistoryError
+        ) {
+          console.error(
+            "Falha ao registrar ausência de e-mail do cliente:",
+            noEmailHistoryError
+          );
+        }
+      }
+
+      return res.status(201).json({
+        extension,
+
+        payment: {
+          scheduleId:
+            schedule.id,
+
+          type:
+            schedule.type,
+
+          installmentNumber:
+            schedule.installmentNumber,
+
+          amountCents:
+            schedule.amountCents,
+
+          originalDueDate:
+            schedule.dueDate,
+
+          previousDueDate:
+            effectiveDueDate,
+
+          effectiveDueDate:
+            newDueDate,
+
+          billingChargeId:
+            matchingCharge?.id ||
+            null,
+
+          bankChargeUpdated:
+            Boolean(
+              hasBankEmission &&
+              matchingCharge?.txid
+            ),
+
+          txid:
+            matchingCharge?.txid ||
+            null,
+        },
+
+        notification: {
+          email:
+            contract.client.email ||
+            null,
+
+          sent:
+            extensionEmailResult.sent,
+
+          messageId:
+            extensionEmailResult.messageId ||
+            null,
+
+          error:
+            extensionEmailResult.error ||
+            null,
+        },
+      });
+    } catch (error) {
+      console.error(
+        "Erro ao prorrogar vencimento:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          error instanceof Error
+            ? error.message
+            : "Erro ao prorrogar vencimento.",
+      });
+    }
+  }
+);
+
+
+app.post(
   "/contracts/:id/generate-entry-charge",
   authMiddleware,
   requireRoles(["GERENTE", "PROGRAMADOR"]),
@@ -10954,7 +13253,9 @@ app.post(
       }
 
       const contract = await prisma.contract.findUnique({
-        where: { id: contractId },
+        where: {
+          id: contractId,
+        },
         include: {
           client: true,
           protocol: {
@@ -10963,6 +13264,13 @@ app.post(
             },
           },
           proposal: true,
+          paymentSchedule: {
+            orderBy: [
+              { dueDate: "asc" },
+              { installmentNumber: "asc" },
+            ],
+          },
+          billingCharges: true,
         },
       });
 
@@ -10975,100 +13283,109 @@ app.post(
       if (contract.status !== "ASSINADO") {
         return res.status(400).json({
           message:
-            "A cobrança da entrada só pode ser gerada após a assinatura do contrato.",
+            "A cobrança da entrada só pode ser preparada após a assinatura do contrato.",
         });
       }
 
-      const existing = await prisma.billingCharge.findFirst({
-        where: {
+      const entrySchedule = contract.paymentSchedule.find(
+        (item) => item.type === "ENTRADA"
+      );
+
+      if (!entrySchedule) {
+        return res.status(400).json({
+          message:
+            "O contrato não possui entrada no cronograma financeiro contratado.",
+        });
+      }
+
+      if (!entrySchedule.amountCents || entrySchedule.amountCents <= 0) {
+        return res.status(400).json({
+          message:
+            "O valor da entrada no cronograma contratual é inválido.",
+        });
+      }
+
+      const existingEntry = contract.billingCharges.find(
+        (charge) =>
+          charge.chargeType === "ENTRADA" &&
+          charge.status !== "CANCELADA" &&
+          charge.status !== "ERRO"
+      );
+
+      if (existingEntry) {
+        return res.status(400).json({
+          message:
+            "A cobrança da entrada deste contrato já foi preparada.",
+        });
+      }
+
+      // BillingCharge.amount utiliza reais no fluxo legado atual.
+      // ContractPaymentSchedule.amountCents é a fonte canônica em centavos.
+      const entryAmount = entrySchedule.amountCents / 100;
+
+      /*
+       * O cronograma original permanece imutável.
+       * Se existir prorrogação ativa, a cobrança nasce
+       * já com o vencimento vigente.
+       */
+      const {
+        effectiveDueDate:
+          entryEffectiveDueDate,
+        activeExtension:
+          entryActiveExtension,
+      } =
+        await getEffectiveContractPaymentDueDate(
+          entrySchedule.id
+        );
+
+      const charge = await prisma.billingCharge.create({
+        data: {
+          protocolId: contract.protocolId,
+          clientId: contract.clientId,
           contractId: contract.id,
-          status: {
-            notIn: ["CANCELADA", "ERRO"],
+          createdById: req.user?.id || null,
+
+          provider: "MANUAL",
+          status: "AGUARDANDO_DOCUMENTO_FISCAL",
+          chargeType: "ENTRADA",
+          fiscalMode: "NOTA_FISCAL_ANTES",
+
+          description:
+            req.body?.description ||
+            `Entrada referente ao contrato ${contract.contractNumber}`,
+
+          amount: entryAmount,
+
+          // O ORIGINAL continua no ContractPaymentSchedule.
+          // Aqui usamos o vencimento atualmente vigente.
+          dueDate: entryEffectiveDueDate,
+
+          installmentNumber: 0,
+          totalInstallments: 1,
+
+          notes:
+            req.body?.notes ||
+            "Cobrança preparada a partir do cronograma financeiro contratado.",
+        },
+        include: {
+          client: true,
+          protocol: {
+            include: {
+              serviceType: true,
+            },
           },
+          contract: true,
+          fiscalDocuments: true,
         },
       });
 
-      if (existing) {
-        return res.status(400).json({
-          message:
-            "Este contrato já possui uma cobrança ativa. Cancele a cobrança existente antes de gerar outra.",
-        });
-      }
-
-const entryAmount = Number(contract.entryAmount || 0);
-
-if (!entryAmount || entryAmount <= 0) {
-  return res.status(400).json({
-    message: "O contrato não possui valor de entrada válido para cobrança.",
-  });
-}
-
-console.log("GERANDO COBRANÇA DA ENTRADA:", {
-  contractId: contract.id,
-  contractNumber: contract.contractNumber,
-  contractValue: contract.contractValue,
-  contractEntryAmount: contract.entryAmount,
-  entryAmountUsedForBillingCharge: entryAmount,
-});
-
-if (entryAmount < 100 && Number(contract.contractValue || 0) >= 1000) {
-  return res.status(400).json({
-    message:
-      "Valor de entrada inconsistente. A cobrança aparenta ter sido gerada com valor dividido por 100. Verifique o contrato antes de gerar a cobrança.",
-  });
-}
-
-      const dueDate = req.body?.dueDate
-        ? normalizeNullableDate(req.body.dueDate)
-        : addDays(new Date(), 3);
-
-const charge = await prisma.billingCharge.create({
-  data: {
-    protocolId: contract.protocolId,
-    clientId: contract.clientId,
-    contractId: contract.id,
-    createdById: req.user?.id || null,
-
-    provider: "MANUAL",
-    status: "AGUARDANDO_DOCUMENTO_FISCAL",
-    chargeType: "ENTRADA",
-    fiscalMode: "NOTA_FISCAL_ANTES",
-
-    description:
-      req.body?.description ||
-      `Entrada do contrato ${contract.contractNumber} - Protocolo ${contract.protocol.protocolNumber}`,
-
-    amount: entryAmount,
-
-    dueDate: dueDate || addDays(new Date(), 3),
-
-    installmentNumber: 1,
-    totalInstallments: contract.proposal?.installmentQty
-      ? Number(contract.proposal.installmentQty) + 1
-      : 1,
-
-    notes:
-      req.body?.notes ||
-      "Cobrança de entrada gerada após assinatura do contrato.",
-  },
-  include: {
-    client: true,
-    protocol: {
-      include: {
-        serviceType: true,
-      },
-    },
-    contract: true,
-    fiscalDocuments: true,
-  },
-});
       await createProposalHistory({
         protocolId: contract.protocolId,
         proposalId: contract.proposalId || null,
         eventType: "COBRANCA_ENTRADA_CRIADA",
-        title: `Cobrança da entrada criada para o contrato ${contract.contractNumber}`,
+        title: `Cobrança da entrada preparada para o contrato ${contract.contractNumber}`,
         description:
-          "A cobrança da entrada foi criada e aguarda definição fiscal: Nota Fiscal antes da cobrança ou recibo posterior.",
+          "A cobrança da entrada foi preparada conforme o valor e o vencimento definidos no cronograma financeiro contratado.",
         senderName: req.user?.name || null,
         senderEmail: req.user?.email || null,
         createdById: req.user?.id || null,
@@ -11076,10 +13393,14 @@ const charge = await prisma.billingCharge.create({
           billingChargeId: charge.id,
           contractId: contract.id,
           contractNumber: contract.contractNumber,
+          contractPaymentScheduleId: entrySchedule.id,
+          amountCents: entrySchedule.amountCents,
           amount: charge.amount,
-          dueDate: charge.dueDate,
+          originalDueDate: entrySchedule.dueDate,
+          dueDate: entryEffectiveDueDate,
+          paymentDueDateExtensionId:
+            entryActiveExtension?.id || null,
           status: charge.status,
-          fiscalMode: charge.fiscalMode,
         },
       });
 
@@ -11092,17 +13413,32 @@ const charge = await prisma.billingCharge.create({
           action: "CREATE_ENTRY_BILLING_CHARGE",
           entity: "BillingCharge",
           entityId: String(charge.id),
-          description: `Cobrança da entrada criada para o contrato ${contract.contractNumber}.`,
+          description: `Cobrança da entrada preparada conforme cronograma do contrato ${contract.contractNumber}.`,
           ipAddress: req.ip,
+          metadata: safeJson({
+            contractId: contract.id,
+            contractNumber: contract.contractNumber,
+            contractPaymentScheduleId: entrySchedule.id,
+            amountCents: entrySchedule.amountCents,
+            originalDueDate:
+              entrySchedule.dueDate,
+            dueDate:
+              entryEffectiveDueDate,
+            paymentDueDateExtensionId:
+              entryActiveExtension?.id || null,
+          }),
         },
       });
 
       return res.status(201).json(charge);
     } catch (error) {
-      console.error("Erro ao gerar cobrança da entrada:", error);
+      console.error("Erro ao preparar cobrança da entrada:", error);
 
       return res.status(500).json({
-        message: "Erro ao gerar cobrança da entrada.",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Erro ao preparar cobrança da entrada.",
       });
     }
   }
@@ -11123,7 +13459,9 @@ app.post(
       }
 
       const contract = await prisma.contract.findUnique({
-        where: { id: contractId },
+        where: {
+          id: contractId,
+        },
         include: {
           client: true,
           protocol: {
@@ -11132,6 +13470,12 @@ app.post(
             },
           },
           proposal: true,
+          paymentSchedule: {
+            orderBy: [
+              { installmentNumber: "asc" },
+              { dueDate: "asc" },
+            ],
+          },
           billingCharges: true,
         },
       });
@@ -11145,7 +13489,7 @@ app.post(
       if (contract.status !== "ASSINADO") {
         return res.status(400).json({
           message:
-            "As parcelas só podem ser geradas para contratos assinados.",
+            "As cobranças das parcelas só podem ser liberadas para contratos assinados.",
         });
       }
 
@@ -11158,7 +13502,18 @@ app.post(
       if (!entryPaid) {
         return res.status(400).json({
           message:
-            "A entrada precisa estar paga antes de gerar as parcelas do saldo.",
+            "A entrada precisa estar paga antes da liberação das cobranças das parcelas.",
+        });
+      }
+
+      const installmentSchedule = contract.paymentSchedule.filter(
+        (item) => item.type === "PARCELA"
+      );
+
+      if (installmentSchedule.length === 0) {
+        return res.status(400).json({
+          message:
+            "O contrato não possui parcelas no cronograma financeiro contratado.",
         });
       }
 
@@ -11172,64 +13527,7 @@ app.post(
       if (existingInstallments.length > 0) {
         return res.status(400).json({
           message:
-            "Este contrato já possui parcelas geradas. Cancele as parcelas existentes antes de gerar novamente.",
-        });
-      }
-
-      const totalAmount = Number(contract.contractValue || 0);
-      const entryAmount = Number(contract.entryAmount || 0);
-
-      if (!totalAmount || totalAmount <= 0) {
-        return res.status(400).json({
-          message: "O contrato não possui valor total válido.",
-        });
-      }
-
-      if (entryAmount < 0 || entryAmount > totalAmount) {
-        return res.status(400).json({
-          message:
-            "O valor da entrada está inconsistente em relação ao valor total do contrato.",
-        });
-      }
-
-      const installmentQty = contract.proposal?.installmentQty
-        ? Number(contract.proposal.installmentQty)
-        : 0;
-
-      if (!installmentQty || installmentQty <= 0) {
-        return res.status(400).json({
-          message:
-            "A proposta vinculada não possui quantidade de parcelas configurada.",
-        });
-      }
-
-      const balanceAmount = Math.round(totalAmount - entryAmount);
-
-      if (!balanceAmount || balanceAmount <= 0) {
-        return res.status(400).json({
-          message:
-            "Não há saldo restante para geração de parcelas.",
-        });
-      }
-
-      const firstDueDate = req.body?.firstDueDate
-        ? normalizeNullableDate(req.body.firstDueDate)
-        : addDays(new Date(), 30);
-
-      if (!firstDueDate) {
-        return res.status(400).json({
-          message: "Data do primeiro vencimento inválida.",
-        });
-      }
-
-      const intervalDays =
-        req.body?.intervalDays !== undefined && req.body?.intervalDays !== ""
-          ? Number(req.body.intervalDays)
-          : 30;
-
-      if (!intervalDays || intervalDays <= 0) {
-        return res.status(400).json({
-          message: "Intervalo entre parcelas inválido.",
+            "As cobranças das parcelas deste contrato já foram preparadas.",
         });
       }
 
@@ -11238,98 +13536,183 @@ app.post(
           ? "NOTA_FISCAL_ANTES"
           : "RECIBO_POSTERIOR";
 
-      const baseAmount = Math.floor(balanceAmount / installmentQty);
-      const remainder = balanceAmount - baseAmount * installmentQty;
+      /*
+       * Prepara primeiro o plano completo de geração.
+       * Nenhuma BillingCharge é criada nesta etapa.
+       */
+      const installmentPlan = [];
 
-      const createdCharges = [];
+      for (const scheduleItem of installmentSchedule) {
+        if (!scheduleItem.amountCents || scheduleItem.amountCents <= 0) {
+          throw new Error(
+            `Valor inválido no cronograma da parcela ${scheduleItem.installmentNumber}.`
+          );
+        }
 
-      for (let index = 1; index <= installmentQty; index++) {
-        const isLast = index === installmentQty;
-        const installmentAmount = baseAmount + (isLast ? remainder : 0);
+        const {
+          effectiveDueDate,
+          activeExtension,
+        } =
+          await getEffectiveContractPaymentDueDate(
+            scheduleItem.id
+          );
 
-        const dueDate = addDays(
-          firstDueDate,
-          (index - 1) * intervalDays
-        );
-
-        const charge = await prisma.billingCharge.create({
-          data: {
-            protocolId: contract.protocolId,
-            clientId: contract.clientId,
-            contractId: contract.id,
-            createdById: req.user?.id || null,
-
-            provider: "MANUAL",
-            status:
-              fiscalMode === "NOTA_FISCAL_ANTES"
-                ? "AGUARDANDO_DOCUMENTO_FISCAL"
-                : "PRONTA_PARA_EMISSAO",
-
-            chargeType: "PARCELA",
-            fiscalMode,
-
-            description: `Parcela ${index}/${installmentQty} do contrato ${contract.contractNumber} - Protocolo ${contract.protocol.protocolNumber}`,
-
-            amount: installmentAmount,
-            dueDate,
-
-            installmentNumber: index,
-            totalInstallments: installmentQty,
-
-            notes:
-              req.body?.notes ||
-              "Parcela do saldo gerada após entrega/finalização dos serviços.",
-          },
-          include: {
-            client: true,
-            protocol: {
-              include: {
-                serviceType: true,
-              },
-            },
-            contract: true,
-            fiscalDocuments: true,
-          },
+        installmentPlan.push({
+          scheduleItem,
+          effectiveDueDate,
+          activeExtension,
         });
-
-        createdCharges.push(charge);
       }
 
-      await prisma.protocol.update({
-        where: {
-          id: contract.protocolId,
-        },
-        data: {
-          status: "FINALIZADO",
-          finishedAt: new Date(),
-        },
-      });
+      /*
+       * Criação atômica:
+       *
+       * - ou todas as parcelas são criadas;
+       * - ou nenhuma é criada;
+       * - faz nova verificação dentro da transação para
+       *   evitar geração duplicada por requisições concorrentes.
+       */
+      const createdCharges =
+        await prisma.$transaction(async (tx) => {
+          const alreadyCreated =
+            await tx.billingCharge.findFirst({
+              where: {
+                contractId: contract.id,
+                chargeType: "PARCELA",
+                status: {
+                  notIn: [
+                    "CANCELADA",
+                    "ERRO",
+                  ],
+                },
+              },
+            });
+
+          if (alreadyCreated) {
+            throw new Error(
+              "As cobranças das parcelas deste contrato já foram preparadas."
+            );
+          }
+
+          const charges = [];
+
+          for (const planItem of installmentPlan) {
+            const {
+              scheduleItem,
+              effectiveDueDate,
+              activeExtension,
+            } = planItem;
+
+            const charge =
+              await tx.billingCharge.create({
+                data: {
+                  protocolId:
+                    contract.protocolId,
+
+                  clientId:
+                    contract.clientId,
+
+                  contractId:
+                    contract.id,
+
+                  createdById:
+                    req.user?.id || null,
+
+                  provider:
+                    "MANUAL",
+
+                  status:
+                    fiscalMode ===
+                    "NOTA_FISCAL_ANTES"
+                      ? "AGUARDANDO_DOCUMENTO_FISCAL"
+                      : "PRONTA_PARA_EMISSAO",
+
+                  chargeType:
+                    "PARCELA",
+
+                  fiscalMode,
+
+                  description:
+                    `Parcela ${scheduleItem.installmentNumber}/${
+                      scheduleItem.totalInstallments ||
+                      installmentSchedule.length
+                    } do contrato ${contract.contractNumber}`,
+
+                  /*
+                   * Valor financeiro contratado.
+                   * amount continua em reais por compatibilidade
+                   * com o fluxo atual de BillingCharge.
+                   */
+                  amount:
+                    scheduleItem.amountCents /
+                    100,
+
+                  /*
+                   * BillingCharge recebe o vencimento vigente.
+                   * ContractPaymentSchedule mantém o original.
+                   */
+                  dueDate:
+                    effectiveDueDate,
+
+                  installmentNumber:
+                    scheduleItem.installmentNumber,
+
+                  totalInstallments:
+                    scheduleItem.totalInstallments ||
+                    installmentSchedule.length,
+
+                  notes:
+                    req.body?.notes ||
+                    "Cobrança preparada a partir do cronograma financeiro contratado.",
+                },
+
+                include: {
+                  client: true,
+
+                  protocol: {
+                    include: {
+                      serviceType: true,
+                    },
+                  },
+
+                  contract: true,
+                  fiscalDocuments: true,
+                },
+              });
+
+            charges.push(charge);
+          }
+
+          return charges;
+        });
 
       await createProposalHistory({
         protocolId: contract.protocolId,
         proposalId: contract.proposalId || null,
         eventType: "PARCELAS_GERADAS_APOS_ENTREGA",
-        title: "Parcelas do saldo geradas após entrega dos serviços",
-        description: `Foram geradas ${createdCharges.length} parcela(s) referentes ao saldo do contrato ${contract.contractNumber}.`,
+        title: "Cobranças das parcelas liberadas",
+        description:
+          `Foram preparadas ${createdCharges.length} cobrança(s) exatamente conforme o cronograma financeiro do contrato ${contract.contractNumber}.`,
         senderName: req.user?.name || null,
         senderEmail: req.user?.email || null,
         createdById: req.user?.id || null,
         metadata: {
           contractId: contract.id,
           contractNumber: contract.contractNumber,
-          totalAmount,
-          entryAmount,
-          balanceAmount,
-          installmentQty,
           fiscalMode,
-          firstDueDate,
-          intervalDays,
           charges: createdCharges.map((charge) => ({
             id: charge.id,
             amount: charge.amount,
             dueDate: charge.dueDate,
             installmentNumber: charge.installmentNumber,
             totalInstallments: charge.totalInstallments,
+          })),
+          schedule: installmentSchedule.map((item) => ({
+            id: item.id,
+            amountCents: item.amountCents,
+            dueDate: item.dueDate,
+            installmentNumber: item.installmentNumber,
+            totalInstallments: item.totalInstallments,
           })),
         },
       });
@@ -11343,13 +13726,11 @@ app.post(
           action: "GENERATE_INSTALLMENT_BILLING_CHARGES",
           entity: "Contract",
           entityId: String(contract.id),
-          description: `Parcelas do saldo geradas para o contrato ${contract.contractNumber}.`,
+          description: `Cobranças das parcelas liberadas conforme cronograma do contrato ${contract.contractNumber}.`,
           ipAddress: req.ip,
           metadata: safeJson({
             contractId: contract.id,
             contractNumber: contract.contractNumber,
-            balanceAmount,
-            installmentQty,
             generatedCharges: createdCharges.length,
           }),
         },
@@ -11358,18 +13739,17 @@ app.post(
       return res.status(201).json({
         contractId: contract.id,
         protocolId: contract.protocolId,
-        balanceAmount,
-        installmentQty,
+        installmentQty: createdCharges.length,
         charges: createdCharges,
       });
     } catch (error) {
-      console.error("Erro ao gerar parcelas do saldo:", error);
+      console.error("Erro ao liberar cobranças das parcelas:", error);
 
       return res.status(500).json({
         message:
           error instanceof Error
             ? error.message
-            : "Erro ao gerar parcelas do saldo.",
+            : "Erro ao liberar cobranças das parcelas.",
       });
     }
   }
@@ -11758,32 +14138,58 @@ const description =
 const amountInCents =
   billingChargeAmountToCents(charge);
 
-const isInstallmentCharge = charge.chargeType === "PARCELA";
+/*
+ * Toda BillingCharge vinculada a contrato possui vencimento
+ * contratual e deve ser emitida como Pix com vencimento /cobv.
+ *
+ * Isso vale tanto para ENTRADA quanto para PARCELA.
+ *
+ * AVULSA continua podendo utilizar Pix imediato /cob.
+ */
+const isContractDueCharge =
+  Boolean(charge.contractId) &&
+  (
+    charge.chargeType === "ENTRADA" ||
+    charge.chargeType === "PARCELA"
+  );
 
-if (isInstallmentCharge && !charge.client.cpfCnpj) {
+if (
+  isContractDueCharge &&
+  !charge.client.cpfCnpj
+) {
   return res.status(400).json({
     message:
-      "Para emitir parcela com vencimento, o cliente precisa ter CPF/CNPJ cadastrado.",
+      "Para emitir cobrança contratual com vencimento, o cliente precisa ter CPF/CNPJ cadastrado.",
   });
 }
 
-const bbResult = isInstallmentCharge
-  ? await createBbPixDueCharge({
-      txid,
-      amountInCents,
-      debtorName: charge.client.name,
-      debtorCpfCnpj: charge.client.cpfCnpj || null,
-      description,
-      dueDate: charge.dueDate,
-    })
-  : await createBbPixCharge({
-      txid,
-      amountInCents,
-      debtorName: charge.client.name,
-      debtorCpfCnpj: charge.client.cpfCnpj || null,
-      description,
-      expirationSeconds: Number(process.env.BB_PIX_EXPIRATION_SECONDS || 86400),
-    });
+const bbResult =
+  isContractDueCharge
+    ? await createBbPixDueCharge({
+        txid,
+        amountInCents,
+        debtorName:
+          charge.client.name,
+        debtorCpfCnpj:
+          charge.client.cpfCnpj || null,
+        description,
+        dueDate:
+          charge.dueDate,
+      })
+    : await createBbPixCharge({
+        txid,
+        amountInCents,
+        debtorName:
+          charge.client.name,
+        debtorCpfCnpj:
+          charge.client.cpfCnpj || null,
+        description,
+        expirationSeconds:
+          Number(
+            process.env.BB_PIX_EXPIRATION_SECONDS ||
+            86400
+          ),
+      });
 
       const publicChargeUrl = getChargePublicUrl(charge.id);
 
@@ -11817,9 +14223,12 @@ rawRequest: safeJson({
   description,
   dueDate: charge.dueDate,
   expirationSeconds:
-    charge.chargeType === "PARCELA"
+    isContractDueCharge
       ? null
-      : Number(process.env.BB_PIX_EXPIRATION_SECONDS || 172800),
+      : Number(
+          process.env.BB_PIX_EXPIRATION_SECONDS ||
+          172800
+        ),
 }),
           rawResponse: safeJson(bbResult),
           errorMessage: null,
@@ -12029,27 +14438,50 @@ app.post(
       const amountInCents =
   billingChargeAmountToCents(charge);
 
-      const isInstallmentCharge = charge.chargeType === "PARCELA";
+      const isContractDueCharge =
+        Boolean(charge.contractId) &&
+        (
+          charge.chargeType === "ENTRADA" ||
+          charge.chargeType === "PARCELA"
+        );
 
-      const bbResult = isInstallmentCharge
-        ? await createBbPixDueCharge({
-            txid,
-            amountInCents,
-            debtorName: charge.client.name,
-            debtorCpfCnpj: charge.client.cpfCnpj || null,
-            description,
-            dueDate: charge.dueDate,
-          })
-        : await createBbPixCharge({
-            txid,
-            amountInCents,
-            debtorName: charge.client.name,
-            debtorCpfCnpj: charge.client.cpfCnpj || null,
-            description,
-            expirationSeconds: Number(
-              process.env.BB_PIX_EXPIRATION_SECONDS || 86400
-            ),
-          });
+      if (
+        isContractDueCharge &&
+        !charge.client.cpfCnpj
+      ) {
+        return res.status(400).json({
+          message:
+            "Para reemitir cobrança contratual com vencimento, o cliente precisa ter CPF/CNPJ cadastrado.",
+        });
+      }
+
+      const bbResult =
+        isContractDueCharge
+          ? await createBbPixDueCharge({
+              txid,
+              amountInCents,
+              debtorName:
+                charge.client.name,
+              debtorCpfCnpj:
+                charge.client.cpfCnpj || null,
+              description,
+              dueDate:
+                charge.dueDate,
+            })
+          : await createBbPixCharge({
+              txid,
+              amountInCents,
+              debtorName:
+                charge.client.name,
+              debtorCpfCnpj:
+                charge.client.cpfCnpj || null,
+              description,
+              expirationSeconds:
+                Number(
+                  process.env.BB_PIX_EXPIRATION_SECONDS ||
+                  86400
+                ),
+            });
 
       const publicChargeUrl = getChargePublicUrl(charge.id);
 
@@ -12083,9 +14515,13 @@ app.post(
             debtorCpfCnpj: charge.client.cpfCnpj || null,
             description,
             dueDate: charge.dueDate,
-            expirationSeconds: isInstallmentCharge
-              ? null
-              : Number(process.env.BB_PIX_EXPIRATION_SECONDS || 86400),
+            expirationSeconds:
+              isContractDueCharge
+                ? null
+                : Number(
+                    process.env.BB_PIX_EXPIRATION_SECONDS ||
+                    86400
+                  ),
           }),
 
           rawResponse: safeJson({
@@ -12722,40 +15158,98 @@ const paidAmount =
           },
         });
 
-      const duplicatedTransaction =
-        await prisma.financialTransaction.findFirst({
-          where: {
-            type: "ENTRADA",
-            source: "CONTRATO",
+      /*
+       * ======================================================
+       * COBRANÇA -> FINANCEIRO
+       * ======================================================
+       *
+       * BillingCharge é a origem operacional da receita.
+       * O lançamento financeiro derivado dela precisa ficar
+       * vinculado 1:1 por financialTransactionId.
+       *
+       * Não usamos descrição como vínculo permanente.
+       */
+      let linkedFinancialTransaction =
+        charge.financialTransactionId
+          ? await prisma.financialTransaction.findUnique({
+              where: {
+                id: charge.financialTransactionId,
+              },
+            })
+          : null;
 
-          
-            protocolId: charge.protocolId,
-            description: {
-              contains: `Cobrança #${charge.id}`,
+      /*
+       * Compatibilidade apenas para registros antigos criados
+       * antes da implantação do vínculo 1:1.
+       */
+      if (!linkedFinancialTransaction) {
+        linkedFinancialTransaction =
+          await prisma.financialTransaction.findFirst({
+            where: {
+              type: "ENTRADA",
+              source: "CONTRATO",
+              protocolId: charge.protocolId,
+              amount: paidAmount,
+              dueDate: charge.dueDate,
+              description: {
+                contains: `Cobrança #${charge.id}`,
+              },
+              billingCharge: null,
             },
-          },
-        });
+            orderBy: {
+              id: "asc",
+            },
+          });
+      }
 
-      if (!duplicatedTransaction) {
-        await prisma.financialTransaction.create({
+      if (!linkedFinancialTransaction) {
+        linkedFinancialTransaction =
+          await prisma.financialTransaction.create({
+            data: {
+              type: "ENTRADA",
+              source: "CONTRATO",
+              categoryId: contractsCategory.id,
+              status: "PAGO",
+
+              protocolId: charge.protocolId,
+              clientId: charge.clientId,
+
+              catalogServiceId:
+                charge.protocol?.serviceType?.id || null,
+
+              description: `Entrada paga - Cobrança #${charge.id} - ${
+                charge.contract?.contractNumber ||
+                charge.protocol.protocolNumber
+              }`,
+
+              amount: paidAmount,
+              dueDate: charge.dueDate,
+              paidAt,
+              competenceMonth,
+
+              clientName: charge.client.name,
+
+              notes:
+                req.body?.notes ||
+                `Pagamento confirmado da cobrança de entrada vinculada ao protocolo ${charge.protocol.protocolNumber}.`,
+
+              createdById:
+                req.user?.id || null,
+            },
+          });
+      }
+
+      if (
+        charge.financialTransactionId !==
+        linkedFinancialTransaction.id
+      ) {
+        await prisma.billingCharge.update({
+          where: {
+            id: charge.id,
+          },
           data: {
-            type: "ENTRADA",
-            source: "CONTRATO",
-          categoryId: contractsCategory.id,
-            status: "PAGO",
-            protocolId: charge.protocolId,
-            description: `Entrada paga - Cobrança #${charge.id} - ${
-              charge.contract?.contractNumber || charge.protocol.protocolNumber
-            }`,
-            amount: paidAmount,
-            dueDate: charge.dueDate,
-            paidAt,
-            competenceMonth,
-            clientName: charge.client.name,
-            notes:
-              req.body?.notes ||
-              `Pagamento confirmado da cobrança de entrada vinculada ao protocolo ${charge.protocol.protocolNumber}.`,
-            createdById: req.user?.id || null,
+            financialTransactionId:
+              linkedFinancialTransaction.id,
           },
         });
       }
