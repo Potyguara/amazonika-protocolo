@@ -15722,7 +15722,7 @@ app.post(
         eventType: "COBRANCA_BB_PIX_EMITIDA",
         title: "Cobrança Pix BB emitida",
         description:
-          "Cobrança Pix emitida pelo Banco do Brasil para pagamento da entrada.",
+          "Cobrança Pix emitida pelo Banco do Brasil para pagamento contratual.",
         recipient: payment.client.email || null,
         senderName: req.user?.name || null,
         senderEmail: req.user?.email || null,
