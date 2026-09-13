@@ -15015,7 +15015,8 @@ doc
     `Recebemos de ${charge.client?.name || "-"}, inscrito(a) no CPF/CNPJ ${
       charge.client?.cpfCnpj || "-"
     }, a importância de ${formatMoneyBR(
-      paidAmount      )}, referente ao pagamento da ${getBillingChargeStageLabel(
+        paidAmount
+      )}, referente ao pagamento da ${getBillingChargeStageLabel(
         charge
       )} vinculada ao contrato ${
       charge.contract?.contractNumber || "-"
