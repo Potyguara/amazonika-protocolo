@@ -1747,6 +1747,58 @@ function formatCurrencyBRFromFloat(value: number | null | undefined) {
   });
 }
 
+function getBillingChargeStageLabel(charge: any) {
+  if (charge?.chargeType === "PARCELA") {
+    const number = charge?.installmentNumber || "-";
+    const total = charge?.totalInstallments || "-";
+    return `parcela ${number}/${total}`;
+  }
+
+  if (charge?.chargeType === "AVULSA") {
+    return "cobrança avulsa";
+  }
+
+  return "entrada";
+}
+
+function getBillingChargeStageTitle(charge: any) {
+  if (charge?.chargeType === "PARCELA") {
+    const number = charge?.installmentNumber || "-";
+    const total = charge?.totalInstallments || "-";
+    return `Parcela ${number}/${total}`;
+  }
+
+  if (charge?.chargeType === "AVULSA") {
+    return "Cobrança avulsa";
+  }
+
+  return "Entrada";
+}
+
+function getBillingChargeEmailTitle(charge: any) {
+  if (charge?.chargeType === "PARCELA") {
+    return "Cobrança da parcela";
+  }
+
+  if (charge?.chargeType === "AVULSA") {
+    return "Cobrança avulsa";
+  }
+
+  return "Cobrança da entrada";
+}
+
+function getBillingChargePaymentPurpose(charge: any) {
+  if (charge?.chargeType === "PARCELA") {
+    return "Conforme contrato assinado, segue a cobrança da parcela contratual indicada no cronograma financeiro.";
+  }
+
+  if (charge?.chargeType === "AVULSA") {
+    return "Segue cobrança avulsa vinculada ao protocolo informado.";
+  }
+
+  return "Conforme contrato assinado, segue a cobrança da entrada para início da mobilização da equipe técnica.";
+}
+
 function formatDateBR(value: Date | string | null | undefined) {
   if (!value) return "-";
 
@@ -14713,16 +14765,20 @@ app.post(
       const publicBaseUrl = getBillingPublicBaseUrl();
       const chargeUrl = `${publicBaseUrl}/cobranca/${charge.id}`;
 
+      const chargeStageLabel = getBillingChargeStageLabel(charge);
+      const chargeEmailTitle = getBillingChargeEmailTitle(charge);
+      const chargePaymentPurpose = getBillingChargePaymentPurpose(charge);
+
       const fiscalInfo =
         charge.fiscalMode === "NOTA_FISCAL_ANTES"
-          ? "A Nota Fiscal referente à entrada já foi registrada pela empresa."
+          ? "A Nota Fiscal referente a esta cobrança já foi registrada pela empresa."
           : "O recibo será disponibilizado após a confirmação do pagamento.";
 
       const html = `
         <div style="font-family:Arial,sans-serif;background:#f4f7f5;padding:24px;">
           <div style="max-width:760px;margin:0 auto;background:#ffffff;border-radius:20px;overflow:hidden;border:1px solid #dbe7df;">
             <div style="background:#123c32;color:#ffffff;padding:24px;">
-              <h1 style="margin:0;font-size:24px;">Cobrança da entrada</h1>
+              <h1 style="margin:0;font-size:24px;">${chargeEmailTitle}</h1>
               <p style="margin:8px 0 0;color:#d8f3e5;">
                 ${company.companyName || "AMAZONIKA Engenharia & Meio Ambiente"}
               </p>
@@ -14732,7 +14788,7 @@ app.post(
               <p>Prezado(a) <strong>${charge.client.name}</strong>,</p>
 
               <p style="line-height:1.6;">
-                Conforme contrato assinado, segue a cobrança da entrada para início da mobilização da equipe técnica.
+                ${chargePaymentPurpose}
               </p>
 
               <div style="background:#f8fbf9;border:1px solid #dfe7e2;border-radius:16px;padding:18px;margin:18px 0;">
@@ -14787,7 +14843,7 @@ ${
       const info = await transporter.sendMail({
         from: settings.smtpFrom,
         to: charge.client.email,
-        subject: `Cobrança da entrada — ${charge.protocol.protocolNumber}`,
+        subject: `${chargeEmailTitle} — ${charge.protocol.protocolNumber}`,
         html,
         attachments: getEmailImageAttachments(),
       });
@@ -14814,8 +14870,8 @@ ${
         protocolId: charge.protocolId,
         proposalId: charge.contract?.proposalId || null,
         eventType: "COBRANCA_ENVIADA",
-        title: "Cobrança da entrada enviada ao cliente",
-        description: `A cobrança da entrada foi enviada por e-mail para ${charge.client.email}.`,
+        title: `${chargeEmailTitle} enviada ao cliente`,
+        description: `A cobrança da ${chargeStageLabel} foi enviada por e-mail para ${charge.client.email}.`,
         recipient: charge.client.email,
         senderName: req.user?.name || null,
         senderEmail: req.user?.email || null,
@@ -15329,7 +15385,7 @@ const paidAmount =
                 : null,
 
               notes:
-                "Recibo gerado automaticamente após confirmação do pagamento da entrada.",
+                `Recibo gerado automaticamente após confirmação do pagamento da ${getBillingChargeStageLabel(charge)}.`,
             },
           });
 
@@ -15339,7 +15395,7 @@ const paidAmount =
             eventType: "RECIBO_GERADO_AUTOMATICAMENTE",
             title: "Recibo de pagamento gerado automaticamente",
             description:
-              "O recibo da entrada foi gerado automaticamente após a confirmação do pagamento.",
+              `O recibo da ${getBillingChargeStageLabel(charge)} foi gerado automaticamente após a confirmação do pagamento.`,
             recipient: charge.client.email || null,
             senderName: req.user?.name || "Sistema",
             senderEmail: req.user?.email || null,
@@ -15377,7 +15433,7 @@ const paidAmount =
                         <p>Prezado(a) <strong>${charge.client.name}</strong>,</p>
 
                         <p style="line-height:1.6;">
-                          Confirmamos o pagamento da entrada referente ao protocolo
+                          Confirmamos o pagamento da ${getBillingChargeStageLabel(charge)} referente ao protocolo
                           <strong>${charge.protocol.protocolNumber}</strong>.
                           O recibo de pagamento segue em anexo.
                         </p>
@@ -15395,8 +15451,8 @@ const paidAmount =
                         </div>
 
                         <p style="line-height:1.6;">
-                          Com a confirmação do pagamento, a equipe técnica está liberada para
-                          mobilização e início da execução dos serviços, conforme condições contratuais.
+                          Com a confirmação do pagamento, a situação financeira do contrato foi
+                          atualizada conforme as condições contratuais.
                         </p>
 
                         <p style="text-align:center;margin:28px 0;">
@@ -15431,7 +15487,7 @@ const paidAmount =
                   proposalId: charge.contract?.proposalId || null,
                   eventType: "RECIBO_ENVIADO_AO_CLIENTE",
                   title: "Recibo de pagamento enviado ao cliente",
-                  description: `O recibo da entrada foi enviado por e-mail para ${charge.client.email}.`,
+                  description: `O recibo da ${getBillingChargeStageLabel(charge)} foi enviado por e-mail para ${charge.client.email}.`,
                   recipient: charge.client.email,
                   senderName: req.user?.name || "Sistema",
                   senderEmail: req.user?.email || null,
@@ -15477,9 +15533,9 @@ const paidAmount =
         protocolId: charge.protocolId,
         proposalId: charge.contract?.proposalId || null,
         eventType: "PAGAMENTO_CONFIRMADO",
-        title: "Pagamento da entrada confirmado",
+        title: `Pagamento da ${getBillingChargeStageLabel(charge)} confirmado`,
         description:
-          "O pagamento da entrada foi confirmado. O protocolo foi liberado para execução e mobilização da equipe técnica.",
+          `O pagamento da ${getBillingChargeStageLabel(charge)} foi confirmado. O protocolo foi atualizado conforme as condições contratuais.`,
         recipient: charge.client.email || null,
         senderName: req.user?.name || "Sistema",
         senderEmail: req.user?.email || null,
