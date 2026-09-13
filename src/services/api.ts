@@ -552,7 +552,7 @@ createFinanceCategory(data: {
 
 financeTransactions(params?: {
   month?: string;
-  type?: "ENTRADA" | "SAIDA";
+  type?: "ENTRADA" | "PARCELA" | "SAIDA";
   status?: "PENDENTE" | "PAGO" | "CANCELADO";
   source?:
     | "CONTRATO"
@@ -581,7 +581,7 @@ financeTransactions(params?: {
 },
 
 createFinanceTransaction(data: {
-  type: "ENTRADA" | "SAIDA";
+  type: "ENTRADA" | "PARCELA" | "SAIDA";
 
   source:
     | "CONTRATO"

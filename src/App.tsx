@@ -3119,7 +3119,7 @@ function AdminDashboard() {
                 <MetricCard
                   title="A receber"
                   value={money(pending)}
-                  hint="entradas pendentes"
+                  hint="receitas pendentes"
                   icon={Clock}
                 />
               </>
@@ -3354,7 +3354,7 @@ function AdminDashboard() {
               <div className="finance-bar-info">
                 <strong>{item.category}</strong>
                 <span>
-                  {item.type === "ENTRADA" ? "Entrada" : "Saída"} ·{" "}
+                  {item.type === "SAIDA" ? "Saída" : item.type === "PARCELA" ? "Parcela" : "Entrada"} ·{" "}
                   {item.count} lançamento(s)
                 </span>
               </div>
@@ -3362,7 +3362,7 @@ function AdminDashboard() {
               <div className="finance-bar-track">
                 <div
                   className={`finance-bar-fill ${
-                    item.type === "ENTRADA" ? "income" : "expense"
+                    item.type === "SAIDA" ? "expense" : "income"
                   }`}
                   style={{ width: `${width}%` }}
                 />
@@ -9908,7 +9908,7 @@ function SchedulePage() {
 
 
 type FinanceCategoryType = "RECEITA" | "DESPESA";
-type FinanceTransactionType = "ENTRADA" | "SAIDA";
+type FinanceTransactionType = "ENTRADA" | "PARCELA" | "SAIDA";
 type FinanceTransactionStatus = "PENDENTE" | "PAGO" | "CANCELADO";
 type FinanceTransactionSource =
   | "CONTRATO"
@@ -11250,7 +11250,7 @@ async function handleDeleteSalary(id: number) {
           <span className="eyebrow">Financeiro</span>
           <h1>Gestão financeira premium</h1>
           <p>
-            Controle mensal de entradas, saídas, custos fixos, salários,
+            Controle mensal de receitas, saídas, custos fixos, salários,
             contratos e serviços avulsos.
           </p>
         </div>
@@ -11334,7 +11334,7 @@ async function handleDeleteSalary(id: number) {
         <>
           <div className="metrics-grid three">
             <MetricCard
-              title="Entradas previstas"
+              title="Receitas previstas"
               value={money(summary.entradas)}
               hint="receitas lançadas no mês"
               icon={WalletCards}
@@ -11359,14 +11359,14 @@ async function handleDeleteSalary(id: number) {
             <MetricCard
               title="Recebido"
               value={money(summary.entradasRecebidas)}
-              hint="entradas pagas"
+              hint="receitas pagas"
               icon={WalletCards}
             />
 
             <MetricCard
               title="A receber"
               value={money(summary.entradasPendentes)}
-              hint="entradas pendentes"
+              hint="receitas pendentes"
               icon={Clock}
             />
 
@@ -11401,7 +11401,7 @@ async function handleDeleteSalary(id: number) {
                       <div className="finance-bar-info">
                         <strong>{item.category}</strong>
                         <span>
-                          {item.type === "ENTRADA" ? "Entrada" : "Saída"} ·{" "}
+                          {item.type === "SAIDA" ? "Saída" : item.type === "PARCELA" ? "Parcela" : "Entrada"} ·{" "}
                           {item.count} lançamento(s)
                         </span>
                       </div>
@@ -11409,7 +11409,7 @@ async function handleDeleteSalary(id: number) {
                       <div className="finance-bar-track">
                         <div
                           className={`finance-bar-fill ${
-                            item.type === "ENTRADA" ? "income" : "expense"
+                            item.type === "SAIDA" ? "expense" : "income"
                           }`}
                           style={{ width: `${width}%` }}
                         />
@@ -11468,7 +11468,7 @@ async function handleDeleteSalary(id: number) {
           <div className="panel-header">
             <div>
               <h2>Lançamentos financeiros</h2>
-              <p>Entradas, saídas, contratos, serviços avulsos e despesas.</p>
+              <p>Receitas, parcelas, saídas, contratos, serviços avulsos e despesas.</p>
             </div>
 
             <button
@@ -12400,7 +12400,7 @@ async function handleDeleteSalary(id: number) {
               <tbody>
                 {transactions.map((item) => (
                   <tr key={item.id}>
-                    <td>{item.type === "ENTRADA" ? "Entrada" : "Saída"}</td>
+                    <td>{item.type === "SAIDA" ? "Saída" : item.type === "PARCELA" ? "Parcela" : "Entrada"}</td>
 
                     <td>
                       <strong>
