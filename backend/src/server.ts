@@ -7150,8 +7150,12 @@ app.get(
       },
     });
 
+    const receitaTypes = ["ENTRADA", "PARCELA"];
+
+
+
     const entradas = transactions
-      .filter((item) => item.type === "ENTRADA" && item.status !== "CANCELADO")
+      .filter((item) => receitaTypes.includes(item.type) && item.status !== "CANCELADO")
       .reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
     const saidasLancadas = transactions
@@ -7159,11 +7163,11 @@ app.get(
       .reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
     const entradasRecebidas = transactions
-      .filter((item) => item.type === "ENTRADA" && item.status === "PAGO")
+      .filter((item) => receitaTypes.includes(item.type) && item.status === "PAGO")
       .reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
     const entradasPendentes = transactions
-      .filter((item) => item.type === "ENTRADA" && item.status === "PENDENTE")
+      .filter((item) => receitaTypes.includes(item.type) && item.status === "PENDENTE")
       .reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
     const saidasPagas = transactions
@@ -9606,7 +9610,7 @@ app.get(
       ]);
 
       const entradasRecebidas = transactions.filter(
-        (item) => item.type === "ENTRADA" && item.status === "PAGO"
+        (item) => (item.type === "ENTRADA" || item.type === "PARCELA") && item.status === "PAGO"
       );
 
       const saidasLancadas = transactions.filter(
