@@ -5892,6 +5892,56 @@ function categoryTypeFromTransactionType(type: string) {
 // FINANCEIRO V2 — AUTO CHARGE BB PIX — START
 // ==========================================================
 
+type FinanceAutoChargeSettingsPayload = {
+  enabled?: boolean;
+  issueDaysBeforeDue?: number;
+  firstNoticeDaysBeforeDue?: number;
+  secondNoticeDaysBeforeDue?: number;
+  sendDueDateNotice?: boolean;
+  overdueNoticeDaysAfterDue?: number;
+  overdueNoticeRepeatEveryDays?: number;
+  overdueNoticeMaxCount?: number;
+  sendEmail?: boolean;
+  sendWhatsapp?: boolean;
+  defaultFiscalMode?: "NOTA_FISCAL_ANTES" | "RECIBO_POSTERIOR";
+};
+
+function clampAutoChargeInteger(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number
+) {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(
+    min,
+    Math.min(
+      max,
+      Math.trunc(parsed)
+    )
+  );
+}
+
+async function getFinanceAutoChargeSettings() {
+  return prisma.financeAutoChargeSettings.upsert({
+    where: {
+      id: 1,
+    },
+
+    create: {
+      id: 1,
+    },
+
+    update: {},
+  });
+}
+
+
 type FinanceAutoChargeResult = {
   transactionId: number;
   status:
@@ -6038,6 +6088,9 @@ async function processFinanceAutoCharges(
     dryRun?: boolean;
   }
 ) {
+  const settings =
+    await getFinanceAutoChargeSettings();
+
   const daysAhead =
     Math.max(
       0,
@@ -6045,6 +6098,7 @@ async function processFinanceAutoCharges(
         60,
         Number(
           options?.daysAhead ??
+            settings.issueDaysBeforeDue ??
             7
         )
       )
@@ -6904,6 +6958,192 @@ async function processFinanceAutoCharges(
     results,
   };
 }
+
+app.get(
+  "/finance/auto-charge-settings",
+  authMiddleware,
+  requireRoles([
+    "GERENTE",
+    "PROGRAMADOR",
+  ]),
+  async (_req: any, res) => {
+    try {
+      const settings =
+        await getFinanceAutoChargeSettings();
+
+      return res.json(settings);
+    } catch (error: any) {
+      console.error(
+        "Erro ao carregar configurações de cobranças automáticas:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          error?.message ||
+          "Erro ao carregar configurações de cobranças automáticas.",
+      });
+    }
+  }
+);
+
+app.put(
+  "/finance/auto-charge-settings",
+  authMiddleware,
+  requireRoles([
+    "GERENTE",
+    "PROGRAMADOR",
+  ]),
+  async (req: any, res) => {
+    try {
+      const current =
+        await getFinanceAutoChargeSettings();
+
+      const body =
+        (req.body || {}) as FinanceAutoChargeSettingsPayload;
+
+      const defaultFiscalMode =
+        body.defaultFiscalMode === "NOTA_FISCAL_ANTES" ||
+        body.defaultFiscalMode === "RECIBO_POSTERIOR"
+          ? body.defaultFiscalMode
+          : current.defaultFiscalMode;
+
+      const updated =
+        await prisma.financeAutoChargeSettings.update({
+          where: {
+            id: 1,
+          },
+
+          data: {
+            enabled:
+              typeof body.enabled === "boolean"
+                ? body.enabled
+                : current.enabled,
+
+            issueDaysBeforeDue:
+              clampAutoChargeInteger(
+                body.issueDaysBeforeDue,
+                current.issueDaysBeforeDue,
+                0,
+                60
+              ),
+
+            firstNoticeDaysBeforeDue:
+              clampAutoChargeInteger(
+                body.firstNoticeDaysBeforeDue,
+                current.firstNoticeDaysBeforeDue,
+                0,
+                60
+              ),
+
+            secondNoticeDaysBeforeDue:
+              clampAutoChargeInteger(
+                body.secondNoticeDaysBeforeDue,
+                current.secondNoticeDaysBeforeDue,
+                0,
+                60
+              ),
+
+            sendDueDateNotice:
+              typeof body.sendDueDateNotice === "boolean"
+                ? body.sendDueDateNotice
+                : current.sendDueDateNotice,
+
+            overdueNoticeDaysAfterDue:
+              clampAutoChargeInteger(
+                body.overdueNoticeDaysAfterDue,
+                current.overdueNoticeDaysAfterDue,
+                0,
+                60
+              ),
+
+            overdueNoticeRepeatEveryDays:
+              clampAutoChargeInteger(
+                body.overdueNoticeRepeatEveryDays,
+                current.overdueNoticeRepeatEveryDays,
+                1,
+                30
+              ),
+
+            overdueNoticeMaxCount:
+              clampAutoChargeInteger(
+                body.overdueNoticeMaxCount,
+                current.overdueNoticeMaxCount,
+                0,
+                20
+              ),
+
+            sendEmail:
+              typeof body.sendEmail === "boolean"
+                ? body.sendEmail
+                : current.sendEmail,
+
+            sendWhatsapp:
+              typeof body.sendWhatsapp === "boolean"
+                ? body.sendWhatsapp
+                : current.sendWhatsapp,
+
+            defaultFiscalMode,
+
+            updatedById:
+              req.user?.id ||
+              null,
+          },
+        });
+
+      await prisma.auditLog.create({
+        data: {
+          userId:
+            req.user?.id ||
+            null,
+
+          userName:
+            req.user?.name ||
+            null,
+
+          userEmail:
+            req.user?.email ||
+            null,
+
+          userRole:
+            req.user?.role ||
+            null,
+
+          action:
+            "UPDATE_FINANCE_AUTO_CHARGE_SETTINGS",
+
+          entity:
+            "FinanceAutoChargeSettings",
+
+          entityId:
+            "1",
+
+          description:
+            "Configurações de cobranças automáticas atualizadas.",
+
+          ipAddress:
+            req.ip,
+
+          metadata:
+            JSON.stringify(updated),
+        },
+      });
+
+      return res.json(updated);
+    } catch (error: any) {
+      console.error(
+        "Erro ao atualizar configurações de cobranças automáticas:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          error?.message ||
+          "Erro ao atualizar configurações de cobranças automáticas.",
+      });
+    }
+  }
+);
 
 /*
  * Primeira versão deliberadamente manual.

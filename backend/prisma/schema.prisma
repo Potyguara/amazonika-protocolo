@@ -1040,6 +1040,41 @@ model ManagementCashSetting {
   updatedAt DateTime @updatedAt
 }
 
+
+model FinanceAutoChargeSettings {
+  id Int @id @default(1)
+
+  enabled Boolean @default(false)
+
+  // Quantos dias antes do vencimento o sistema pode emitir Pix automaticamente.
+  issueDaysBeforeDue Int @default(7)
+
+  // Avisos antes do vencimento.
+  firstNoticeDaysBeforeDue  Int @default(5)
+  secondNoticeDaysBeforeDue Int @default(2)
+
+  // Aviso exatamente no dia do vencimento.
+  sendDueDateNotice Boolean @default(true)
+
+  // Avisos após vencimento.
+  overdueNoticeDaysAfterDue      Int @default(1)
+  overdueNoticeRepeatEveryDays   Int @default(3)
+  overdueNoticeMaxCount          Int @default(3)
+
+  // Canais.
+  sendEmail    Boolean @default(true)
+  sendWhatsapp Boolean @default(false)
+
+  // Política fiscal padrão das cobranças automáticas.
+  defaultFiscalMode BillingFiscalMode @default(RECIBO_POSTERIOR)
+
+  createdById Int?
+  updatedById Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 model ProLaboreAdvance {
   id              Int    @id @default(autoincrement())
   managerUserId   Int
