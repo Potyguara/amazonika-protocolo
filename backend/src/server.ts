@@ -5884,7 +5884,7 @@ function buildFinancialWhere(req: any) {
 }
 
 function categoryTypeFromTransactionType(type: string) {
-  return type === "ENTRADA" ? "RECEITA" : "DESPESA";
+  return type === "ENTRADA" || type === "PARCELA" ? "RECEITA" : "DESPESA";
 }
 
 
@@ -6065,8 +6065,12 @@ async function processFinanceAutoCharges(
               }
             : {}),
 
-          type:
-            "ENTRADA",
+          type: {
+            in: [
+              "ENTRADA",
+              "PARCELA",
+            ],
+          },
 
           status:
             "PENDENTE",
@@ -7528,19 +7532,19 @@ app.post(
                 null,
 
               autoChargeEnabled:
-                type === "ENTRADA" &&
+                (type === "ENTRADA" || type === "PARCELA") &&
                 status !== "PAGO" &&
                 Boolean(autoChargeEnabled),
 
               paymentProvider:
-                type === "ENTRADA" &&
+                (type === "ENTRADA" || type === "PARCELA") &&
                 status !== "PAGO" &&
                 autoChargeEnabled
                   ? "BANCO_DO_BRASIL"
                   : null,
 
               chargeStatus:
-                type === "ENTRADA" &&
+                (type === "ENTRADA" || type === "PARCELA") &&
                 status !== "PAGO" &&
                 autoChargeEnabled
                   ? "PENDING"
