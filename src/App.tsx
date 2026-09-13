@@ -11504,7 +11504,8 @@ async function handleDeleteSalary(id: number) {
               >
                 <option value="">Todos</option>
                 <option value="ENTRADA">Entradas</option>
-                <option value="SAIDA">Saídas</option>
+                <option value="PARCELA">Parcelas</option>
+                  <option value="SAIDA">Saídas</option>
               </select>
             </label>
 
