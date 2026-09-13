@@ -3146,7 +3146,7 @@ function AdminDashboard() {
 
                 <div className="finance-kpi-grid">
                   <div>
-                    <span>Entradas previstas</span>
+                    <span>Receitas previstas</span>
                     <strong>{money(financeSummary.entradas)}</strong>
                   </div>
 
