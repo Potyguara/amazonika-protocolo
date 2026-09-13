@@ -1006,6 +1006,7 @@ enum FinancialCategoryType {
 
 enum FinancialTransactionType {
   ENTRADA
+  PARCELA
   SAIDA
 }
 
