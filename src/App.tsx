@@ -3151,7 +3151,7 @@ function AdminDashboard() {
                   </div>
 
                   <div>
-                    <span>Entradas recebidas</span>
+                    <span>Receitas recebidas</span>
                     <strong>{money(financeSummary.entradasRecebidas)}</strong>
                   </div>
 
