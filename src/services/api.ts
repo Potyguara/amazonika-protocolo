@@ -680,7 +680,7 @@ createFinanceTransaction(data: {
 updateFinanceTransaction(
   id: number,
   data: {
-    type?: "ENTRADA" | "SAIDA";
+    type?: "ENTRADA" | "PARCELA" | "SAIDA";
     source?:
       | "CONTRATO"
       | "SERVICO_AVULSO"
