@@ -128,6 +128,20 @@ function PublicBillingChargePage() {
 
   if (!charge) return null;
 
+  const publicChargeEyebrow =
+    charge.chargeType === "PARCELA"
+      ? "Cobrança da parcela"
+      : charge.chargeType === "AVULSA"
+      ? "Cobrança avulsa"
+      : "Cobrança da entrada";
+
+  const publicChargeTitle =
+    charge.chargeType === "PARCELA"
+      ? "Pagamento da parcela contratual"
+      : charge.chargeType === "AVULSA"
+      ? "Pagamento de cobrança avulsa"
+      : "Pagamento para início dos serviços";
+
   const isPaid = charge.status === "PAGA";
   const hasPix = Boolean(charge.pixCopyPaste);
 
@@ -146,9 +160,9 @@ function PublicBillingChargePage() {
           </div>
 
           <div>
-            <span className="eyebrow">Cobrança da entrada</span>
+            <span className="eyebrow">{publicChargeEyebrow}</span>
 
-            <h1>Pagamento para início dos serviços</h1>
+            <h1>{publicChargeTitle}</h1>
 
             <p>
               Protocolo{" "}
