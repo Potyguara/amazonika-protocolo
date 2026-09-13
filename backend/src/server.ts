@@ -6370,14 +6370,14 @@ async function processFinanceAutoCharges(
         null;
 
       const chargeType =
-        transaction.installmentNumber === 0
-          ? "ENTRADA"
-          : "PARCELA";
+        transaction.type === "PARCELA"
+          ? "PARCELA"
+          : "ENTRADA";
 
-      const installmentNumber =
-        transaction.installmentNumber === 0
-          ? 1
-          : transaction.installmentNumber;
+      const billingInstallmentNumber =
+        chargeType === "PARCELA"
+          ? transaction.installmentNumber || 1
+          : null;
 
       /*
        * DRY RUN:
@@ -6481,9 +6481,12 @@ async function processFinanceAutoCharges(
               dueDate:
                 transaction.dueDate,
 
-              installmentNumber,
+              installmentNumber:
+                billingInstallmentNumber,
               totalInstallments:
-                transaction.totalInstallments,
+                chargeType === "PARCELA"
+                  ? transaction.totalInstallments
+                  : null,
 
               txid,
 
