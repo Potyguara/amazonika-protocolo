@@ -11716,7 +11716,7 @@ async function handleDeleteSalary(id: number) {
               </div>
 
               {autoChargeProcessResult && (
-                <div className="metrics-grid four">
+                <div className="metrics-grid five">
                   <div className="metric-card">
                     <span>Verificadas</span>
                     <strong>{autoChargeProcessResult.checked}</strong>
@@ -11733,11 +11733,78 @@ async function handleDeleteSalary(id: number) {
                   </div>
 
                   <div className="metric-card">
+                    <span>Ignoradas</span>
+                    <strong>{autoChargeProcessResult.skipped}</strong>
+                  </div>
+
+                  <div className="metric-card">
                     <span>Erros</span>
                     <strong>{autoChargeProcessResult.errors}</strong>
                   </div>
                 </div>
               )}
+
+          {Boolean(autoChargeProcessResult?.results?.length) && (
+            <div className="table-wrap" style={{ marginTop: 18 }}>
+              <h3>Resultado detalhado do processamento</h3>
+
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Transação</th>
+                    <th>Resultado</th>
+                    <th>Motivo</th>
+                    <th>TXID</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {(autoChargeProcessResult?.results || []).map((item, index) => {
+                    const statusLabel =
+                      item.status === "CREATED"
+                        ? "Criada"
+                        : item.status === "RECOVERED"
+                        ? "Recuperada"
+                        : item.status === "DRY_RUN"
+                        ? "Simulada"
+                        : item.status === "SKIPPED"
+                        ? "Ignorada"
+                        : item.status === "ERROR"
+                        ? "Erro"
+                        : item.status;
+
+                    const statusClass =
+                      item.status === "ERROR"
+                        ? "cancelado"
+                        : item.status === "CREATED" ||
+                          item.status === "RECOVERED"
+                        ? "concluido"
+                        : item.status === "DRY_RUN"
+                        ? "em_execucao"
+                        : "rascunho";
+
+                    return (
+                      <tr key={`${item.transactionId}-${item.status}-${index}`}>
+                        <td>#{item.transactionId}</td>
+
+                        <td>
+                          <span className={`badge ${statusClass}`}>
+                            {statusLabel}
+                          </span>
+                        </td>
+
+                        <td>{item.reason || "-"}</td>
+
+                        <td>
+                          <code>{item.txid || "-"}</code>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
             </div>
           </article>
         )}
@@ -12796,67 +12863,7 @@ async function handleDeleteSalary(id: number) {
             </div>
           )}
 
-          {Boolean(autoChargeProcessResult?.results?.length) && (
-            <div className="table-wrap" style={{ marginTop: 18 }}>
-              <h3>Resultado detalhado do processamento</h3>
 
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Transação</th>
-                    <th>Resultado</th>
-                    <th>Motivo</th>
-                    <th>TXID</th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {(autoChargeProcessResult?.results || []).map((item, index) => {
-                    const statusLabel =
-                      item.status === "CREATED"
-                        ? "Criada"
-                        : item.status === "RECOVERED"
-                        ? "Recuperada"
-                        : item.status === "DRY_RUN"
-                        ? "Simulada"
-                        : item.status === "SKIPPED"
-                        ? "Ignorada"
-                        : item.status === "ERROR"
-                        ? "Erro"
-                        : item.status;
-
-                    const statusClass =
-                      item.status === "ERROR"
-                        ? "cancelado"
-                        : item.status === "CREATED" ||
-                          item.status === "RECOVERED"
-                        ? "concluido"
-                        : item.status === "DRY_RUN"
-                        ? "em_execucao"
-                        : "rascunho";
-
-                    return (
-                      <tr key={`${item.transactionId}-${item.status}-${index}`}>
-                        <td>#{item.transactionId}</td>
-
-                        <td>
-                          <span className={`badge ${statusClass}`}>
-                            {statusLabel}
-                          </span>
-                        </td>
-
-                        <td>{item.reason || "-"}</td>
-
-                        <td>
-                          <code>{item.txid || "-"}</code>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
 
           <div className="table-wrap">
             <table className="data-table">
