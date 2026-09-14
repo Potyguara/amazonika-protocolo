@@ -7517,6 +7517,28 @@ async function processFinanceAutoChargeEmailNotices() {
   const company =
     await getCompanySettings();
 
+  const smtpRows =
+    await prisma.systemSetting.findMany({
+      where: {
+        group:
+          "SMTP",
+      },
+    });
+
+  const smtpSettings =
+    Object.fromEntries(
+      smtpRows.map((item) => [
+        item.key,
+        item.value || "",
+      ])
+    ) as Record<string, string>;
+
+  const smtpFrom =
+    smtpSettings.SMTP_FROM ||
+    smtpSettings.SMTP_USER ||
+    company.email ||
+    undefined;
+
   const transactions =
     await prisma.financialTransaction.findMany({
       where: {
@@ -7738,6 +7760,8 @@ async function processFinanceAutoChargeEmailNotices() {
 
       const info =
         await transporter.sendMail({
+          from:
+            smtpFrom,
           to:
             client.email,
           subject,
@@ -7884,6 +7908,160 @@ app.post(
         message:
           error?.message ||
           "Erro ao processar avisos automáticos de cobrança.",
+      });
+    }
+  }
+);
+
+
+
+function validateCronSecret(req: any, res: any) {
+  const expected =
+    process.env.CRON_SECRET;
+
+  if (!expected) {
+    res.status(500).json({
+      message:
+        "CRON_SECRET não configurado no servidor.",
+    });
+
+    return false;
+  }
+
+  const received =
+    String(
+      req.headers["x-cron-secret"] ||
+      req.headers["x-internal-cron-secret"] ||
+      ""
+    );
+
+  if (!received || received !== expected) {
+    res.status(401).json({
+      message:
+        "Chave de cron inválida.",
+    });
+
+    return false;
+  }
+
+  return true;
+}
+
+app.post(
+  "/internal/cron/finance-auto-charges",
+  async (req: any, res) => {
+    try {
+      if (!validateCronSecret(req, res)) {
+        return;
+      }
+
+      const result =
+        await processFinanceAutoCharges();
+
+      await prisma.auditLog.create({
+        data: {
+          userId:
+            null,
+          userName:
+            "CRON",
+          userEmail:
+            null,
+          userRole:
+            "SYSTEM",
+          action:
+            "CRON_FINANCE_AUTO_CHARGES",
+          entity:
+            "FinancialTransaction",
+          entityId:
+            "AUTO",
+          description:
+            "Cron executou o processamento automático de cobranças financeiras.",
+          metadata:
+            JSON.stringify(result),
+        },
+      });
+
+      return res.json({
+        ok:
+          true,
+        source:
+          "CRON",
+        job:
+          "finance-auto-charges",
+        ...result,
+      });
+    } catch (error: any) {
+      console.error(
+        "Erro no cron de cobranças automáticas:",
+        error
+      );
+
+      return res.status(500).json({
+        ok:
+          false,
+        message:
+          error?.message ||
+          "Erro no cron de cobranças automáticas.",
+      });
+    }
+  }
+);
+
+app.post(
+  "/internal/cron/finance-auto-charge-notices",
+  async (req: any, res) => {
+    try {
+      if (!validateCronSecret(req, res)) {
+        return;
+      }
+
+      const result =
+        await processFinanceAutoChargeEmailNotices();
+
+      await prisma.auditLog.create({
+        data: {
+          userId:
+            null,
+          userName:
+            "CRON",
+          userEmail:
+            null,
+          userRole:
+            "SYSTEM",
+          action:
+            "CRON_FINANCE_AUTO_CHARGE_NOTICES",
+          entity:
+            "FinancialTransaction",
+          entityId:
+            "AUTO",
+          description:
+            "Cron executou o envio automático de avisos financeiros.",
+          metadata:
+            JSON.stringify(result),
+        },
+      });
+
+      return res.json({
+        ok:
+          true,
+        source:
+          "CRON",
+        job:
+          "finance-auto-charge-notices",
+        ...result,
+      });
+    } catch (error: any) {
+      console.error(
+        "Erro no cron de avisos automáticos de cobrança:",
+        error
+      );
+
+      return res.status(500).json({
+        ok:
+          false,
+        message:
+          error?.message ||
+          "Erro no cron de avisos automáticos de cobrança.",
       });
     }
   }
