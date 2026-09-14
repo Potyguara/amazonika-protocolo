@@ -1969,7 +1969,7 @@ function buildContractHtmlSnapshot(params: {
 }) {
   const installments =
     params.installmentQty && params.installmentAmount
-      ? `${params.installmentQty} parcela(s) de ${formatCurrencyBRFromCents(
+      ? `${params.installmentQty} parcela(s) de ${formatCurrencyBRFromFloat(
           params.installmentAmount
         )}`
       : "Não aplicável";
@@ -2039,10 +2039,10 @@ function buildContractHtmlSnapshot(params: {
 
       <h2>Condições comerciais</h2>
       <p><strong>Serviço principal:</strong> ${params.serviceName}</p>
-      <p><strong>Valor total:</strong> ${formatCurrencyBRFromCents(
+      <p><strong>Valor total:</strong> ${formatCurrencyBRFromFloat(
         params.totalAmount
       )}</p>
-      <p><strong>Entrada:</strong> ${formatCurrencyBRFromCents(
+      <p><strong>Entrada:</strong> ${formatCurrencyBRFromFloat(
         params.entryAmount
       )}</p>
       <p><strong>Forma de pagamento:</strong> ${params.paymentMode}</p>
@@ -2193,6 +2193,33 @@ app.post(
       const legalText =
         req.body?.legalText ||
         "As partes declaram ciência de que alterações de escopo, ausência de documentos, exigências de órgãos públicos, necessidade de diligências complementares ou fatos supervenientes poderão impactar prazos e valores, mediante comunicação entre as partes.";
+
+      /*
+       * CONTRACT_SNAPSHOT_FINANCIAL_VALIDATION
+       *
+       * Proposal.totalAmount / entryAmount / installmentAmount
+       * utilizam REAIS.
+       *
+       * ProposalPaymentSchedule.amountCents utiliza CENTAVOS.
+       *
+       * O cronograma é a fonte canônica para validar a
+       * composição financeira antes de congelar o contrato.
+       */
+      const entryScheduleItem =
+        proposal.paymentSchedule.find(
+          (item) => item.type === "ENTRADA"
+        );
+
+      if (
+        entryScheduleItem &&
+        Math.round(Number(proposal.entryAmount || 0) * 100) !==
+          Number(entryScheduleItem.amountCents || 0)
+      ) {
+        return res.status(400).json({
+          message:
+            "O valor da entrada da proposta diverge do cronograma financeiro. O contrato não foi gerado.",
+        });
+      }
 
       const htmlSnapshot = buildContractHtmlSnapshot({
         contractNumber,
