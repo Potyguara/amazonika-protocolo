@@ -1715,6 +1715,28 @@ function generatePublicContractToken() {
   return crypto.randomBytes(32).toString("hex");
 }
 
+function generatePublicBillingChargeToken() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+function generateBillingChargeVerificationHash(publicToken: string) {
+  return crypto
+    .createHash("sha256")
+    .update(publicToken)
+    .digest("hex");
+}
+
+function createBillingChargePublicFields() {
+  const publicToken =
+    generatePublicBillingChargeToken();
+
+  return {
+    publicToken,
+    verificationHash:
+      generateBillingChargeVerificationHash(publicToken),
+  };
+}
+
 async function generateContractNumber() {
   const year = new Date().getFullYear();
 
@@ -6440,6 +6462,8 @@ async function processFinanceAutoCharges(
 
               financialTransactionId:
                 transaction.id,
+
+              ...createBillingChargePublicFields(),
 
               provider:
                 "BANCO_DO_BRASIL",
@@ -13648,6 +13672,8 @@ app.post(
           contractId: contract.id,
           createdById: req.user?.id || null,
 
+          ...createBillingChargePublicFields(),
+
           provider: "MANUAL",
           status: "AGUARDANDO_DOCUMENTO_FISCAL",
           chargeType: "ENTRADA",
@@ -13920,6 +13946,8 @@ app.post(
 
                   createdById:
                     req.user?.id || null,
+
+                  ...createBillingChargePublicFields(),
 
                   provider:
                     "MANUAL",
