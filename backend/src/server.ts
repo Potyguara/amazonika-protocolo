@@ -6139,6 +6139,46 @@ async function processFinanceAutoCharges(
       )
     );
 
+  if (!settings.enabled && !options?.dryRun) {
+    return {
+      today:
+        formatDateOnly(today),
+
+      daysAhead,
+
+      checked:
+        0,
+
+      eligible:
+        0,
+
+      created:
+        0,
+
+      recovered:
+        0,
+
+      skipped:
+        0,
+
+      errors:
+        0,
+
+      results: [
+        {
+          transactionId:
+            0,
+
+          status:
+            "SKIPPED",
+
+          reason:
+            "Automação de cobranças está desativada nas configurações.",
+        },
+      ],
+    };
+  }
+
   const today =
     financeTodayDateOnly();
 
@@ -6482,11 +6522,11 @@ async function processFinanceAutoCharges(
                 "BANCO_DO_BRASIL",
 
               /*
-               * O fluxo automático usa recibo posterior
-               * para não bloquear a emissão aguardando NF.
-               * A política fiscal será refinada posteriormente.
+               * Política fiscal definida nas configurações
+               * de cobranças automáticas.
                */
               fiscalMode:
+                settings.defaultFiscalMode ||
                 "RECIBO_POSTERIOR",
 
               status:
