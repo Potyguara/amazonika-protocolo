@@ -1512,8 +1512,8 @@ markBillingChargePaid(
   });
 },
 
-publicBillingCharge(id: number) {
-  return request(`/public/billing-charges/${id}`);
+publicBillingCharge(identifier: string | number) {
+  return request(`/public/billing-charges/${identifier}`);
 },
 
 issueBbPixPayment(paymentId: number) {

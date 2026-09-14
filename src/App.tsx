@@ -51,8 +51,16 @@ import {
 import { QRCodeCanvas } from "qrcode.react";
 
 
+function billingChargePublicIdentifier(charge: BackendBillingCharge) {
+  return charge.publicToken || String(charge.id);
+}
+
+function billingChargePublicPath(charge: BackendBillingCharge) {
+  return `/cobranca/${billingChargePublicIdentifier(charge)}`;
+}
+
 function PublicBillingChargePage() {
-  const { id } = useParams();
+  const { token } = useParams();
 
   const [charge, setCharge] = useState<BackendBillingCharge | null>(null);
   const [loading, setLoading] = useState(true);
@@ -65,12 +73,12 @@ function PublicBillingChargePage() {
       setError("");
       setCopySuccess("");
 
-      if (!id) {
-        throw new Error("ID da cobrança não informado.");
+      if (!token) {
+        throw new Error("Identificador da cobrança não informado.");
       }
 
       const data = (await api.publicBillingCharge(
-        Number(id)
+        token
       )) as BackendBillingCharge;
 
       setCharge(data);
@@ -85,7 +93,7 @@ function PublicBillingChargePage() {
 
   useEffect(() => {
     loadCharge();
-  }, [id]);
+  }, [token]);
 
   async function copyPixCode() {
     try {
@@ -905,6 +913,7 @@ type BackendFiscalDocument = {
 };
 
 type BackendBillingCharge = {
+  publicToken?: string | null;
   id: number;
 
   protocolId: number;
@@ -6723,7 +6732,7 @@ const confirmed = window.confirm(
   }
 
   function copyChargeLink(charge: BackendBillingCharge) {
-    const url = `${window.location.origin}/cobranca/${charge.id}`;
+    const url = `${window.location.origin}${billingChargePublicPath(charge)}`;
 
     navigator.clipboard
       .writeText(url)
@@ -7559,7 +7568,7 @@ const confirmed = window.confirm(
 
   <a
     className="mini-button"
-    href={`/cobranca/${charge.id}`}
+    href={billingChargePublicPath(charge)}
     target="_blank"
     rel="noreferrer"
   >
@@ -7658,7 +7667,7 @@ function BillingHistoryPanel({
   }, [protocol.id]);
 
   function copyHistoricalChargeLink(charge: BackendBillingCharge) {
-    const url = `${window.location.origin}/cobranca/${charge.id}`;
+    const url = `${window.location.origin}${billingChargePublicPath(charge)}`;
 
     navigator.clipboard
       .writeText(url)
@@ -7789,7 +7798,7 @@ function BillingHistoryPanel({
                           charge.status === "PAGA") && (
                           <a
                             className="mini-button"
-                            href={`/cobranca/${charge.id}`}
+                            href={billingChargePublicPath(charge)}
                             target="_blank"
                             rel="noreferrer"
                           >
@@ -7820,7 +7829,7 @@ function BillingHistoryPanel({
                                 `Olá, ${protocol.client.name}. ` +
                                 `Segue a cobrança referente a ${charge.description}:`,
 
-                              pathOrUrl: `/cobranca/${charge.id}`,
+                              pathOrUrl: billingChargePublicPath(charge),
                             })
                           }
                         >
@@ -14816,7 +14825,7 @@ function App() {
         />
       <Route path="/proposta/:token" element={<PublicProposalPage />} />
       <Route path="/contrato/:token" element={<PublicContractPage />} />
-      <Route path="/cobranca/:id" element={<PublicBillingChargePage />} />
+      <Route path="/cobranca/:token" element={<PublicBillingChargePage />} />
 
       <Route
         path="/app"

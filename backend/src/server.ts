@@ -104,9 +104,22 @@ function getBbProviderEnv() {
   return String(process.env.BB_ENV || "sandbox").toLowerCase();
 }
 
-function getChargePublicUrl(chargeId: number) {
+function getChargePublicUrl(
+  charge:
+    | number
+    | {
+        id: number;
+        publicToken?: string | null;
+      }
+) {
   const publicBaseUrl = getBillingPublicBaseUrl();
-  return `${publicBaseUrl}/cobranca/${chargeId}`;
+
+  const publicIdentifier =
+    typeof charge === "number"
+      ? String(charge)
+      : charge.publicToken || String(charge.id);
+
+  return `${publicBaseUrl}/cobranca/${publicIdentifier}`;
 }
 
 function safeJson(value: unknown) {
@@ -11808,18 +11821,36 @@ app.post("/public/proposals/:token/refuse", async (req, res) => {
 // COBRANÇAS / BOLETO PIX / DOCUMENTOS FISCAIS
 // ------------------------------------------------------
 
-app.get("/public/billing-charges/:id", async (req, res) => {
+app.get("/public/billing-charges/:identifier", async (req, res) => {
   try {
-    const id = Number(req.params.id);
+    const identifier = String(req.params.identifier || "").trim();
 
-    if (!id) {
+    if (!identifier) {
       return res.status(400).json({
-        message: "ID da cobrança inválido.",
+        message: "Identificador da cobrança inválido.",
       });
     }
 
-    const charge = await prisma.billingCharge.findUnique({
-      where: { id },
+    const numericId =
+      /^\d+$/.test(identifier)
+        ? Number(identifier)
+        : null;
+
+    const charge = await prisma.billingCharge.findFirst({
+      where: {
+        OR: [
+          {
+            publicToken: identifier,
+          },
+          ...(numericId
+            ? [
+                {
+                  id: numericId,
+                },
+              ]
+            : []),
+        ],
+      },
       include: {
         client: {
           select: {
@@ -12848,7 +12879,7 @@ app.post(
             clientChargeAvailable &&
             matchingCharge
               ? getChargePublicUrl(
-                  matchingCharge.id
+                  matchingCharge
                 )
               : null;
 
@@ -14522,7 +14553,7 @@ const bbResult =
           ),
       });
 
-      const publicChargeUrl = getChargePublicUrl(charge.id);
+      const publicChargeUrl = getChargePublicUrl(charge);
 
       const updated = await prisma.billingCharge.update({
         where: { id: charge.id },
@@ -14814,7 +14845,7 @@ app.post(
                 ),
             });
 
-      const publicChargeUrl = getChargePublicUrl(charge.id);
+      const publicChargeUrl = getChargePublicUrl(charge);
 
       const updated = await prisma.billingCharge.update({
         where: { id: charge.id },
