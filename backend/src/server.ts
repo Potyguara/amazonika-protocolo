@@ -136,6 +136,10 @@ function addDays(date: Date, days: number) {
   return result;
 }
 
+function formatDateOnly(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
 
 
 function getBillingPublicBaseUrl() {
@@ -7224,6 +7228,667 @@ app.put(
     }
   }
 );
+
+
+type FinanceAutoChargeNoticeResult = {
+  transactionId: number;
+  billingChargeId?: number | null;
+  status:
+    | "SENT"
+    | "SKIPPED"
+    | "ERROR";
+  reason?: string;
+  noticeType?: string;
+  email?: string | null;
+  publicUrl?: string | null;
+};
+
+function startOfDayLocal(date: Date) {
+  return new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate()
+  );
+}
+
+function dateDiffInDays(from: Date, to: Date) {
+  const fromDay =
+    startOfDayLocal(from).getTime();
+
+  const toDay =
+    startOfDayLocal(to).getTime();
+
+  return Math.round(
+    (toDay - fromDay) /
+      (24 * 60 * 60 * 1000)
+  );
+}
+
+function isSameLocalDate(
+  first?: Date | null,
+  second?: Date | null
+) {
+  if (!first || !second) {
+    return false;
+  }
+
+  return (
+    first.getFullYear() === second.getFullYear() &&
+    first.getMonth() === second.getMonth() &&
+    first.getDate() === second.getDate()
+  );
+}
+
+function resolveFinanceNoticeType(params: {
+  today: Date;
+  dueDate: Date;
+  lastNotificationAt?: Date | null;
+  notificationCount: number;
+  settings: Awaited<ReturnType<typeof getFinanceAutoChargeSettings>>;
+}) {
+  const {
+    today,
+    dueDate,
+    lastNotificationAt,
+    notificationCount,
+    settings,
+  } = params;
+
+  if (isSameLocalDate(lastNotificationAt, today)) {
+    return null;
+  }
+
+  const daysUntilDue =
+    dateDiffInDays(today, dueDate);
+
+  if (
+    daysUntilDue ===
+    settings.firstNoticeDaysBeforeDue
+  ) {
+    return "PRIMEIRO_AVISO_ANTES_DO_VENCIMENTO";
+  }
+
+  if (
+    daysUntilDue ===
+    settings.secondNoticeDaysBeforeDue
+  ) {
+    return "SEGUNDO_AVISO_ANTES_DO_VENCIMENTO";
+  }
+
+  if (
+    daysUntilDue === 0 &&
+    settings.sendDueDateNotice
+  ) {
+    return "AVISO_NO_DIA_DO_VENCIMENTO";
+  }
+
+  if (daysUntilDue < 0) {
+    const daysOverdue =
+      Math.abs(daysUntilDue);
+
+    if (
+      daysOverdue <
+      settings.overdueNoticeDaysAfterDue
+    ) {
+      return null;
+    }
+
+    if (
+      notificationCount >=
+      settings.overdueNoticeMaxCount
+    ) {
+      return null;
+    }
+
+    if (!lastNotificationAt) {
+      return "AVISO_APOS_VENCIMENTO";
+    }
+
+    const daysSinceLastNotice =
+      Math.abs(
+        dateDiffInDays(
+          lastNotificationAt,
+          today
+        )
+      );
+
+    if (
+      daysSinceLastNotice >=
+      settings.overdueNoticeRepeatEveryDays
+    ) {
+      return "REPETICAO_AVISO_ATRASO";
+    }
+  }
+
+  return null;
+}
+
+function getFinanceNoticeSubject(params: {
+  noticeType: string;
+  chargeType?: string | null;
+  dueDate: Date;
+}) {
+  const stage =
+    params.chargeType === "PARCELA"
+      ? "parcela"
+      : "entrada";
+
+  if (
+    params.noticeType ===
+    "AVISO_NO_DIA_DO_VENCIMENTO"
+  ) {
+    return `Sua cobrança da ${stage} vence hoje`;
+  }
+
+  if (
+    params.noticeType ===
+      "AVISO_APOS_VENCIMENTO" ||
+    params.noticeType ===
+      "REPETICAO_AVISO_ATRASO"
+  ) {
+    return `Cobrança da ${stage} em atraso`;
+  }
+
+  return `Lembrete de vencimento da ${stage}`;
+}
+
+function getFinanceNoticeIntro(params: {
+  noticeType: string;
+  clientName: string;
+  chargeDescription: string;
+  dueDate: Date;
+}) {
+  const dueDateText =
+    params.dueDate.toLocaleDateString("pt-BR");
+
+  if (
+    params.noticeType ===
+    "AVISO_NO_DIA_DO_VENCIMENTO"
+  ) {
+    return `Informamos que a cobrança "${escapeHtml(
+      params.chargeDescription
+    )}" vence hoje, ${dueDateText}.`;
+  }
+
+  if (
+    params.noticeType ===
+      "AVISO_APOS_VENCIMENTO" ||
+    params.noticeType ===
+      "REPETICAO_AVISO_ATRASO"
+  ) {
+    return `Identificamos que a cobrança "${escapeHtml(
+      params.chargeDescription
+    )}" venceu em ${dueDateText} e ainda consta como pendente.`;
+  }
+
+  return `Este é um lembrete de vencimento referente à cobrança "${escapeHtml(
+    params.chargeDescription
+  )}", com vencimento previsto para ${dueDateText}.`;
+}
+
+async function processFinanceAutoChargeEmailNotices() {
+  const settings =
+    await getFinanceAutoChargeSettings();
+
+  const today =
+    new Date();
+
+  const results:
+    FinanceAutoChargeNoticeResult[] = [];
+
+  if (!settings.enabled) {
+    return {
+      today:
+        formatDateOnly(today),
+      checked:
+        0,
+      sent:
+        0,
+      skipped:
+        0,
+      errors:
+        0,
+      results: [
+        {
+          transactionId:
+            0,
+          status:
+            "SKIPPED",
+          reason:
+            "Automação de cobranças está desativada nas configurações.",
+        },
+      ],
+    };
+  }
+
+  if (!settings.sendEmail) {
+    return {
+      today:
+        formatDateOnly(today),
+      checked:
+        0,
+      sent:
+        0,
+      skipped:
+        0,
+      errors:
+        0,
+      results: [
+        {
+          transactionId:
+            0,
+          status:
+            "SKIPPED",
+          reason:
+            "Envio de avisos por e-mail está desativado nas configurações.",
+        },
+      ],
+    };
+  }
+
+  const transporter =
+    await createTransporterFromSettings();
+
+  if (!transporter) {
+    return {
+      today:
+        formatDateOnly(today),
+      checked:
+        0,
+      sent:
+        0,
+      skipped:
+        0,
+      errors:
+        1,
+      results: [
+        {
+          transactionId:
+            0,
+          status:
+            "ERROR",
+          reason:
+            "SMTP não configurado para envio de avisos automáticos.",
+        },
+      ],
+    };
+  }
+
+  const company =
+    await getCompanySettings();
+
+  const transactions =
+    await prisma.financialTransaction.findMany({
+      where: {
+        type: {
+          in: [
+            "ENTRADA",
+            "PARCELA",
+          ],
+        },
+        status:
+          "PENDENTE",
+        autoChargeEnabled:
+          true,
+        dueDate: {
+          not:
+            null,
+        },
+        billingCharge: {
+          is: {
+            status: {
+              in: [
+                "EMITIDA",
+                "ENVIADA",
+                "VENCIDA",
+              ],
+            },
+            txid: {
+              not:
+                null,
+            },
+          },
+        },
+      },
+      include: {
+        client:
+          true,
+        billingCharge: {
+          include: {
+            client:
+              true,
+            protocol: {
+              include: {
+                serviceType:
+                  true,
+              },
+            },
+            contract:
+              true,
+          },
+        },
+      },
+      orderBy: {
+        dueDate:
+          "asc",
+      },
+    });
+
+  let sent =
+    0;
+  let skipped =
+    0;
+  let errors =
+    0;
+
+  for (const transaction of transactions) {
+    try {
+      const charge =
+        transaction.billingCharge;
+
+      const client =
+        transaction.client ||
+        charge?.client ||
+        null;
+
+      if (!charge) {
+        skipped += 1;
+        results.push({
+          transactionId:
+            transaction.id,
+          status:
+            "SKIPPED",
+          reason:
+            "Transação sem cobrança vinculada.",
+        });
+        continue;
+      }
+
+      if (!client?.email) {
+        skipped += 1;
+        results.push({
+          transactionId:
+            transaction.id,
+          billingChargeId:
+            charge.id,
+          status:
+            "SKIPPED",
+          reason:
+            "Cliente sem e-mail cadastrado.",
+        });
+        continue;
+      }
+
+      if (!transaction.dueDate) {
+        skipped += 1;
+        results.push({
+          transactionId:
+            transaction.id,
+          billingChargeId:
+            charge.id,
+          status:
+            "SKIPPED",
+          reason:
+            "Transação sem vencimento.",
+        });
+        continue;
+      }
+
+      const noticeType =
+        resolveFinanceNoticeType({
+          today,
+          dueDate:
+            transaction.dueDate,
+          lastNotificationAt:
+            transaction.lastNotificationAt,
+          notificationCount:
+            transaction.notificationCount || 0,
+          settings,
+        });
+
+      if (!noticeType) {
+        skipped += 1;
+        results.push({
+          transactionId:
+            transaction.id,
+          billingChargeId:
+            charge.id,
+          status:
+            "SKIPPED",
+          reason:
+            "Fora da janela de aviso configurada ou aviso já enviado hoje.",
+          email:
+            client.email,
+        });
+        continue;
+      }
+
+      const publicUrl =
+        getChargePublicUrl(charge);
+
+      const amountText =
+        formatCurrencyBRFromFloat(
+          charge.amount
+        );
+
+      const dueDateText =
+        transaction.dueDate.toLocaleDateString(
+          "pt-BR"
+        );
+
+      const subject =
+        getFinanceNoticeSubject({
+          noticeType,
+          chargeType:
+            charge.chargeType,
+          dueDate:
+            transaction.dueDate,
+        });
+
+      const intro =
+        getFinanceNoticeIntro({
+          noticeType,
+          clientName:
+            client.name,
+          chargeDescription:
+            charge.description,
+          dueDate:
+            transaction.dueDate,
+        });
+
+      const html = `
+        <div style="font-family:Arial,sans-serif;background:#f4f7f5;padding:24px;">
+          <div style="max-width:720px;margin:0 auto;background:#ffffff;border-radius:18px;overflow:hidden;border:1px solid #dfe7e2;">
+            <div style="background:#123c32;color:#ffffff;padding:24px;">
+              <h1 style="margin:0;font-size:23px;">${escapeHtml(subject)}</h1>
+              <p style="margin:8px 0 0;color:#d8f3e5;">
+                ${escapeHtml(company.companyName || "AMAZONIKA Engenharia & Meio Ambiente")}
+              </p>
+            </div>
+
+            <div style="padding:24px;color:#1f2937;">
+              <p>Prezado(a) <strong>${escapeHtml(client.name)}</strong>,</p>
+
+              <p style="line-height:1.65;">
+                ${intro}
+              </p>
+
+              <div style="background:#f8fbf9;border:1px solid #dfe7e2;border-radius:14px;padding:16px;margin:18px 0;">
+                <p><strong>Cobrança:</strong> ${escapeHtml(charge.description)}</p>
+                <p><strong>Valor:</strong> ${escapeHtml(amountText)}</p>
+                <p><strong>Vencimento:</strong> ${escapeHtml(dueDateText)}</p>
+                <p><strong>Status:</strong> ${escapeHtml(charge.status)}</p>
+              </div>
+
+              <p style="text-align:center;margin:28px 0;">
+                <a href="${escapeHtml(publicUrl)}" target="_blank"
+                  style="display:inline-block;background:#0f4f3a;color:#ffffff;text-decoration:none;padding:14px 24px;border-radius:999px;font-weight:bold;">
+                  Acessar cobrança
+                </a>
+              </p>
+
+              <p style="font-size:13px;color:#66766e;line-height:1.5;">
+                Caso o botão não funcione, copie e cole este endereço no navegador:<br/>
+                ${escapeHtml(publicUrl)}
+              </p>
+            </div>
+          </div>
+        </div>
+      `;
+
+      const info =
+        await transporter.sendMail({
+          to:
+            client.email,
+          subject,
+          html,
+        });
+
+      await prisma.financialTransaction.update({
+        where: {
+          id:
+            transaction.id,
+        },
+        data: {
+          lastNotificationAt:
+            today,
+          notificationCount: {
+            increment:
+              1,
+          },
+        },
+      });
+
+      await prisma.billingCharge.update({
+        where: {
+          id:
+            charge.id,
+        },
+        data: {
+          status:
+            charge.status === "EMITIDA"
+              ? "ENVIADA"
+              : charge.status,
+          sentToClientAt:
+            charge.sentToClientAt ||
+            today,
+        },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          userId:
+            null,
+          userName:
+            "SIS Amazonika",
+          userEmail:
+            null,
+          userRole:
+            "SYSTEM",
+          action:
+            "FINANCE_AUTO_CHARGE_NOTICE_SENT",
+          entity:
+            "FinancialTransaction",
+          entityId:
+            String(transaction.id),
+          description:
+            `Aviso automático de cobrança enviado para ${client.email}.`,
+          metadata:
+            JSON.stringify({
+              transactionId:
+                transaction.id,
+              billingChargeId:
+                charge.id,
+              noticeType,
+              messageId:
+                info.messageId,
+              accepted:
+                info.accepted,
+              rejected:
+                info.rejected,
+              publicUrl,
+            }),
+        },
+      });
+
+      sent += 1;
+
+      results.push({
+        transactionId:
+          transaction.id,
+        billingChargeId:
+          charge.id,
+        status:
+          "SENT",
+        reason:
+          "Aviso enviado por e-mail.",
+        noticeType,
+        email:
+          client.email,
+        publicUrl,
+      });
+    } catch (error: any) {
+      errors += 1;
+
+      results.push({
+        transactionId:
+          transaction.id,
+        billingChargeId:
+          transaction.billingCharge?.id ||
+          null,
+        status:
+          "ERROR",
+        reason:
+          error?.message ||
+          "Erro ao enviar aviso automático.",
+        email:
+          transaction.client?.email ||
+          transaction.billingCharge?.client?.email ||
+          null,
+      });
+    }
+  }
+
+  return {
+    today:
+      formatDateOnly(today),
+    checked:
+      transactions.length,
+    sent,
+    skipped,
+    errors,
+    results,
+  };
+}
+
+app.post(
+  "/finance/auto-charges/send-notices",
+  authMiddleware,
+  requireRoles([
+    "GERENTE",
+    "PROGRAMADOR",
+  ]),
+  async (req: any, res) => {
+    try {
+      const result =
+        await processFinanceAutoChargeEmailNotices();
+
+      return res.json(result);
+    } catch (error: any) {
+      console.error(
+        "Erro ao processar avisos automáticos de cobrança:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          error?.message ||
+          "Erro ao processar avisos automáticos de cobrança.",
+      });
+    }
+  }
+);
+
 
 /*
  * Primeira versão deliberadamente manual.
