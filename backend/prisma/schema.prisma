@@ -521,6 +521,9 @@ model Contract {
 
   // Prorrogações formais de vencimento.
   paymentDueDateExtensions PaymentDueDateExtension[]
+
+  signatures ContractSignature[]
+  signatureOtps ContractSignatureOtp[]
 }
 
 model ContractPaymentSchedule {
@@ -1092,6 +1095,73 @@ model ProLaboreAdvance {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+
+model ContractSignature {
+  id Int @id @default(autoincrement())
+
+  contractId Int
+  contract   Contract @relation(fields: [contractId], references: [id])
+
+  // CONTRATANTE ou CONTRATADA
+  signerRole String
+
+  // OTP_EMAIL, INTERNAL_LOGIN ou ICP_UPLOAD
+  method String
+
+  signerName    String
+  signerCpfCnpj String
+  signerEmail   String
+
+  signerIp        String?
+  signerUserAgent String?
+  signerUserId    Int?
+
+  acceptedTermsText String?
+  acceptedAt        DateTime?
+  signedAt          DateTime @default(now())
+
+  documentHash  String
+  signatureHash String @unique
+
+  evidenceJson String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([contractId])
+  @@index([signerEmail])
+  @@index([signatureHash])
+}
+
+model ContractSignatureOtp {
+  id Int @id @default(autoincrement())
+
+  contractId Int
+  contract   Contract @relation(fields: [contractId], references: [id])
+
+  signerName    String?
+  signerCpfCnpj String?
+  signerEmail   String
+
+  codeHash String
+
+  expiresAt  DateTime
+  verifiedAt DateTime?
+  usedAt     DateTime?
+
+  attempts Int @default(0)
+
+  requesterIp        String?
+  requesterUserAgent String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([contractId])
+  @@index([signerEmail])
+  @@index([expiresAt])
 }
 
 model Proposal {

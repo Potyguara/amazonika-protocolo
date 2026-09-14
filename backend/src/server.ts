@@ -1732,6 +1732,95 @@ function generatePublicContractToken() {
   return crypto.randomBytes(32).toString("hex");
 }
 
+
+function generateContractSignatureOtpCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function hashContractSignatureOtpCode(params: {
+  contractId: number;
+  signerEmail: string;
+  code: string;
+}) {
+  const secret =
+    process.env.CONTRACT_SIGNATURE_SECRET ||
+    process.env.JWT_SECRET ||
+    "amazonika-local-dev-secret";
+
+  return crypto
+    .createHash("sha256")
+    .update(
+      [
+        params.contractId,
+        params.signerEmail.trim().toLowerCase(),
+        params.code.trim(),
+        secret,
+      ].join(":")
+    )
+    .digest("hex");
+}
+
+function createContractDocumentHash(contract: {
+  id: number;
+  contractNumber?: string | null;
+  htmlSnapshot?: string | null;
+}) {
+  return crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        id: contract.id,
+        contractNumber: contract.contractNumber || null,
+        htmlSnapshot: contract.htmlSnapshot || "",
+      })
+    )
+    .digest("hex");
+}
+
+function createContractSignatureHash(params: {
+  contractId: number;
+  signerRole: string;
+  signerName: string;
+  signerCpfCnpj: string;
+  signerEmail: string;
+  signedAt: Date;
+  documentHash: string;
+  ip?: string | null;
+  userAgent?: string | null;
+}) {
+  return crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        contractId: params.contractId,
+        signerRole: params.signerRole,
+        signerName: params.signerName,
+        signerCpfCnpj: params.signerCpfCnpj,
+        signerEmail: params.signerEmail.trim().toLowerCase(),
+        signedAt: params.signedAt.toISOString(),
+        documentHash: params.documentHash,
+        ip: params.ip || null,
+        userAgent: params.userAgent || null,
+      })
+    )
+    .digest("hex");
+}
+
+function getContractSignatureRequestIp(req: any) {
+  return (
+    req.headers["x-forwarded-for"]
+      ?.toString()
+      .split(",")[0]
+      ?.trim() ||
+    req.socket?.remoteAddress ||
+    null
+  );
+}
+
+function getContractSignatureUserAgent(req: any) {
+  return req.headers["user-agent"]?.toString() || null;
+}
+
 function generatePublicBillingChargeToken() {
   return crypto.randomBytes(32).toString("hex");
 }
@@ -2714,33 +2803,368 @@ app.get("/public/contracts/:token", async (req, res) => {
   }
 });
 
-app.post("/public/contracts/:token/sign", async (req, res) => {
+
+app.post("/public/contracts/:token/signature-otp", async (req, res) => {
   try {
     const token = req.params.token;
 
-    const { signerName, signerCpfCnpj, signerEmail } = req.body || {};
+    const {
+      signerName,
+      signerCpfCnpj,
+      signerEmail,
+    } = req.body || {};
 
     if (!signerName || !signerCpfCnpj || !signerEmail) {
       return res.status(400).json({
         message:
-          "Nome, CPF/CNPJ e e-mail do assinante são obrigatórios para assinatura.",
+          "Nome, CPF/CNPJ e e-mail são obrigatórios para envio do código de assinatura.",
       });
     }
 
-    const contract = await prisma.contract.findUnique({
-      where: {
-        publicToken: token,
-      },
-      include: {
-        client: true,
-        protocol: true,
-        proposal: true,
-      },
-    });
+    const normalizedEmail =
+      String(signerEmail).trim().toLowerCase();
+
+    const contract =
+      await prisma.contract.findUnique({
+        where: {
+          publicToken: token,
+        },
+        include: {
+          client: true,
+        },
+      });
 
     if (!contract) {
       return res.status(404).json({
         message: "Contrato não encontrado.",
+      });
+    }
+
+    if (
+      contract.status === "ASSINADO" ||
+      contract.status === "CANCELADO" ||
+      contract.status === "SUBSTITUIDO"
+    ) {
+      return res.status(400).json({
+        message:
+          "Este contrato não está disponível para assinatura.",
+      });
+    }
+
+    const transporter =
+      await createTransporterFromSettings();
+
+    if (!transporter) {
+      return res.status(500).json({
+        message:
+          "SMTP não configurado para envio do código de assinatura.",
+      });
+    }
+
+    const smtpRows =
+      await prisma.systemSetting.findMany({
+        where: {
+          group: "SMTP",
+        },
+      });
+
+    const smtpSettings =
+      Object.fromEntries(
+        smtpRows.map((item) => [
+          item.key,
+          item.value || "",
+        ])
+      ) as Record<string, string>;
+
+    const smtpFrom =
+      smtpSettings.SMTP_FROM ||
+      smtpSettings.SMTP_USER ||
+      undefined;
+
+    const code =
+      generateContractSignatureOtpCode();
+
+    const codeHash =
+      hashContractSignatureOtpCode({
+        contractId: contract.id,
+        signerEmail: normalizedEmail,
+        code,
+      });
+
+    const now = new Date();
+
+    const expiresAt =
+      new Date(
+        now.getTime() +
+          10 * 60 * 1000
+      );
+
+    /*
+     * Invalida OTPs anteriores ainda não utilizados
+     * para este contrato/e-mail.
+     */
+    await prisma.contractSignatureOtp.updateMany({
+      where: {
+        contractId: contract.id,
+        signerEmail: normalizedEmail,
+        usedAt: null,
+      },
+      data: {
+        usedAt: now,
+      },
+    });
+
+    await prisma.contractSignatureOtp.create({
+      data: {
+        contractId:
+          contract.id,
+
+        signerName:
+          String(signerName).trim(),
+
+        signerCpfCnpj:
+          String(signerCpfCnpj).trim(),
+
+        signerEmail:
+          normalizedEmail,
+
+        codeHash,
+
+        expiresAt,
+
+        requesterIp:
+          getContractSignatureRequestIp(req),
+
+        requesterUserAgent:
+          getContractSignatureUserAgent(req),
+      },
+    });
+
+    const html = `
+      <div style="font-family:Arial,sans-serif;background:#f4f7f5;padding:24px;">
+        <div style="max-width:680px;margin:0 auto;background:#ffffff;border-radius:18px;overflow:hidden;border:1px solid #dfe7e2;">
+          <div style="background:#123c32;color:#ffffff;padding:24px;">
+            <h1 style="margin:0;font-size:23px;">
+              Código de assinatura eletrônica
+            </h1>
+            <p style="margin:8px 0 0;color:#d8f3e5;">
+              SIS Amazonika
+            </p>
+          </div>
+
+          <div style="padding:24px;color:#1f2937;">
+            <p>
+              Prezado(a)
+              <strong>${escapeHtml(String(signerName))}</strong>,
+            </p>
+
+            <p style="line-height:1.65;">
+              Use o código abaixo para confirmar a assinatura eletrônica do contrato
+              <strong>${escapeHtml(contract.contractNumber)}</strong>.
+            </p>
+
+            <div style="
+              font-size:34px;
+              font-weight:bold;
+              letter-spacing:8px;
+              text-align:center;
+              background:#f8fbf9;
+              border:1px solid #dfe7e2;
+              border-radius:14px;
+              padding:20px;
+              margin:24px 0;
+              color:#123c32;
+            ">
+              ${escapeHtml(code)}
+            </div>
+
+            <p style="line-height:1.65;">
+              O código é válido por 10 minutos.
+            </p>
+
+            <p style="font-size:13px;color:#64748b;">
+              Caso você não tenha solicitado este código, desconsidere esta mensagem.
+            </p>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const info =
+      await transporter.sendMail({
+        from:
+          smtpFrom,
+        to:
+          normalizedEmail,
+        subject:
+          `Código de assinatura — ${contract.contractNumber}`,
+        html,
+      });
+
+    await prisma.auditLog.create({
+      data: {
+        userId:
+          null,
+
+        userName:
+          "SIS Amazonika",
+
+        userEmail:
+          null,
+
+        userRole:
+          "SYSTEM",
+
+        action:
+          "CONTRACT_SIGNATURE_OTP_SENT",
+
+        entity:
+          "Contract",
+
+        entityId:
+          String(contract.id),
+
+        description:
+          `Código de assinatura eletrônica enviado para ${normalizedEmail}.`,
+
+        ipAddress:
+          getContractSignatureRequestIp(req),
+
+        metadata:
+          JSON.stringify({
+            contractId:
+              contract.id,
+
+            contractNumber:
+              contract.contractNumber,
+
+            signerEmail:
+              normalizedEmail,
+
+            expiresAt:
+              expiresAt.toISOString(),
+
+            messageId:
+              info.messageId,
+
+            accepted:
+              info.accepted,
+
+            rejected:
+              info.rejected,
+          }),
+      },
+    });
+
+    return res.json({
+      message:
+        "Código de assinatura enviado para o e-mail informado.",
+
+      expiresAt:
+        expiresAt.toISOString(),
+    });
+  } catch (error) {
+    console.error(
+      "Erro ao enviar OTP de assinatura:",
+      error
+    );
+
+    return res.status(500).json({
+      message:
+        "Erro ao enviar código de assinatura.",
+    });
+  }
+});
+
+app.post("/public/contracts/:token/sign", async (req, res) => {
+  try {
+    const token =
+      String(req.params.token || "").trim();
+
+    const {
+      signerName,
+      signerCpfCnpj,
+      signerEmail,
+      otpCode,
+      acceptedElectronicSignature,
+    } = req.body || {};
+
+    /*
+     * =====================================================
+     * VALIDAÇÃO INICIAL
+     * =====================================================
+     */
+
+    if (
+      !signerName ||
+      !signerCpfCnpj ||
+      !signerEmail ||
+      !otpCode
+    ) {
+      return res.status(400).json({
+        message:
+          "Nome, CPF/CNPJ, e-mail e código de assinatura são obrigatórios.",
+      });
+    }
+
+    if (acceptedElectronicSignature !== true) {
+      return res.status(400).json({
+        message:
+          "É necessário declarar expressamente o aceite da assinatura eletrônica.",
+      });
+    }
+
+    const normalizedSignerName =
+      String(signerName).trim();
+
+    const normalizedSignerCpfCnpj =
+      String(signerCpfCnpj).trim();
+
+    const normalizedSignerEmail =
+      String(signerEmail)
+        .trim()
+        .toLowerCase();
+
+    const normalizedOtpCode =
+      String(otpCode)
+        .replace(/\D/g, "")
+        .trim();
+
+    if (!/^\d{6}$/.test(normalizedOtpCode)) {
+      return res.status(400).json({
+        message:
+          "O código de assinatura deve possuir 6 dígitos.",
+      });
+    }
+
+    /*
+     * =====================================================
+     * CONTRATO
+     * =====================================================
+     */
+
+    const contract =
+      await prisma.contract.findUnique({
+        where: {
+          publicToken:
+            token,
+        },
+        include: {
+          client:
+            true,
+
+          protocol:
+            true,
+
+          proposal:
+            true,
+        },
+      });
+
+    if (!contract) {
+      return res.status(404).json({
+        message:
+          "Contrato não encontrado.",
       });
     }
 
@@ -2750,95 +3174,708 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
       contract.status !== "GERADO"
     ) {
       return res.status(400).json({
-        message: "Este contrato não está disponível para assinatura.",
+        message:
+          contract.status === "ASSINADO"
+            ? "Este contrato já foi assinado."
+            : "Este contrato não está disponível para assinatura.",
       });
     }
 
-    const signed = await prisma.contract.update({
-      where: {
-        id: contract.id,
-      },
-      data: {
-        status: "ASSINADO",
-        signedAt: new Date(),
+    /*
+     * =====================================================
+     * OTP MAIS RECENTE AINDA NÃO UTILIZADO
+     * =====================================================
+     */
 
-        signerName: String(signerName).trim(),
-        signerCpfCnpj: String(signerCpfCnpj).trim(),
-        signerEmail: String(signerEmail).trim(),
-        signerIp:
-          String(
-            req.headers["x-forwarded-for"] ||
-              req.socket.remoteAddress ||
-              req.ip ||
-              ""
-          ) || null,
-        signerUserAgent: req.headers["user-agent"] || null,
-      },
-    });
+    const otp =
+      await prisma.contractSignatureOtp.findFirst({
+        where: {
+          contractId:
+            contract.id,
 
-    await prisma.protocol.update({
-      where: {
-        id: contract.protocolId,
-      },
-      data: {
-        status: "CONTRATO_ASSINADO",
-      },
-    });
+          signerEmail:
+            normalizedSignerEmail,
 
-    await createProposalHistory({
-      protocolId: contract.protocolId,
-      proposalId: contract.proposalId || null,
-      eventType: "CONTRATO_ASSINADO",
-      title: `Contrato ${contract.contractNumber} assinado pelo cliente`,
-      description: `Contrato assinado eletronicamente por ${signerName}.`,
-      recipient: contract.client.email || null,
-      senderName: String(signerName).trim(),
-      senderEmail: String(signerEmail).trim(),
-      metadata: {
-        contractId: contract.id,
-        contractNumber: contract.contractNumber,
-        signerName,
-        signerCpfCnpj,
-        signerEmail,
-        signedAt: new Date().toISOString(),
+          usedAt:
+            null,
+        },
+
+        orderBy: {
+          createdAt:
+            "desc",
+        },
+      });
+
+    if (!otp) {
+      return res.status(400).json({
+        message:
+          "Código de assinatura não encontrado. Solicite um novo código.",
+      });
+    }
+
+    /*
+     * O OTP também preserva os dados declarados quando
+     * o código foi solicitado. Eles não podem ser alterados
+     * silenciosamente no momento da assinatura.
+     */
+
+    if (
+      otp.signerName &&
+      otp.signerName.trim() !== normalizedSignerName
+    ) {
+      return res.status(400).json({
+        message:
+          "O nome do assinante não corresponde aos dados utilizados para solicitar o código.",
+      });
+    }
+
+    if (
+      otp.signerCpfCnpj &&
+      otp.signerCpfCnpj.trim() !== normalizedSignerCpfCnpj
+    ) {
+      return res.status(400).json({
+        message:
+          "O CPF/CNPJ do assinante não corresponde aos dados utilizados para solicitar o código.",
+      });
+    }
+
+    /*
+     * =====================================================
+     * LIMITE DE TENTATIVAS
+     * =====================================================
+     */
+
+    if (otp.attempts >= 5) {
+      if (!otp.usedAt) {
+        await prisma.contractSignatureOtp.update({
+          where: {
+            id:
+              otp.id,
+          },
+
+          data: {
+            usedAt:
+              new Date(),
+          },
+        });
+      }
+
+      return res.status(429).json({
+        message:
+          "Número máximo de tentativas excedido. Solicite um novo código de assinatura.",
+      });
+    }
+
+    /*
+     * =====================================================
+     * EXPIRAÇÃO
+     * =====================================================
+     */
+
+    if (
+      otp.expiresAt.getTime() <
+      Date.now()
+    ) {
+      await prisma.contractSignatureOtp.update({
+        where: {
+          id:
+            otp.id,
+        },
+
+        data: {
+          usedAt:
+            new Date(),
+        },
+      });
+
+      return res.status(400).json({
+        message:
+          "Código de assinatura expirado. Solicite um novo código.",
+      });
+    }
+
+    /*
+     * =====================================================
+     * VALIDAÇÃO CRIPTOGRÁFICA DO OTP
+     * =====================================================
+     */
+
+    const informedCodeHash =
+      hashContractSignatureOtpCode({
+        contractId:
+          contract.id,
+
+        signerEmail:
+          normalizedSignerEmail,
+
+        code:
+          normalizedOtpCode,
+      });
+
+    if (
+      informedCodeHash !==
+      otp.codeHash
+    ) {
+      const updatedOtp =
+        await prisma.contractSignatureOtp.update({
+          where: {
+            id:
+              otp.id,
+          },
+
+          data: {
+            attempts: {
+              increment:
+                1,
+            },
+          },
+        });
+
+      const remainingAttempts =
+        Math.max(
+          0,
+          5 -
+            updatedOtp.attempts
+        );
+
+      return res.status(400).json({
+        message:
+          remainingAttempts > 0
+            ? `Código de assinatura inválido. Restam ${remainingAttempts} tentativa(s).`
+            : "Código de assinatura inválido. Solicite um novo código.",
+      });
+    }
+
+    /*
+     * =====================================================
+     * EVIDÊNCIAS DA ASSINATURA
+     * =====================================================
+     */
+
+    const signedAt =
+      new Date();
+
+    const signerIp =
+      getContractSignatureRequestIp(
+        req
+      );
+
+    const signerUserAgent =
+      getContractSignatureUserAgent(
+        req
+      );
+
+    /*
+     * O hash é calculado sobre o conteúdo contratual
+     * efetivamente disponibilizado para assinatura.
+     */
+    const documentHash =
+      createContractDocumentHash(
+        contract
+      );
+
+    const signatureHash =
+      createContractSignatureHash({
+        contractId:
+          contract.id,
+
+        signerRole:
+          "CONTRATANTE",
+
+        signerName:
+          normalizedSignerName,
+
+        signerCpfCnpj:
+          normalizedSignerCpfCnpj,
+
+        signerEmail:
+          normalizedSignerEmail,
+
+        signedAt,
+
+        documentHash,
+
         ip:
-          String(
-            req.headers["x-forwarded-for"] ||
-              req.socket.remoteAddress ||
-              req.ip ||
-              ""
-          ) || null,
-        userAgent: req.headers["user-agent"] || null,
+          signerIp,
+
+        userAgent:
+          signerUserAgent,
+      });
+
+    const acceptedTermsText =
+      "Declaro que li integralmente o contrato, compreendi e aceito seus termos e condições e manifesto minha vontade de assiná-lo eletronicamente, utilizando o código de confirmação enviado ao e-mail informado.";
+
+    /*
+     * =====================================================
+     * GRAVAÇÃO ATÔMICA
+     * =====================================================
+     *
+     * Ou todas as evidências são persistidas,
+     * ou nenhuma delas é considerada concluída.
+     */
+
+    const result =
+      await prisma.$transaction(
+        async (tx) => {
+          /*
+           * Revalidação dentro da transação.
+           * Evita assinatura concorrente do mesmo contrato.
+           */
+          const currentContract =
+            await tx.contract.findUnique({
+              where: {
+                id:
+                  contract.id,
+              },
+            });
+
+          if (!currentContract) {
+            throw new Error(
+              "CONTRACT_NOT_FOUND"
+            );
+          }
+
+          if (
+            currentContract.status !== "AGUARDANDO_ASSINATURA" &&
+            currentContract.status !== "ENVIADO" &&
+            currentContract.status !== "GERADO"
+          ) {
+            throw new Error(
+              "CONTRACT_ALREADY_SIGNED_OR_UNAVAILABLE"
+            );
+          }
+
+          const currentOtp =
+            await tx.contractSignatureOtp.findUnique({
+              where: {
+                id:
+                  otp.id,
+              },
+            });
+
+          if (
+            !currentOtp ||
+            currentOtp.usedAt ||
+            currentOtp.verifiedAt
+          ) {
+            throw new Error(
+              "OTP_ALREADY_USED"
+            );
+          }
+
+          if (
+            currentOtp.expiresAt.getTime() <
+            Date.now()
+          ) {
+            throw new Error(
+              "OTP_EXPIRED"
+            );
+          }
+
+          const signature =
+            await tx.contractSignature.create({
+              data: {
+                contractId:
+                  contract.id,
+
+                signerRole:
+                  "CONTRATANTE",
+
+                method:
+                  "OTP_EMAIL",
+
+                signerName:
+                  normalizedSignerName,
+
+                signerCpfCnpj:
+                  normalizedSignerCpfCnpj,
+
+                signerEmail:
+                  normalizedSignerEmail,
+
+                signerIp,
+
+                signerUserAgent,
+
+                signerUserId:
+                  null,
+
+                acceptedTermsText,
+
+                acceptedAt:
+                  signedAt,
+
+                signedAt,
+
+                documentHash,
+
+                signatureHash,
+
+                evidenceJson:
+                  JSON.stringify({
+                    version:
+                      1,
+
+                    contractId:
+                      contract.id,
+
+                    contractNumber:
+                      contract.contractNumber,
+
+                    publicToken:
+                      contract.publicToken,
+
+                    signerRole:
+                      "CONTRATANTE",
+
+                    method:
+                      "OTP_EMAIL",
+
+                    signerName:
+                      normalizedSignerName,
+
+                    signerCpfCnpj:
+                      normalizedSignerCpfCnpj,
+
+                    signerEmail:
+                      normalizedSignerEmail,
+
+                    signerIp,
+
+                    signerUserAgent,
+
+                    acceptedElectronicSignature:
+                      true,
+
+                    acceptedTermsText,
+
+                    acceptedAt:
+                      signedAt.toISOString(),
+
+                    signedAt:
+                      signedAt.toISOString(),
+
+                    documentHash,
+
+                    signatureHash,
+
+                    otpId:
+                      otp.id,
+
+                    otpRequestedAt:
+                      otp.createdAt.toISOString(),
+
+                    otpExpiresAt:
+                      otp.expiresAt.toISOString(),
+
+                    otpVerifiedAt:
+                      signedAt.toISOString(),
+                  }),
+              },
+            });
+
+          const signedContract =
+            await tx.contract.update({
+              where: {
+                id:
+                  contract.id,
+              },
+
+              data: {
+                status:
+                  "ASSINADO",
+
+                signedAt,
+
+                signerName:
+                  normalizedSignerName,
+
+                signerCpfCnpj:
+                  normalizedSignerCpfCnpj,
+
+                signerEmail:
+                  normalizedSignerEmail,
+
+                signerIp,
+
+                signerUserAgent,
+              },
+            });
+
+          await tx.contractSignatureOtp.update({
+            where: {
+              id:
+                otp.id,
+            },
+
+            data: {
+              verifiedAt:
+                signedAt,
+
+              usedAt:
+                signedAt,
+            },
+          });
+
+          await tx.protocol.update({
+            where: {
+              id:
+                contract.protocolId,
+            },
+
+            data: {
+              status:
+                "CONTRATO_ASSINADO",
+            },
+          });
+
+          await tx.auditLog.create({
+            data: {
+              userId:
+                null,
+
+              userName:
+                normalizedSignerName,
+
+              userEmail:
+                normalizedSignerEmail,
+
+              userRole:
+                "CLIENTE",
+
+              action:
+                "CONTRACT_SIGNED_WITH_OTP",
+
+              entity:
+                "Contract",
+
+              entityId:
+                String(
+                  contract.id
+                ),
+
+              description:
+                `Contrato ${contract.contractNumber} assinado eletronicamente pelo contratante com validação OTP.`,
+
+              ipAddress:
+                signerIp,
+
+              metadata:
+                JSON.stringify({
+                  contractId:
+                    contract.id,
+
+                  contractNumber:
+                    contract.contractNumber,
+
+                  contractSignatureId:
+                    signature.id,
+
+                  signerRole:
+                    "CONTRATANTE",
+
+                  method:
+                    "OTP_EMAIL",
+
+                  signerName:
+                    normalizedSignerName,
+
+                  signerCpfCnpj:
+                    normalizedSignerCpfCnpj,
+
+                  signerEmail:
+                    normalizedSignerEmail,
+
+                  signerIp,
+
+                  signerUserAgent,
+
+                  signedAt:
+                    signedAt.toISOString(),
+
+                  documentHash,
+
+                  signatureHash,
+
+                  otpId:
+                    otp.id,
+                }),
+            },
+          });
+
+          return {
+            signedContract,
+            signature,
+          };
+        }
+      );
+
+    /*
+     * =====================================================
+     * HISTÓRICO FUNCIONAL
+     * =====================================================
+     *
+     * Não interfere na validade da gravação principal.
+     */
+
+    try {
+      await createProposalHistory({
+        protocolId:
+          contract.protocolId,
+
+        proposalId:
+          contract.proposalId ||
+          null,
+
+        eventType:
+          "CONTRATO_ASSINADO",
+
+        title:
+          `Contrato ${contract.contractNumber} assinado pelo cliente`,
+
+        description:
+          `Contrato assinado eletronicamente por ${normalizedSignerName}, com confirmação por código enviado ao e-mail informado.`,
+
+        recipient:
+          contract.client.email ||
+          null,
+
+        senderName:
+          normalizedSignerName,
+
+        senderEmail:
+          normalizedSignerEmail,
+
+        metadata: {
+          contractId:
+            contract.id,
+
+          contractNumber:
+            contract.contractNumber,
+
+          contractSignatureId:
+            result.signature.id,
+
+          signerRole:
+            "CONTRATANTE",
+
+          method:
+            "OTP_EMAIL",
+
+          signerName:
+            normalizedSignerName,
+
+          signerCpfCnpj:
+            normalizedSignerCpfCnpj,
+
+          signerEmail:
+            normalizedSignerEmail,
+
+          signedAt:
+            signedAt.toISOString(),
+
+          documentHash,
+
+          signatureHash,
+
+          ip:
+            signerIp,
+
+          userAgent:
+            signerUserAgent,
+        },
+      });
+    } catch (historyError) {
+      console.error(
+        "Contrato assinado, mas houve falha ao registrar ProposalHistory:",
+        historyError
+      );
+    }
+
+    return res.json({
+      ...result.signedContract,
+
+      electronicSignature: {
+        id:
+          result.signature.id,
+
+        signerRole:
+          result.signature.signerRole,
+
+        method:
+          result.signature.method,
+
+        signerName:
+          result.signature.signerName,
+
+        signerCpfCnpj:
+          result.signature.signerCpfCnpj,
+
+        signerEmail:
+          result.signature.signerEmail,
+
+        signedAt:
+          result.signature.signedAt,
+
+        documentHash:
+          result.signature.documentHash,
+
+        signatureHash:
+          result.signature.signatureHash,
       },
     });
+  } catch (error: any) {
+    console.error(
+      "Erro ao assinar contrato:",
+      error
+    );
 
-    await prisma.auditLog.create({
-      data: {
-        action: "CLIENT_SIGN_CONTRACT",
-        entity: "Contract",
-        entityId: String(contract.id),
-        description: `Cliente assinou o contrato ${contract.contractNumber}.`,
-        metadata: JSON.stringify({
-          token,
-          contractNumber: contract.contractNumber,
-          signerName,
-          signerCpfCnpj,
-          signerEmail,
-          signedAt: new Date().toISOString(),
-        }),
-      },
-    });
+    if (
+      error?.message ===
+      "CONTRACT_ALREADY_SIGNED_OR_UNAVAILABLE"
+    ) {
+      return res.status(409).json({
+        message:
+          "Este contrato já foi assinado ou não está mais disponível para assinatura.",
+      });
+    }
 
-    return res.json(signed);
-  } catch (error) {
-    console.error("Erro ao assinar contrato:", error);
+    if (
+      error?.message ===
+      "OTP_ALREADY_USED"
+    ) {
+      return res.status(409).json({
+        message:
+          "Este código de assinatura já foi utilizado. Solicite um novo código.",
+      });
+    }
+
+    if (
+      error?.message ===
+      "OTP_EXPIRED"
+    ) {
+      return res.status(400).json({
+        message:
+          "Código de assinatura expirado. Solicite um novo código.",
+      });
+    }
+
+    if (
+      error?.message ===
+      "CONTRACT_NOT_FOUND"
+    ) {
+      return res.status(404).json({
+        message:
+          "Contrato não encontrado.",
+      });
+    }
 
     return res.status(500).json({
-      message: "Erro ao assinar contrato.",
+      message:
+        "Erro ao assinar contrato.",
     });
   }
 });
-
 
 
 app.get(
