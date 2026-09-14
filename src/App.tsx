@@ -10061,6 +10061,23 @@ type BackendFinanceAutoChargeSettings = {
   defaultFiscalMode: "NOTA_FISCAL_ANTES" | "RECIBO_POSTERIOR";
 };
 
+type BackendFinanceAutoChargeProcessResult = {
+  today: string;
+  daysAhead: number;
+  checked: number;
+  eligible: number;
+  created: number;
+  recovered: number;
+  skipped: number;
+  errors: number;
+  results?: Array<{
+    transactionId: number;
+    status: "CREATED" | "RECOVERED" | "DRY_RUN" | "SKIPPED" | "ERROR";
+    reason?: string;
+    txid?: string | null;
+  }>;
+};
+
 type BackendProLaboreAdvance = {
   id: number;
   managerUserId: number;
@@ -10175,6 +10192,11 @@ function FinancePage() {
     autoChargeSettings,
     setAutoChargeSettings,
   ] = useState<BackendFinanceAutoChargeSettings | null>(null);
+
+  const [
+    autoChargeProcessResult,
+    setAutoChargeProcessResult,
+  ] = useState<BackendFinanceAutoChargeProcessResult | null>(null);
 
 
   /*
@@ -10338,6 +10360,49 @@ function FinancePage() {
         err instanceof Error
           ? err.message
           : "Erro ao salvar configurações de cobranças automáticas."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleProcessAutoCharges(dryRun: boolean) {
+    if (!autoChargeSettings) return;
+
+    if (!dryRun) {
+      const confirmed = window.confirm(
+        "Deseja processar cobranças automáticas agora? Esta ação pode criar cobranças Pix no Banco do Brasil para lançamentos elegíveis."
+      );
+
+      if (!confirmed) return;
+    }
+
+    try {
+      setSaving(true);
+      setError("");
+      setSuccess("");
+      setAutoChargeProcessResult(null);
+
+      const result =
+        (await api.processFinanceAutoCharges({
+          daysAhead: Number(autoChargeSettings.issueDaysBeforeDue || 7),
+          dryRun,
+        })) as BackendFinanceAutoChargeProcessResult;
+
+      setAutoChargeProcessResult(result);
+
+      setSuccess(
+        dryRun
+          ? `Simulação concluída. Elegíveis: ${result.eligible}. Criadas: ${result.created}. Erros: ${result.errors}.`
+          : `Processamento concluído. Criadas: ${result.created}. Recuperadas: ${result.recovered}. Erros: ${result.errors}.`
+      );
+
+      await loadFinance();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao processar cobranças automáticas."
       );
     } finally {
       setSaving(false);
@@ -11608,6 +11673,62 @@ async function handleDeleteSalary(id: number) {
                   </p>
                 </div>
               </div>
+            </div>
+
+            <div className="panel soft-panel">
+              <div className="panel-header">
+                <div>
+                  <h3>Execução manual</h3>
+                  <p>
+                    Simule primeiro para verificar os lançamentos elegíveis. O processamento real
+                    poderá emitir cobranças Pix no Banco do Brasil.
+                  </p>
+                </div>
+
+                <div className="detail-actions">
+                  <button
+                    className="secondary-action"
+                    type="button"
+                    onClick={() => handleProcessAutoCharges(true)}
+                    disabled={saving}
+                  >
+                    Simular cobranças
+                  </button>
+
+                  <button
+                    className="button primary"
+                    type="button"
+                    onClick={() => handleProcessAutoCharges(false)}
+                    disabled={saving || !autoChargeSettings.enabled}
+                  >
+                    Processar cobranças
+                  </button>
+                </div>
+              </div>
+
+              {autoChargeProcessResult && (
+                <div className="metrics-grid four">
+                  <div className="metric-card">
+                    <span>Verificadas</span>
+                    <strong>{autoChargeProcessResult.checked}</strong>
+                  </div>
+
+                  <div className="metric-card">
+                    <span>Elegíveis</span>
+                    <strong>{autoChargeProcessResult.eligible}</strong>
+                  </div>
+
+                  <div className="metric-card">
+                    <span>Criadas</span>
+                    <strong>{autoChargeProcessResult.created}</strong>
+                  </div>
+
+                  <div className="metric-card">
+                    <span>Erros</span>
+                    <strong>{autoChargeProcessResult.errors}</strong>
+                  </div>
+                </div>
+              )}
             </div>
           </article>
         )}
