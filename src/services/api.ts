@@ -612,6 +612,12 @@ financeTransactions(params?: {
     });
   },
 
+  sendFinanceAutoChargeNotices() {
+    return request("/finance/auto-charges/send-notices", {
+      method: "POST",
+    });
+  },
+
 
 
 

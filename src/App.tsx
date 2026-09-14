@@ -10070,6 +10070,23 @@ type BackendFinanceAutoChargeSettings = {
   defaultFiscalMode: "NOTA_FISCAL_ANTES" | "RECIBO_POSTERIOR";
 };
 
+type BackendFinanceAutoChargeNoticeResult = {
+  today: string;
+  checked: number;
+  sent: number;
+  skipped: number;
+  errors: number;
+  results?: Array<{
+    transactionId: number;
+    billingChargeId?: number | null;
+    status: "SENT" | "SKIPPED" | "ERROR";
+    reason?: string;
+    noticeType?: string;
+    email?: string | null;
+    publicUrl?: string | null;
+  }>;
+};
+
 type BackendFinanceAutoChargeProcessResult = {
   today: string;
   daysAhead: number;
@@ -10206,6 +10223,11 @@ function FinancePage() {
     autoChargeProcessResult,
     setAutoChargeProcessResult,
   ] = useState<BackendFinanceAutoChargeProcessResult | null>(null);
+
+  const [
+    autoChargeNoticeResult,
+    setAutoChargeNoticeResult,
+  ] = useState<BackendFinanceAutoChargeNoticeResult | null>(null);
 
 
   /*
@@ -10369,6 +10391,40 @@ function FinancePage() {
         err instanceof Error
           ? err.message
           : "Erro ao salvar configurações de cobranças automáticas."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleSendAutoChargeNotices() {
+    const confirmed = window.confirm(
+      "Deseja enviar agora os avisos automáticos de cobrança por e-mail conforme as regras configuradas?"
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setSaving(true);
+      setError("");
+      setSuccess("");
+      setAutoChargeNoticeResult(null);
+
+      const result =
+        (await api.sendFinanceAutoChargeNotices()) as BackendFinanceAutoChargeNoticeResult;
+
+      setAutoChargeNoticeResult(result);
+
+      setSuccess(
+        `Avisos processados. Enviados: ${result.sent}. Ignorados: ${result.skipped}. Erros: ${result.errors}.`
+      );
+
+      await loadFinance();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao enviar avisos automáticos de cobrança."
       );
     } finally {
       setSaving(false);
@@ -11712,6 +11768,19 @@ async function handleDeleteSalary(id: number) {
                   >
                     Processar cobranças
                   </button>
+
+                  <button
+                    className="secondary-action"
+                    type="button"
+                    onClick={handleSendAutoChargeNotices}
+                    disabled={
+                      saving ||
+                      !autoChargeSettings.enabled ||
+                      !autoChargeSettings.sendEmail
+                    }
+                  >
+                    Enviar avisos agora
+                  </button>
                 </div>
               </div>
 
@@ -11803,6 +11872,111 @@ async function handleDeleteSalary(id: number) {
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {autoChargeNoticeResult && (
+            <div className="panel soft-panel" style={{ marginTop: 18 }}>
+              <h3>Resultado dos avisos automáticos</h3>
+
+              <div className="metrics-grid four">
+                <div className="metric-card">
+                  <span>Verificadas</span>
+                  <strong>{autoChargeNoticeResult.checked}</strong>
+                </div>
+
+                <div className="metric-card">
+                  <span>Enviadas</span>
+                  <strong>{autoChargeNoticeResult.sent}</strong>
+                </div>
+
+                <div className="metric-card">
+                  <span>Ignoradas</span>
+                  <strong>{autoChargeNoticeResult.skipped}</strong>
+                </div>
+
+                <div className="metric-card">
+                  <span>Erros</span>
+                  <strong>{autoChargeNoticeResult.errors}</strong>
+                </div>
+              </div>
+
+              {Boolean(autoChargeNoticeResult.results?.length) && (
+                <div className="table-wrap" style={{ marginTop: 18 }}>
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Transação</th>
+                        <th>Cobrança</th>
+                        <th>Status</th>
+                        <th>Motivo</th>
+                        <th>E-mail</th>
+                        <th>Link</th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {(autoChargeNoticeResult.results || []).map((item, index) => {
+                        const statusLabel =
+                          item.status === "SENT"
+                            ? "Enviado"
+                            : item.status === "SKIPPED"
+                            ? "Ignorado"
+                            : item.status === "ERROR"
+                            ? "Erro"
+                            : item.status;
+
+                        const statusClass =
+                          item.status === "ERROR"
+                            ? "cancelado"
+                            : item.status === "SENT"
+                            ? "concluido"
+                            : "rascunho";
+
+                        return (
+                          <tr key={`${item.transactionId}-${item.status}-${index}`}>
+                            <td>#{item.transactionId}</td>
+                            <td>{item.billingChargeId ? `#${item.billingChargeId}` : "-"}</td>
+
+                            <td>
+                              <span className={`badge ${statusClass}`}>
+                                {statusLabel}
+                              </span>
+                            </td>
+
+                            <td>
+                              {item.noticeType ? (
+                                <>
+                                  <strong>{item.noticeType}</strong>
+                                  <br />
+                                </>
+                              ) : null}
+                              {item.reason || "-"}
+                            </td>
+
+                            <td>{item.email || "-"}</td>
+
+                            <td>
+                              {item.publicUrl ? (
+                                <a
+                                  className="mini-button"
+                                  href={item.publicUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  Abrir
+                                </a>
+                              ) : (
+                                "-"
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
             </div>
