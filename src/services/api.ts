@@ -1395,6 +1395,12 @@ extendContractPaymentDueDate(
   );
 },
 
+signContractor(id: number) {
+  return request(`/contracts/${id}/sign-contractor`, {
+    method: "POST",
+  });
+},
+
 sendContract(id: number) {
   return request(`/contracts/${id}/send`, {
     method: "POST",
@@ -1405,12 +1411,28 @@ publicContract(token: string) {
   return request(`/public/contracts/${token}`);
 },
 
+requestContractSignatureOtp(
+  token: string,
+  data: {
+    signerName: string;
+    signerCpfCnpj: string;
+    signerEmail: string;
+  }
+) {
+  return request(`/public/contracts/${token}/signature-otp`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+},
+
 signPublicContract(
   token: string,
   data: {
     signerName: string;
     signerCpfCnpj: string;
     signerEmail: string;
+    otpCode: string;
+    acceptedElectronicSignature: boolean;
   }
 ) {
   return request(`/public/contracts/${token}/sign`, {

@@ -804,6 +804,28 @@ type BackendContract = {
 
   publicUrl?: string;
 
+  signatures?: Array<{
+    id: number;
+    contractId: number;
+    signerRole: "CONTRATADA" | "CONTRATANTE" | string;
+    method: "INTERNAL_LOGIN" | "OTP_EMAIL" | "ICP_UPLOAD" | string;
+
+    signerName: string;
+    signerCpfCnpj: string;
+    signerEmail: string;
+
+    signerIp?: string | null;
+    signerUserAgent?: string | null;
+    signerUserId?: number | null;
+
+    acceptedTermsText?: string | null;
+    acceptedAt?: string | null;
+    signedAt: string;
+
+    documentHash: string;
+    signatureHash: string;
+  }>;
+
   client?: {
     id: number;
     name: string;
@@ -1667,6 +1689,12 @@ function PublicContractPage() {
   const [signerCpfCnpj, setSignerCpfCnpj] = useState("");
   const [signerEmail, setSignerEmail] = useState("");
 
+  const [otpCode, setOtpCode] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpExpiresAt, setOtpExpiresAt] = useState<string | null>(null);
+  const [acceptedElectronicSignature, setAcceptedElectronicSignature] =
+    useState(false);
+
   async function loadContract() {
     try {
       setLoading(true);
@@ -1695,7 +1723,7 @@ function PublicContractPage() {
     loadContract();
   }, [token]);
 
-  async function handleSignContract() {
+  async function handleRequestSignatureOtp() {
     try {
       setSaving(true);
       setError("");
@@ -1706,30 +1734,94 @@ function PublicContractPage() {
       }
 
       if (!signerName.trim()) {
-        throw new Error("Informe o nome do assinante.");
+        throw new Error("Nome do contratante não disponível.");
       }
 
       if (!signerCpfCnpj.trim()) {
-        throw new Error("Informe o CPF/CNPJ do assinante.");
+        throw new Error("CPF/CNPJ do contratante não disponível.");
       }
 
       if (!signerEmail.trim()) {
-        throw new Error("Informe o e-mail do assinante.");
+        throw new Error(
+          "E-mail do contratante não disponível. Atualize o cadastro antes de enviar o contrato."
+        );
       }
 
-      const confirmed = window.confirm(
-        "Confirma a assinatura eletrônica deste contrato?"
-      );
+      const response = (await api.requestContractSignatureOtp(token, {
+        signerName: signerName.trim(),
+        signerCpfCnpj: signerCpfCnpj.trim(),
+        signerEmail: signerEmail.trim(),
+      })) as {
+        message?: string;
+        expiresAt?: string;
+      };
 
-      if (!confirmed) return;
+      setOtpSent(true);
+      setOtpCode("");
+      setAcceptedElectronicSignature(false);
+      setOtpExpiresAt(response.expiresAt || null);
+
+      setSuccess(
+        response.message ||
+          "Código de assinatura enviado para o e-mail do contratante."
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao enviar código de assinatura."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleSignContract() {
+    try {
+      setSaving(true);
+      setError("");
+      setSuccess("");
+
+      if (!token) {
+        throw new Error("Token do contrato não informado.");
+      }
+
+      if (!otpSent) {
+        throw new Error(
+          "Solicite primeiro o código de assinatura enviado por e-mail."
+        );
+      }
+
+      const normalizedOtp =
+        otpCode.replace(/\D/g, "").slice(0, 6);
+
+      if (normalizedOtp.length !== 6) {
+        throw new Error("Informe o código de assinatura com 6 dígitos.");
+      }
+
+      if (!acceptedElectronicSignature) {
+        throw new Error(
+          "É necessário declarar o aceite dos termos e da assinatura eletrônica."
+        );
+      }
 
       await api.signPublicContract(token, {
         signerName: signerName.trim(),
         signerCpfCnpj: signerCpfCnpj.trim(),
         signerEmail: signerEmail.trim(),
+        otpCode: normalizedOtp,
+        acceptedElectronicSignature: true,
       });
 
-      setSuccess("Contrato assinado eletronicamente com sucesso.");
+      setSuccess(
+        "Contrato assinado eletronicamente com sucesso. A assinatura foi registrada com evidências de autenticação e integridade."
+      );
+
+      setOtpCode("");
+      setOtpSent(false);
+      setOtpExpiresAt(null);
+      setAcceptedElectronicSignature(false);
+
       await loadContract();
     } catch (err) {
       setError(
@@ -2044,47 +2136,146 @@ function PublicContractPage() {
             ) : (
               <>
                 <p>
-                  Confira as informações do contrato. Se estiver tudo correto,
-                  preencha os dados abaixo e confirme a assinatura eletrônica.
+                  Confira integralmente o contrato antes de prosseguir.
+                  Seus dados de identificação abaixo são os mesmos vinculados
+                  ao instrumento contratual.
                 </p>
 
-                <label>
-                  Nome/Razão Social do assinante
-                  <input
-                    value={signerName}
-                    onChange={(event) => setSignerName(event.target.value)}
-                  />
-                </label>
+                <div className="contract-signer-data">
+                  <label>
+                    Nome/Razão Social
+                    <input
+                      value={signerName}
+                      readOnly
+                      aria-readonly="true"
+                    />
+                  </label>
 
-                <label>
-                  CPF/CNPJ
-                  <input
-                    value={signerCpfCnpj}
-                    onChange={(event) => setSignerCpfCnpj(event.target.value)}
-                  />
-                </label>
+                  <label>
+                    CPF/CNPJ
+                    <input
+                      value={signerCpfCnpj}
+                      readOnly
+                      aria-readonly="true"
+                    />
+                  </label>
 
-                <label>
-                  E-mail
-                  <input
-                    value={signerEmail}
-                    onChange={(event) => setSignerEmail(event.target.value)}
-                  />
-                </label>
-
-                <div className="contract-legal-confirmation">
-                  Ao clicar em assinar, declaro que li, compreendi e aceito as
-                  condições do contrato eletrônico.
+                  <label>
+                    E-mail para autenticação
+                    <input
+                      value={signerEmail}
+                      readOnly
+                      aria-readonly="true"
+                    />
+                  </label>
                 </div>
 
-                <button
-                  className="hero-btn primary full"
-                  type="button"
-                  disabled={saving}
-                  onClick={handleSignContract}
-                >
-                  {saving ? "Assinando..." : "Assinar contrato"}
-                </button>
+                {!otpSent ? (
+                  <>
+                    <div className="contract-legal-confirmation">
+                      Para assinar este contrato, enviaremos um código de
+                      autenticação de 6 dígitos para o e-mail cadastrado acima.
+                    </div>
+
+                    <button
+                      className="hero-btn primary full"
+                      type="button"
+                      disabled={saving}
+                      onClick={handleRequestSignatureOtp}
+                    >
+                      {saving
+                        ? "Enviando código..."
+                        : "Enviar código de assinatura"}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="contract-otp-box">
+                      <div className="contract-otp-heading">
+                        <strong>Código de assinatura enviado</strong>
+
+                        <span>
+                          Digite o código de 6 dígitos recebido por e-mail.
+                        </span>
+                      </div>
+
+                      <label>
+                        Código de autenticação
+                        <input
+                          className="contract-otp-input"
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
+                          maxLength={6}
+                          value={otpCode}
+                          onChange={(event) =>
+                            setOtpCode(
+                              event.target.value
+                                .replace(/\D/g, "")
+                                .slice(0, 6)
+                            )
+                          }
+                          placeholder="000000"
+                        />
+                      </label>
+
+                      {otpExpiresAt && (
+                        <small className="contract-otp-expiration">
+                          Código válido até{" "}
+                          <strong>{formatDateTime(otpExpiresAt)}</strong>.
+                        </small>
+                      )}
+
+                      <button
+                        className="mini-button"
+                        type="button"
+                        disabled={saving}
+                        onClick={handleRequestSignatureOtp}
+                      >
+                        Reenviar código
+                      </button>
+                    </div>
+
+                    <label className="contract-signature-consent">
+                      <input
+                        type="checkbox"
+                        checked={acceptedElectronicSignature}
+                        onChange={(event) =>
+                          setAcceptedElectronicSignature(
+                            event.target.checked
+                          )
+                        }
+                      />
+
+                      <span>
+                        Declaro que li integralmente este contrato, compreendi e
+                        aceito seus termos e condições, reconheço os dados acima
+                        como meus e manifesto minha vontade de assiná-lo
+                        eletronicamente.
+                      </span>
+                    </label>
+
+                    <div className="contract-legal-confirmation">
+                      A assinatura será registrada com data e hora, endereço IP,
+                      identificação do dispositivo, autenticação por código de
+                      uso único e hashes criptográficos de integridade.
+                    </div>
+
+                    <button
+                      className="hero-btn primary full"
+                      type="button"
+                      disabled={
+                        saving ||
+                        otpCode.length !== 6 ||
+                        !acceptedElectronicSignature
+                      }
+                      onClick={handleSignContract}
+                    >
+                      {saving
+                        ? "Validando assinatura..."
+                        : "Assinar contrato eletronicamente"}
+                    </button>
+                  </>
+                )}
 
                 <Link to="/" className="amazonika-login-back">
                   Voltar ao site
@@ -6065,6 +6256,38 @@ const hasAcceptedProposalPendingContract = Boolean(acceptedProposal);
     }
   }
 
+  async function handleSignContractor(contract: BackendContract) {
+    const confirmed = window.confirm(
+      `Confirma a assinatura eletrônica do contrato ${contract.contractNumber} pela CONTRATADA?\n\n` +
+        `Esta operação registrará o usuário autenticado, data, hora, IP, identificação do navegador e o hash do documento.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setSaving(true);
+      setError("");
+      setSuccess("");
+
+      await api.signContractor(contract.id);
+
+      setSuccess(
+        `Contrato ${contract.contractNumber} assinado eletronicamente pela CONTRATADA com sucesso.`
+      );
+
+      await loadData();
+      await onReload?.();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao assinar contrato pela CONTRATADA."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function handleSendContract(contract: BackendContract) {
     const confirmed = window.confirm(
       `Deseja enviar o contrato ${contract.contractNumber} para o e-mail do cliente?`
@@ -6212,18 +6435,41 @@ const hasAcceptedProposalPendingContract = Boolean(acceptedProposal);
 
                   <td>
                     <div className="table-actions">
+                      {contract.status === "GERADO" &&
+                        !contract.signatures?.some(
+                          (signature) =>
+                            signature.signerRole === "CONTRATADA"
+                        ) && (
+                          <button
+                            className="mini-button"
+                            type="button"
+                            disabled={saving}
+                            onClick={() =>
+                              handleSignContractor(contract)
+                            }
+                          >
+                            Assinar pela CONTRATADA
+                          </button>
+                        )}
+
                       {(contract.status === "GERADO" ||
                         contract.status === "ENVIADO" ||
-                        contract.status === "AGUARDANDO_ASSINATURA") && (
-                        <button
-                          className="mini-button"
-                          type="button"
-                          disabled={saving}
-                          onClick={() => handleSendContract(contract)}
-                        >
-                          Enviar
-                        </button>
-                      )}
+                        contract.status === "AGUARDANDO_ASSINATURA") &&
+                        contract.signatures?.some(
+                          (signature) =>
+                            signature.signerRole === "CONTRATADA"
+                        ) && (
+                          <button
+                            className="mini-button"
+                            type="button"
+                            disabled={saving}
+                            onClick={() =>
+                              handleSendContract(contract)
+                            }
+                          >
+                            Enviar
+                          </button>
+                        )}
 
                       <a
                         className="mini-button"
