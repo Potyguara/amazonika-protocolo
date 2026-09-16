@@ -15511,7 +15511,7 @@ type ProposalPaymentScheduleInput = {
 
 function normalizeProposalPaymentSchedule(
   input: unknown,
-  totalAmount: number,
+  totalAmountCents: number,
   paymentMode: string
 ) {
   if (!Array.isArray(input) || input.length === 0) {
@@ -15701,9 +15701,7 @@ function normalizeProposalPaymentSchedule(
   const totalScheduleCents = sumCents(normalized.map(row => row.amountCents));
 
   const proposalTotalCents =
-    Math.round(
-      Number(totalAmount || 0) * 100
-    );
+    assertPrismaIntCents(totalAmountCents);
 
   if (
     totalScheduleCents !==
@@ -15714,23 +15712,22 @@ function normalizeProposalPaymentSchedule(
     );
   }
 
-  // Fronteira temporária com o cabeçalho legado Proposal (reais); não participa da cópia ao contrato.
   return {
     normalized,
-    entryAmount:
+    entryAmountCents:
       entries.length > 0
-        ? entries[0].amountCents / 100
+        ? entries[0].amountCents
         : 0,
     installmentQty:
       installmentCount,
-    installmentAmount:
+    installmentAmountCents:
       installmentCount > 0 &&
       installments.every(
         (row) =>
           row.amountCents ===
           installments[0].amountCents
       )
-        ? installments[0].amountCents / 100
+        ? installments[0].amountCents
         : null,
   };
 }
@@ -15893,7 +15890,7 @@ app.put(
         normalizedScheduleResult =
           normalizeProposalPaymentSchedule(
             paymentSchedule,
-            totalAmount,
+            assertPrismaIntCents(parseReaisInput(String(totalAmount), "en-US")),
             paymentModeValue
           );
       } catch (scheduleError: any) {
@@ -15912,13 +15909,13 @@ app.put(
        * entretanto, passa a ser ProposalPaymentSchedule.
        */
       const scheduleEntryAmount =
-        normalizedScheduleResult.entryAmount;
+        normalizedScheduleResult.entryAmountCents;
 
       const scheduleInstallmentQty =
         normalizedScheduleResult.installmentQty;
 
       const scheduleInstallmentAmount =
-        normalizedScheduleResult.installmentAmount;
+        normalizedScheduleResult.installmentAmountCents;
 
       /*
        * Nested writes do Prisma:
@@ -15952,14 +15949,22 @@ app.put(
               paymentModeValue,
 
             totalAmount,
+            totalAmountCents:
+              assertPrismaIntCents(parseReaisInput(String(totalAmount), "en-US")),
 
             entryAmount:
+              scheduleEntryAmount / 100,
+            entryAmountCents:
               scheduleEntryAmount,
 
             installmentQty:
               scheduleInstallmentQty,
 
             installmentAmount:
+              scheduleInstallmentAmount === null
+                ? null
+                : scheduleInstallmentAmount / 100,
+            installmentAmountCents:
               scheduleInstallmentAmount,
 
             executionDays:
@@ -16289,18 +16294,18 @@ if (
       const normalizedScheduleResult =
         normalizeProposalPaymentSchedule(
           paymentSchedule,
-          totalAmount,
+          assertPrismaIntCents(parseReaisInput(String(totalAmount), "en-US")),
           paymentMode || "ENTRADA_PARCELAS"
         );
 
       const scheduleEntryAmount =
-        normalizedScheduleResult.entryAmount;
+        normalizedScheduleResult.entryAmountCents;
 
       const scheduleInstallmentQty =
         normalizedScheduleResult.installmentQty;
 
       const scheduleInstallmentAmount =
-        normalizedScheduleResult.installmentAmount;
+        normalizedScheduleResult.installmentAmountCents;
 
       const proposalNumber = await generateProposalNumber();
 
@@ -16318,9 +16323,16 @@ if (
           paymentMode: paymentMode || "ENTRADA_PARCELAS",
 
           totalAmount,
-          entryAmount: scheduleEntryAmount,
+          totalAmountCents:
+            assertPrismaIntCents(parseReaisInput(String(totalAmount), "en-US")),
+          entryAmount: scheduleEntryAmount / 100,
+          entryAmountCents: scheduleEntryAmount,
           installmentQty: scheduleInstallmentQty,
-          installmentAmount: scheduleInstallmentAmount,
+          installmentAmount:
+            scheduleInstallmentAmount === null
+              ? null
+              : scheduleInstallmentAmount / 100,
+          installmentAmountCents: scheduleInstallmentAmount,
 
           executionDays: executionDays ? Number(executionDays) : null,
           validUntil: validUntil ? new Date(validUntil) : null,
