@@ -3342,14 +3342,22 @@ app.post(
         });
       }
 
-      const scheduleTotalCents = proposal.paymentSchedule.reduce(
-        (sum, item) => sum + Number(item.amountCents || 0),
-        0
+      const scheduleTotalCents = sumCents(
+        proposal.paymentSchedule.map((item) =>
+          assertPrismaIntCents(item.amountCents)
+        )
       );
 
-      const proposalTotalCents = Math.round(
-        Number(proposal.totalAmount || 0) * 100
-      );
+      // A partir da 2C.1, o cabeçalho canônico da proposta é a fonte
+      // para o valor aprovado; o campo legado só serve de fallback
+      // para propostas históricas ainda não convertidas.
+      const proposalTotalCents =
+        proposal.totalAmountCents !== null &&
+        proposal.totalAmountCents !== undefined
+          ? assertPrismaIntCents(proposal.totalAmountCents)
+          : assertPrismaIntCents(
+              parseReaisInput(String(proposal.totalAmount || 0), "en-US")
+            );
 
       if (scheduleTotalCents !== proposalTotalCents) {
         return res.status(400).json({
@@ -3471,8 +3479,20 @@ app.post(
           templateType: "CONTRATO_PRESTACAO_SERVICOS",
           status: "GERADO",
 
-contractValue: proposal.totalAmount,
-entryAmount: proposal.entryAmount,
+contractValue: proposalTotalCents / 100,
+contractValueCents: proposalTotalCents,
+entryAmount:
+  proposal.entryAmountCents !== null &&
+  proposal.entryAmountCents !== undefined
+    ? assertPrismaIntCents(proposal.entryAmountCents) / 100
+    : proposal.entryAmount,
+entryAmountCents:
+  proposal.entryAmountCents !== null &&
+  proposal.entryAmountCents !== undefined
+    ? assertPrismaIntCents(proposal.entryAmountCents)
+    : assertPrismaIntCents(
+        parseReaisInput(String(proposal.entryAmount || 0), "en-US")
+      ),
 paymentMode: proposal.paymentMode,
 
           title: `Contrato de Prestação de Serviços — ${proposal.protocol.protocolNumber}`,
@@ -16616,7 +16636,20 @@ app.post("/public/proposals/:token/accept", async (req, res) => {
       },
       data: {
         status: "ACORDO_FECHADO",
-        finalValue: proposal.totalAmount / 100,
+        finalValue:
+          (proposal.totalAmountCents !== null &&
+          proposal.totalAmountCents !== undefined
+            ? assertPrismaIntCents(proposal.totalAmountCents)
+            : assertPrismaIntCents(
+                parseReaisInput(String(proposal.totalAmount || 0), "en-US")
+              )) / 100,
+        finalValueCents:
+          proposal.totalAmountCents !== null &&
+          proposal.totalAmountCents !== undefined
+            ? assertPrismaIntCents(proposal.totalAmountCents)
+            : assertPrismaIntCents(
+                parseReaisInput(String(proposal.totalAmount || 0), "en-US")
+              ),
       },
     });
 
