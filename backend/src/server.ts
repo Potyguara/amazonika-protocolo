@@ -20568,10 +20568,19 @@ app.post(
 
       const paidAt = normalizeNullableDate(req.body?.paidAt) || new Date();
 
-const paidAmount =
+const paidAmountCents =
   req.body?.paidAmount !== undefined && req.body?.paidAmount !== ""
-    ? Number(req.body.paidAmount)
-    : Number(charge.amount || 0);
+    ? assertPrismaIntCents(
+        parseReaisInput(String(req.body.paidAmount), "en-US")
+      )
+    : charge.amountCents !== null && charge.amountCents !== undefined
+    ? assertPrismaIntCents(charge.amountCents)
+    : assertPrismaIntCents(
+        parseReaisInput(String(charge.amount || 0), "en-US")
+      );
+
+// Espelho legado somente enquanto paidAmount ainda existir no schema.
+const paidAmount = paidAmountCents / 100;
 
       const paidCharge = await prisma.billingCharge.update({
         where: { id: charge.id },
@@ -20579,6 +20588,7 @@ const paidAmount =
           status: "PAGA",
           paidAt,
           paidAmount,
+          paidAmountCents,
           rawWebhook: req.body?.rawWebhook
             ? JSON.stringify(req.body.rawWebhook)
             : charge.rawWebhook,
@@ -20652,6 +20662,7 @@ const paidAmount =
               source: "CONTRATO",
               protocolId: charge.protocolId,
               amount: paidAmount,
+              amountCents: paidAmountCents,
               dueDate: charge.dueDate,
               description: {
                 contains: `Cobrança #${charge.id}`,
@@ -20782,6 +20793,7 @@ const paidAmount =
               number: `REC-${String(charge.id).padStart(6, "0")}`,
               issuedAt: paidAt,
               amount: paidAmount,
+              amountCents: paidAmountCents,
 
               fileName: receiptPdf.fileName,
               filePath: receiptPdf.publicPath,
@@ -20810,6 +20822,7 @@ const paidAmount =
               billingChargeId: charge.id,
               fiscalDocumentId: generatedReceipt.id,
               amount: paidAmount,
+              amountCents: paidAmountCents,
               paidAt,
               filePath: receiptPdf.publicPath,
             },
