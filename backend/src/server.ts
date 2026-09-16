@@ -8909,6 +8909,40 @@ function getFinanceMonth(req: any) {
   return getCurrentCompetenceMonth();
 }
 
+type FinanceProtectionState = {
+  status: string;
+  paidAt?: Date | string | null;
+  paymentConfirmedAt?: Date | string | null;
+  billingCharge?: { status: string; paidAt?: Date | string | null } | null;
+  providerChargeId?: string | null;
+  providerTxId?: string | null;
+  chargeStatus?: string | null;
+  chargeCreatedAt?: Date | string | null;
+  chargeExpiresAt?: Date | string | null;
+};
+
+function isFinancialTransactionConsolidated(transaction: FinanceProtectionState) {
+  return transaction.status === "PAGO" ||
+    transaction.paidAt != null ||
+    transaction.paymentConfirmedAt != null ||
+    transaction.billingCharge?.status === "PAGA" ||
+    transaction.billingCharge?.paidAt != null;
+}
+
+function hasFinanceBankEvidence(transaction: FinanceProtectionState) {
+  // PENDING é apenas preparação local. ERROR pode ser falha após emissão
+  // remota; qualquer outro estado exige conciliação antes de mutações.
+  return Boolean(transaction.providerChargeId || transaction.providerTxId ||
+    transaction.chargeCreatedAt || transaction.chargeExpiresAt ||
+    (transaction.chargeStatus && transaction.chargeStatus !== "PENDING"));
+}
+
+function financeRelationUpdate(value: unknown) {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  return Number(value);
+}
+
 function toIntMoney(value: any) {
   if (value === null || value === undefined || value === "") return 0;
   return Math.round(Number(value));
@@ -11556,6 +11590,7 @@ app.get(
             contractId: true,
             chargeType: true,
             status: true,
+            paidAt: true,
             amount: true,
             dueDate: true,
             installmentNumber: true,
@@ -12517,6 +12552,7 @@ app.post(
                 id: true,
                 contractId: true,
                 status: true,
+                paidAt: true,
               },
             },
           },
@@ -12561,14 +12597,21 @@ app.post(
       }
 
       if (
-        current.status === "PAGO" ||
-        current.paymentConfirmedAt
+        isFinancialTransactionConsolidated(current)
       ) {
         return res.status(409).json({
           message:
             "Um lançamento já pago não pode ser transformado em parcelamento.",
           code:
             "PAID_TRANSACTION_LOCKED",
+        });
+      }
+
+      if (hasFinanceBankEvidence(current) || current.status === "CANCELADO" ||
+          current.source === "COMISSAO_PARCEIRO") {
+        return res.status(409).json({
+          code: "FINANCIAL_TRANSACTION_CONVERSION_LOCKED",
+          message: "Este lançamento possui cobrança bancária, está cancelado ou pertence ao fluxo de comissões e não pode ser convertido.",
         });
       }
 
@@ -12760,6 +12803,17 @@ app.post(
       const result =
         await prisma.$transaction(
           async (tx) => {
+            const latest = await tx.financialTransaction.findUnique({
+              where: { id: current.id },
+              include: { billingCharge: true, partnerCommission: true },
+            });
+            if (!latest || latest.updatedAt.getTime() !== current.updatedAt.getTime() ||
+                isFinancialTransactionConsolidated(latest) || latest.billingCharge ||
+                latest.partnerCommission || hasFinanceBankEvidence(latest) ||
+                latest.installmentGroupId || latest.status === "CANCELADO" || latest.source === "CONTRATO") {
+              throw Object.assign(new Error("O lançamento mudou ou está protegido. Atualize os dados antes de converter."),
+                { code: "FINANCIAL_TRANSACTION_CONVERSION_LOCKED" });
+            }
             const transactions = [];
 
             /*
@@ -13364,6 +13418,9 @@ app.post(
           result,
       });
     } catch (error) {
+      if ((error as any)?.code === "FINANCIAL_TRANSACTION_CONVERSION_LOCKED") {
+        return res.status(409).json({ code: (error as any).code, message: (error as Error).message });
+      }
       console.error(
         "Erro ao converter lançamento em plano financeiro:",
         error
@@ -13431,6 +13488,7 @@ app.get(
                 contractId: true,
                 chargeType: true,
                 status: true,
+                paidAt: true,
                 amount: true,
                 dueDate: true,
                 installmentNumber: true,
@@ -13490,6 +13548,7 @@ app.get(
                 contractId: true,
                 chargeType: true,
                 status: true,
+                paidAt: true,
                 amount: true,
                 dueDate: true,
                 installmentNumber: true,
@@ -13531,341 +13590,150 @@ app.get(
 );
 
 
+// Proteções emergenciais compartilhadas. Leitura, mutação e auditoria
+// permanecem na mesma transação local; nenhuma chamada bancária ocorre aqui.
+function financeMutationHandler(operation: "UPDATE" | "PAY" | "DELETE") {
+  return async (req: any, res: any) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ message: "ID do lançamento inválido." });
+    }
+
+    try {
+      const outcome = await prisma.$transaction(async (tx) => {
+        const current = await tx.financialTransaction.findUnique({
+          where: { id },
+          include: { billingCharge: true, partnerCommission: true, category: true,
+            protocol: { include: { client: true, serviceType: true } } },
+        });
+        const conflict = (code: string, message: string) => ({
+          status: 409, body: { code, message },
+        });
+        if (!current) {
+          return { status: 404, body: { message: "Lançamento financeiro não encontrado." } };
+        }
+
+        const consolidated = isFinancialTransactionConsolidated(current);
+        const body = req.body || {};
+        const notesOnly = Object.keys(body).every((key) => key === "notes");
+
+        if (operation === "PAY" && current.status === "CANCELADO") {
+          return conflict("FINANCIAL_TRANSACTION_CANCELLED",
+            "Um lançamento cancelado não pode receber baixa administrativa.");
+        }
+        if (consolidated && operation !== "PAY" &&
+            (operation === "DELETE" || !notesOnly)) {
+          return conflict("FINANCIAL_TRANSACTION_CONSOLIDATED",
+            "Este lançamento possui pagamento consolidado. Os dados financeiros são protegidos; somente observações podem ser atualizadas.");
+        }
+        if (current.installmentGroupId && operation !== "PAY") {
+          return conflict("FINANCIAL_PAYMENT_PLAN_LOCKED",
+            "Este lançamento pertence a um plano. Alterações da composição deverão ocorrer pelo fluxo de reprogramação financeira, que será disponibilizado posteriormente.");
+        }
+        if (current.billingCharge && (operation !== "UPDATE" || !notesOnly)) {
+          return conflict("BILLING_TRANSACTION_LOCKED",
+            "Este lançamento possui cobrança vinculada. Utilize o fluxo de Cobranças para preservar a conciliação financeira.");
+        }
+        if ((current.source === "CONTRATO" || current.source === "COMISSAO_PARCEIRO" || current.partnerCommission) &&
+            (operation !== "UPDATE" || !notesOnly)) {
+          return conflict("FINANCIAL_TRANSACTION_ORIGIN_LOCKED",
+            "Este lançamento é protegido pelo fluxo de origem do contrato ou da comissão.");
+        }
+        if (operation === "PAY" && consolidated) {
+          if (current.status !== "PAGO") {
+            return conflict("FINANCIAL_TRANSACTION_CONSOLIDATED",
+              "Existem evidências de pagamento com status divergente. Concilie o lançamento antes de realizar outra baixa.");
+          }
+          // Repetir a baixa não altera datas nem gera outro evento de auditoria.
+          return { status: 200, body: current };
+        }
+        if (hasFinanceBankEvidence(current) && (operation !== "UPDATE" || !notesOnly)) {
+          return conflict("FINANCIAL_TRANSACTION_BANK_LOCKED",
+            "Existem dados de cobrança bancária. Concilie a cobrança antes de alterar este lançamento.");
+        }
+
+        if (operation === "UPDATE") {
+          if (["installmentGroupId", "installmentNumber", "totalInstallments"]
+              .some((key) => Object.prototype.hasOwnProperty.call(body, key))) {
+            return conflict("FINANCIAL_PAYMENT_PLAN_LOCKED",
+              "A composição de parcelamento não pode ser alterada pelo salvamento individual.");
+          }
+          if (body.status === "PAGO" || body.paidAt != null) {
+            return conflict("FINANCIAL_PAYMENT_FLOW_REQUIRED",
+              "Confirme o pagamento pela ação Pagar para preservar a data e o histórico da baixa.");
+          }
+          if (body.status !== undefined && body.status !== current.status) {
+            return conflict("FINANCIAL_TRANSACTION_STATUS_LOCKED",
+              "A alteração administrativa de status está bloqueada nesta etapa. Utilize Pagar para confirmar um pagamento pendente.");
+          }
+        }
+
+        const transaction = operation === "DELETE"
+          ? await tx.financialTransaction.delete({ where: { id } })
+          : await tx.financialTransaction.update({
+              where: { id },
+              data: operation === "PAY" ? { status: "PAGO", paidAt: new Date() } : {
+                type: body.type,
+                source: body.source,
+                status: body.status,
+                categoryId: financeRelationUpdate(body.categoryId),
+                protocolId: financeRelationUpdate(body.protocolId),
+                clientId: financeRelationUpdate(body.clientId),
+                catalogServiceId: financeRelationUpdate(body.catalogServiceId),
+                description: body.description,
+                amount: body.amount === undefined ? undefined : toIntMoney(body.amount),
+                dueDate: body.dueDate === undefined ? undefined : normalizeNullableDate(body.dueDate),
+                paidAt: body.paidAt === undefined ? undefined : normalizeNullableDate(body.paidAt),
+                competenceMonth: body.competenceMonth === undefined
+                  ? (body.dueDate ? getCompetenceMonthFromDate(normalizeNullableDate(body.dueDate)) : undefined)
+                  : body.competenceMonth,
+                clientName: body.clientName,
+                notes: body.notes,
+              },
+              include: { category: true, protocol: { include: { client: true, serviceType: true } } },
+            });
+        await tx.auditLog.create({ data: {
+          userId: req.user?.id || null,
+          userName: req.user?.name || null,
+          userEmail: req.user?.email || null,
+          userRole: req.user?.role || null,
+          ipAddress: req.ip,
+          action: `${operation}_FINANCIAL_TRANSACTION`,
+          entity: "FinancialTransaction",
+          entityId: String(id),
+          description: `${operation}: ${current.description}.`,
+          metadata: JSON.stringify({ before: current, after: operation === "DELETE" ? null : transaction }),
+        } });
+        return { status: operation === "DELETE" ? 204 : 200, body: transaction };
+      });
+      if (outcome.status === 204) return res.status(204).send();
+      return res.status(outcome.status).json(outcome.body);
+    } catch (error) {
+      console.error("Erro na operação financeira protegida:", error);
+      return res.status(500).json({ message: "Não foi possível concluir a operação financeira. Atualize os dados antes de tentar novamente." });
+    }
+  };
+}
+
 app.put(
   "/finance/transactions/:id",
   authMiddleware,
   requireRoles(["GERENTE", "PROGRAMADOR"]),
-  async (req: any, res) => {
-    const id = Number(req.params.id);
-
-    const {
-      type,
-      source,
-      status,
-      categoryId,
-      protocolId,
-      clientId,
-      catalogServiceId,
-      description,
-      amount,
-      dueDate,
-      paidAt,
-      competenceMonth,
-      clientName,
-      notes,
-    } = req.body;
-
-    const currentTransaction =
-      await prisma.financialTransaction.findUnique({
-        where: {
-          id,
-        },
-        include: {
-          billingCharge: {
-            select: {
-              id: true,
-              contractId: true,
-              chargeType: true,
-              status: true,
-              amount: true,
-              dueDate: true,
-            },
-          },
-        },
-      });
-
-    if (!currentTransaction) {
-      return res.status(404).json({
-        message: "Lançamento financeiro não encontrado.",
-      });
-    }
-
-    /*
-     * Um lançamento derivado de BillingCharge é reflexo
-     * contábil/financeiro de uma obrigação contratual.
-     *
-     * O Financeiro não pode reescrever o contrato.
-     */
-    if (currentTransaction.billingCharge) {
-      const isContractual =
-        currentTransaction.source === "CONTRATO" ||
-        currentTransaction.billingCharge.contractId != null;
-
-      const protectedFields = [
-        "type",
-        "source",
-        "protocolId",
-        "clientId",
-        "catalogServiceId",
-        "description",
-        "amount",
-        "dueDate",
-        "paidAt",
-        "status",
-      ];
-
-      const attemptedProtectedFields =
-        protectedFields.filter(
-          (field) =>
-            Object.prototype.hasOwnProperty.call(
-              req.body || {},
-              field
-            )
-        );
-
-      if (attemptedProtectedFields.length > 0) {
-        return res.status(409).json({
-          message: isContractual
-            ? "Este lançamento pertence a uma obrigação contratual. Valor, vencimento, status e vínculos devem ser alterados pelo fluxo do contrato."
-            : "Este serviço avulso possui uma cobrança bancária vinculada. Remova ou cancele primeiro a cobrança antes de alterar valor, vencimento, status ou vínculos.",
-          code: isContractual
-            ? "CONTRACTUAL_TRANSACTION_LOCKED"
-            : "BILLING_TRANSACTION_LOCKED",
-          billingChargeId:
-            currentTransaction.billingCharge.id,
-          protectedFields:
-            attemptedProtectedFields,
-        });
-      }
-    }
-
-    const finalDueDate = normalizeNullableDate(dueDate);
-    const finalPaidAt = normalizeNullableDate(paidAt);
-
-    const transaction = await prisma.financialTransaction.update({
-      where: { id },
-      data: {
-        type,
-        source,
-        status,
-        categoryId: categoryId ? Number(categoryId) : null,
-        protocolId: protocolId ? Number(protocolId) : null,
-
-        clientId:
-          clientId === undefined
-            ? undefined
-            : clientId
-            ? Number(clientId)
-            : null,
-
-        catalogServiceId:
-          catalogServiceId === undefined
-            ? undefined
-            : catalogServiceId
-            ? Number(catalogServiceId)
-            : null,
-
-        description,
-        amount: amount !== undefined ? toIntMoney(amount) : undefined,
-        dueDate: dueDate === undefined ? undefined : finalDueDate,
-        paidAt: paidAt === undefined ? undefined : finalPaidAt,
-        competenceMonth:
-          competenceMonth ||
-          (dueDate || paidAt
-            ? getCompetenceMonthFromDate(finalDueDate || finalPaidAt)
-            : undefined),
-        clientName,
-        notes,
-      },
-      include: {
-        category: true,
-        protocol: {
-          include: {
-            client: true,
-            serviceType: true,
-          },
-        },
-      },
-    });
-
-    await prisma.auditLog.create({
-      data: {
-        userId: req.user?.id || null,
-        userName: req.user?.name || null,
-        userEmail: req.user?.email || null,
-        userRole: req.user?.role || null,
-        action: "UPDATE_FINANCIAL_TRANSACTION",
-        entity: "FinancialTransaction",
-        entityId: String(transaction.id),
-        description: `Transação financeira atualizada: ${transaction.description}.`,
-      },
-    });
-
-    return res.json(transaction);
-  }
+  financeMutationHandler("UPDATE")
 );
 
 app.patch(
   "/finance/transactions/:id/pay",
   authMiddleware,
   requireRoles(["GERENTE", "PROGRAMADOR"]),
-  async (req: any, res) => {
-    try {
-      const id = Number(req.params.id);
-
-      if (!id) {
-        return res.status(400).json({
-          message: "ID do lançamento inválido.",
-        });
-      }
-
-      const currentTransaction =
-        await prisma.financialTransaction.findUnique({
-          where: { id },
-          include: {
-            billingCharge: {
-              select: {
-                id: true,
-                contractId: true,
-                chargeType: true,
-                status: true,
-              },
-            },
-          },
-        });
-
-      if (!currentTransaction) {
-        return res.status(404).json({
-          message: "Lançamento financeiro não encontrado.",
-        });
-      }
-
-      if (currentTransaction.billingCharge) {
-        const isContractual =
-          currentTransaction.source === "CONTRATO" ||
-          currentTransaction.billingCharge.contractId != null;
-
-        return res.status(409).json({
-          message: isContractual
-            ? "Este lançamento pertence a uma obrigação contratual. O pagamento deve ser confirmado pelo fluxo de Cobranças."
-            : "Este serviço avulso possui uma cobrança bancária vinculada. O pagamento deve ser confirmado pelo fluxo da cobrança para preservar a conciliação financeira.",
-          code: isContractual
-            ? "CONTRACTUAL_TRANSACTION_LOCKED"
-            : "BILLING_TRANSACTION_LOCKED",
-          billingChargeId:
-            currentTransaction.billingCharge.id,
-        });
-      }
-
-      const transaction = await prisma.financialTransaction.update({
-        where: { id },
-        data: {
-          status: "PAGO",
-          paidAt: new Date(),
-        },
-        include: {
-          category: true,
-          protocol: true,
-        },
-      });
-
-      await prisma.auditLog.create({
-        data: {
-          userId: req.user?.id || null,
-          userName: req.user?.name || null,
-          userEmail: req.user?.email || null,
-          userRole: req.user?.role || null,
-          action: "PAY_FINANCIAL_TRANSACTION",
-          entity: "FinancialTransaction",
-          entityId: String(transaction.id),
-          description: `Transação financeira marcada como paga: ${transaction.description}.`,
-        },
-      });
-
-      return res.json(transaction);
-    } catch (error) {
-      console.error("Erro ao marcar lançamento financeiro como pago:", error);
-
-      return res.status(500).json({
-        message:
-          error instanceof Error
-            ? error.message
-            : "Erro ao marcar lançamento financeiro como pago.",
-      });
-    }
-  }
+  financeMutationHandler("PAY")
 );
-
-
 
 app.delete(
   "/finance/transactions/:id",
   authMiddleware,
   requireRoles(["GERENTE", "PROGRAMADOR"]),
-  async (req, res) => {
-    try {
-      const id = Number(req.params.id);
-
-      if (!id) {
-        return res.status(400).json({
-          message: "ID do lançamento inválido.",
-        });
-      }
-
-      const transaction = await prisma.financialTransaction.findUnique({
-        where: { id },
-        include: {
-          billingCharge: {
-            select: {
-              id: true,
-              contractId: true,
-              chargeType: true,
-              status: true,
-            },
-          },
-        },
-      });
-
-      if (!transaction) {
-        return res.status(404).json({
-          message: "Lançamento financeiro não encontrado.",
-        });
-      }
-
-      if (transaction.billingCharge) {
-        const isContractual =
-          transaction.source === "CONTRATO" ||
-          transaction.billingCharge.contractId != null;
-
-        return res.status(409).json({
-          message: isContractual
-            ? "Este lançamento pertence a uma obrigação contratual e não pode ser excluído diretamente pelo Financeiro."
-            : "Este serviço avulso possui uma cobrança bancária vinculada e não pode ser excluído enquanto essa cobrança existir. Cancele ou remova primeiro a cobrança.",
-          code: isContractual
-            ? "CONTRACTUAL_TRANSACTION_LOCKED"
-            : "BILLING_TRANSACTION_LOCKED",
-          billingChargeId:
-            transaction.billingCharge.id,
-        });
-      }
-
-      await prisma.financialTransaction.delete({
-        where: { id },
-      });
-
-      await prisma.auditLog.create({
-        data: {
-          userId: (req as any).user?.id,
-          userName: (req as any).user?.name,
-          userEmail: (req as any).user?.email,
-          userRole: (req as any).user?.role,
-          action: "DELETE_FINANCIAL_TRANSACTION",
-          entity: "FinancialTransaction",
-          entityId: String(id),
-          description: `Lançamento financeiro excluído: ${transaction.description}.`,
-          ipAddress: req.ip,
-        },
-      });
-
-      return res.status(204).send();
-    } catch (error) {
-      console.error("Erro ao excluir lançamento financeiro:", error);
-
-      return res.status(500).json({
-        message: "Erro ao excluir lançamento financeiro.",
-      });
-    }
-  }
+  financeMutationHandler("DELETE")
 );
 
 app.delete(

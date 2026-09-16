@@ -10170,6 +10170,7 @@ type FinanceTransactionSource =
   | "SERVICO_AVULSO"
   | "CUSTO_FIXO"
   | "SALARIO"
+  | "COMISSAO_PARCEIRO"
   | "IMPOSTO"
   | "TAXA"
   | "OUTRO";
@@ -10241,6 +10242,7 @@ type BackendFinanceTransaction = {
     contractId?: number | null;
     chargeType?: "ENTRADA" | "PARCELA" | "AVULSA";
     status?: string;
+    paidAt?: string | null;
     amount?: number;
     dueDate?: string | null;
     installmentNumber?: number | null;
@@ -10248,6 +10250,19 @@ type BackendFinanceTransaction = {
   } | null;
 
 };
+
+function isFinanceTransactionConsolidated(item: BackendFinanceTransaction) {
+  return item.status === "PAGO" || item.paidAt != null ||
+    item.paymentConfirmedAt != null || item.billingCharge?.status === "PAGA" ||
+    item.billingCharge?.paidAt != null;
+}
+
+function isFinanceTransactionProtected(item: BackendFinanceTransaction) {
+  return isFinanceTransactionConsolidated(item) || Boolean(item.billingCharge) ||
+    item.source === "CONTRATO" || item.source === "COMISSAO_PARCEIRO" ||
+    Boolean(item.providerChargeId || item.providerTxId || item.chargeCreatedAt ||
+      item.chargeExpiresAt || (item.chargeStatus && item.chargeStatus !== "PENDING"));
+}
 
 type BackendFinanceFixedCost = {
   id: number;
@@ -10413,6 +10428,7 @@ function FinancePage() {
   >("");
 
   const [showTransactionForm, setShowTransactionForm] = useState(false);
+  const [viewingPaymentPlan, setViewingPaymentPlan] = useState<BackendFinanceTransaction[]>([]);
   const [editingTransaction, setEditingTransaction] =
     useState<BackendFinanceTransaction | null>(null);
 
@@ -10743,6 +10759,7 @@ function FinancePage() {
 
 
   function resetTransactionForm() {
+    setViewingPaymentPlan([]);
     setEditingTransaction(null);
     setTransactionType("ENTRADA");
     setTransactionSource("SERVICO_AVULSO");
@@ -10780,11 +10797,9 @@ function FinancePage() {
   async function startEditTransaction(
     item: BackendFinanceTransaction
   ) {
-    if (item.billingCharge) {
+    if (!item.installmentGroupId && isFinanceTransactionProtected(item)) {
       setSuccess("");
-      setError(
-        `Este lançamento está vinculado à cobrança #${item.billingCharge.id} e é protegido pelo contrato. Altere seu estado pelo fluxo de Cobranças.`
-      );
+      setError("Este lançamento está protegido. Dados consolidados não podem ser editados; cobranças devem seguir seu fluxo de origem.");
       return;
     }
 
@@ -10835,6 +10850,11 @@ function FinancePage() {
                 b.installmentNumber ?? 0
               )
           );
+
+      if (item.installmentGroupId && paymentPlanTransactions.length === 0) {
+        throw new Error("Não foi possível recuperar o plano completo. Atualize os dados e tente novamente.");
+      }
+      setViewingPaymentPlan(paymentPlanTransactions);
 
       const entryTransaction =
         item.installmentGroupId
@@ -11339,6 +11359,14 @@ function FinancePage() {
   }
 
 async function handleSaveTransaction() {
+    if (editingTransaction?.installmentGroupId) {
+      setError("A composição deste plano é somente para consulta. Alterações deverão ocorrer pelo fluxo de reprogramação financeira, que será disponibilizado posteriormente.");
+      return;
+    }
+    if (editingTransaction && isFinanceTransactionProtected(editingTransaction)) {
+      setError("Este lançamento está protegido e não pode ser alterado por este formulário.");
+      return;
+    }
     try {
       setSaving(true);
       clearMessages();
@@ -11773,6 +11801,10 @@ async function handleSaveTransaction() {
   }
 
   async function handlePayTransaction(item: BackendFinanceTransaction) {
+    if (isFinanceTransactionProtected(item) || item.status === "CANCELADO") {
+      setError("Este lançamento não permite baixa administrativa.");
+      return;
+    }
     if (!window.confirm(`Marcar "${item.description}" como pago?`)) return;
 
     try {
@@ -11786,26 +11818,6 @@ async function handleSaveTransaction() {
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Erro ao marcar como pago."
-      );
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleCancelTransaction(item: BackendFinanceTransaction) {
-    if (!window.confirm(`Cancelar o lançamento "${item.description}"?`)) return;
-
-    try {
-      setSaving(true);
-      clearMessages();
-
-      await api.cancelFinanceTransaction(item.id);
-
-      setSuccess("Lançamento cancelado com sucesso.");
-      await loadFinance();
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Erro ao cancelar lançamento."
       );
     } finally {
       setSaving(false);
@@ -12059,6 +12071,11 @@ async function handleDeleteSalary(id: number) {
 
 
   async function handleDeleteTransaction(id: number) {
+  const item = transactions.find((transaction) => transaction.id === id);
+  if (!item || item.installmentGroupId || isFinanceTransactionProtected(item)) {
+    setError("Somente lançamentos simples, sem pagamento consolidado, plano ou cobrança podem ser excluídos.");
+    return;
+  }
   const confirmed = window.confirm(
     "Deseja realmente excluir este lançamento financeiro?"
   );
@@ -12832,7 +12849,30 @@ async function handleDeleteSalary(id: number) {
             </button>
           </div>
 
-          {showTransactionForm && (
+          {showTransactionForm && editingTransaction?.installmentGroupId && (
+            <div className="panel soft-panel">
+              <h3>Plano financeiro — consulta</h3>
+              <p>A composição está protegida. Alterações deverão ocorrer pelo fluxo de reprogramação financeira, que será disponibilizado posteriormente.</p>
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead><tr><th>Obrigação</th><th>Valor</th><th>Vencimento</th><th>Estado</th></tr></thead>
+                  <tbody>{viewingPaymentPlan.map((obligation) => (
+                    <tr key={obligation.id}>
+                      <td>{obligation.installmentNumber === 0 ? "Entrada" : `Parcela ${obligation.installmentNumber}`}</td>
+                      <td>{money(obligation.amount)}</td>
+                      <td>{obligation.dueDate?.slice(0, 10) || "—"}</td>
+                      <td>{isFinanceTransactionConsolidated(obligation)
+                        ? "🔒 Pagamento consolidado"
+                        : obligation.billingCharge ? `🔒 Cobrança protegida (${obligation.status})` : obligation.status}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+              <button className="secondary-action" onClick={() => { resetTransactionForm(); setShowTransactionForm(false); }}>Fechar consulta</button>
+            </div>
+          )}
+
+          {showTransactionForm && !editingTransaction?.installmentGroupId && (
             <div className="panel soft-panel">
               <h3>{editingTransaction ? "Editar lançamento" : "Novo lançamento"}</h3>
 
@@ -13080,6 +13120,8 @@ async function handleDeleteSalary(id: number) {
                     Status
                     <select
                       value={transactionStatus}
+                      disabled={Boolean(editingTransaction)}
+                      title={editingTransaction ? "Use a ação Pagar na lista para confirmar a baixa. Cancelamento indisponível nesta etapa." : undefined}
                       onChange={(event) =>
                         setTransactionStatus(
                           event.target.value as FinanceTransactionStatus
@@ -13769,68 +13811,25 @@ async function handleDeleteSalary(id: number) {
 
 <td>
   <div className="table-actions">
-    {item.source === "CONTRATO" ? (
-      <span
-        className="mini-button"
-        title={
-          item.billingCharge?.contractId
-            ? `Lançamento vinculado ao contrato #${item.billingCharge.contractId}`
-            : "Lançamento originado de contrato"
-        }
-      >
-        🔒 Contratual
+    {isFinanceTransactionProtected(item) && (
+      <span className="mini-button">
+        {isFinanceTransactionConsolidated(item) ? "🔒 Consolidado" : "🔒 Protegido"}
       </span>
-    ) : item.billingCharge ? (
-      <span
-        className="mini-button"
-        title={`Serviço avulso com cobrança #${item.billingCharge.id} emitida`}
-      >
-        🔒 Cobrança emitida
-      </span>
-    ) : (
-      <button
-        className="mini-button"
-        type="button"
-        onClick={() => startEditTransaction(item)}
-      >
-        Editar
-      </button>
     )}
-
-    {!item.billingCharge &&
-      item.source !== "CONTRATO" &&
-      item.status !== "PAGO" && (
-        <button
-          className="mini-button"
-          type="button"
-          onClick={() => handlePayTransaction(item)}
-        >
-          Pagar
-        </button>
-      )}
-
-    {!item.billingCharge &&
-      item.source !== "CONTRATO" &&
-      item.status !== "CANCELADO" && (
-        <button
-          className="mini-button"
-          type="button"
-          onClick={() => handleCancelTransaction(item)}
-        >
-          Cancelar
-        </button>
-      )}
-
-    {!item.billingCharge &&
-      item.source !== "CONTRATO" && (
-        <button
-          className="mini-button danger"
-          type="button"
-          onClick={() => handleDeleteTransaction(item.id)}
-        >
-          Excluir
-        </button>
-      )}
+    {item.installmentGroupId ? (
+      <button className="mini-button" type="button" onClick={() => startEditTransaction(item)}>Ver plano</button>
+    ) : !isFinanceTransactionProtected(item) && (
+      <button className="mini-button" type="button" onClick={() => startEditTransaction(item)}>Editar</button>
+    )}
+    {!isFinanceTransactionProtected(item) && item.status === "PENDENTE" && (
+      <button className="mini-button" type="button" onClick={() => handlePayTransaction(item)}>Pagar</button>
+    )}
+    {!isFinanceTransactionProtected(item) && !item.installmentGroupId && (
+      <>
+        <button className="mini-button" type="button" disabled title="Cancelamento indisponível nesta etapa para preservar o histórico financeiro.">Cancelar indisponível</button>
+        <button className="mini-button danger" type="button" onClick={() => handleDeleteTransaction(item.id)}>Excluir</button>
+      </>
+    )}
   </div>
 </td>
                   </tr>

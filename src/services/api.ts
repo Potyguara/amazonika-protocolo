@@ -778,6 +778,7 @@ updateFinanceTransaction(
       | "SERVICO_AVULSO"
       | "CUSTO_FIXO"
       | "SALARIO"
+      | "COMISSAO_PARCEIRO"
       | "IMPOSTO"
       | "TAXA"
       | "OUTRO";
@@ -804,12 +805,6 @@ updateFinanceTransaction(
 payFinanceTransaction(id: number) {
   return request(`/finance/transactions/${id}/pay`, {
     method: "PATCH",
-  });
-},
-
-cancelFinanceTransaction(id: number) {
-  return request(`/finance/transactions/${id}`, {
-    method: "DELETE",
   });
 },
 
