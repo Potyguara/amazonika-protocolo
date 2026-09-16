@@ -23,7 +23,6 @@ export async function releasePartnerCommissionForEntryPayment(
       },
       orderBy: {
         updatedAt: "desc",
-        contractValueCents: true,
       },
     });
 
@@ -44,7 +43,10 @@ export async function releasePartnerCommissionForEntryPayment(
       where: {
         id: contractId,
       },
-      include: {
+      select: {
+        status: true,
+        contractValue: true,
+        contractValueCents: true,
         paymentSchedule: { select: { amountCents: true } },
         proposal: {
           select: {
