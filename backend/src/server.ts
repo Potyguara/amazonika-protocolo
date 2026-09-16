@@ -14164,6 +14164,9 @@ app.post(
         employeeName: String(employeeName).trim(),
         roleDescription: roleDescription || null,
         amount: toIntMoney(amount),
+        amountCents: assertPrismaIntCents(
+          parseReaisInput(String(amount), "en-US")
+        ),
         categoryId: categoryId ? Number(categoryId) : null,
         dueDay: Number(dueDay),
         active: active === undefined ? true : Boolean(active),
@@ -14202,6 +14205,12 @@ app.put(
         employeeName,
         roleDescription,
         amount: amount !== undefined ? toIntMoney(amount) : undefined,
+        amountCents:
+          amount !== undefined
+            ? assertPrismaIntCents(
+                parseReaisInput(String(amount), "en-US")
+              )
+            : undefined,
         categoryId: categoryId ? Number(categoryId) : null,
         dueDay: dueDay !== undefined ? Number(dueDay) : undefined,
         active: active === undefined ? undefined : Boolean(active),
