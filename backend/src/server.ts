@@ -14750,8 +14750,19 @@ function getManagementMonth(req: any) {
   return new Date().toISOString().slice(0, 7);
 }
 
-function sumMoney(items: Array<{ amount?: number | null }>) {
-  return items.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+function sumMoney(
+  items: Array<{ amount?: number | null; amountCents?: number | null }>
+) {
+  return items.reduce((sum, item) => {
+    if (item.amountCents !== null && item.amountCents !== undefined) {
+      return sum + assertPrismaIntCents(item.amountCents);
+    }
+
+    // Fronteira legada: amount ainda representa reais nestes modelos.
+    return sum + assertPrismaIntCents(
+      parseReaisInput(String(item.amount || 0), "en-US")
+    );
+  }, 0);
 }
 
 function percentOf(value: number, percent: number) {
@@ -14875,6 +14886,7 @@ app.get(
         (item) => item.type === "SAIDA" && item.status !== "CANCELADO"
       );
 
+      // Todos os agregados abaixo passam a operar em centavos.
       const faturamentoMensal = sumMoney(entradasRecebidas);
       const custosFixos = sumMoney(fixedCosts);
       const salariosFuncionarios = sumMoney(salaries);
