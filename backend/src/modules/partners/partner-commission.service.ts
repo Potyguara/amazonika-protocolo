@@ -1,11 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 
-function calculateCommission(
-  baseAmount: number,
-  percent: number
-) {
-  return Math.round(baseAmount * (percent / 100));
-}
+import { calculateCommission, getContractBaseAmount } from "./commission-money";
 
 export async function releasePartnerCommissionForEntryPayment(
   prisma: PrismaClient,
@@ -49,6 +44,7 @@ export async function releasePartnerCommissionForEntryPayment(
         id: contractId,
       },
       include: {
+        paymentSchedule: { select: { amountCents: true } },
         proposal: {
           select: {
             totalAmount: true,
@@ -68,19 +64,7 @@ export async function releasePartnerCommissionForEntryPayment(
     return null;
   }
 
-  /*
-   * A proposta é a fonte preferencial:
-   * totalAmount já está em centavos.
-   */
-  const baseAmount =
-    contract.proposal?.totalAmount !== undefined &&
-    contract.proposal?.totalAmount !== null
-      ? Math.round(
-          Number(contract.proposal.totalAmount) * 100
-        )
-      : Math.round(
-          Number(contract.contractValue || 0) * 100
-        );
+  const baseAmount = getContractBaseAmount(contract);
 
   if (baseAmount <= 0) {
     return null;

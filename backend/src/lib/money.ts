@@ -100,7 +100,48 @@ export function applyRateCents(base: MoneyCents, rateBasisPoints: number): Money
     throw new TypeError("Rate must be nonnegative integer basis points.");
   }
   const product = BigInt(base) * BigInt(rateBasisPoints);
-  const absolute = product < 0n ? -product : product;
-  const rounded = (absolute + 5000n) / 10000n;
-  return fromBigInt(product < 0n ? -rounded : rounded);
+  return roundRatioCents(product, 10000n);
+}
+
+export function sumCents(values: readonly MoneyCents[]): MoneyCents {
+  return fromBigInt(values.reduce((sum, value) => sum + BigInt(assertMoneyCents(value)), 0n));
+}
+
+function decimalRatio(value: number): [bigint, bigint] {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new TypeError("Quantity/rate must be a finite number.");
+  }
+  const [mantissa, exponent = "0"] = String(value).toLowerCase().split("e");
+  const [whole, fraction = ""] = mantissa.split(".");
+  const numerator = BigInt(whole + fraction);
+  const scale = fraction.length - Number(exponent);
+  return scale >= 0
+    ? [numerator, 10n ** BigInt(scale)]
+    : [numerator * 10n ** BigInt(-scale), 1n];
+}
+
+function roundRatioCents(numerator: bigint, denominator: bigint): MoneyCents {
+  const absolute = numerator < 0n ? -numerator : numerator;
+  const quotient = absolute / denominator;
+  const rounded = quotient + (2n * (absolute % denominator) >= denominator ? 1n : 0n);
+  return fromBigInt(numerator < 0n ? -rounded : rounded);
+}
+
+/** Quantity is not money. Only the resulting fractional cent is rounded, half away from zero. */
+export function multiplyCents(unitAmount: MoneyCents, quantity: number): MoneyCents {
+  const [numerator, denominator] = decimalRatio(quantity);
+  if (numerator <= 0n) throw new RangeError("Quantity must be positive.");
+  return roundRatioCents(BigInt(assertMoneyCents(unitAmount)) * numerator, denominator);
+}
+
+/** Percentage boundary: exact conversion to integer basis points, with no rounding. */
+export function percentToBasisPoints(percent: number): number {
+  const [numerator, denominator] = decimalRatio(percent);
+  const scaled = numerator * 100n;
+  if (scaled < 0n || scaled % denominator !== 0n) {
+    throw new RangeError("Percent must be nonnegative with at most two decimal places.");
+  }
+  const result = Number(scaled / denominator);
+  if (!Number.isSafeInteger(result)) throw new RangeError("Rate exceeds safe integer range.");
+  return result;
 }

@@ -1,3 +1,5 @@
+import { assertMoneyCents, formatBRL } from "../../lib/money";
+import { nonnegativeCents, standaloneItemTotal, standaloneTotals, standalonePaymentTerms, standaloneDraftTerms, standaloneDocumentTerms } from "./standalone-money";
 import crypto from "crypto";
 import fs from "fs";
 import { Express } from "express";
@@ -36,18 +38,8 @@ function escapeHtml(
     .replaceAll("'", "&#039;");
 }
 
-function moneyBr(
-  value?: number | null
-) {
-  return (
-    Number(value || 0) / 100
-  ).toLocaleString(
-    "pt-BR",
-    {
-      style: "currency",
-      currency: "BRL",
-    }
-  );
+function moneyBr(value?: number | null) {
+  return value == null ? "—" : formatBRL(assertMoneyCents(value));
 }
 
 function paymentModeLabel(
@@ -91,16 +83,6 @@ function intOrNull(value: unknown) {
   }
 
   return Math.round(parsed);
-}
-
-function numberOr(value: unknown, fallback = 0) {
-  const parsed = Number(value);
-
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
-
-  return parsed;
 }
 
 function dateOrNull(value: unknown) {
@@ -228,25 +210,10 @@ async function calculateProposalTotals(
     throw new Error("Proposta não encontrada.");
   }
 
-  const subtotalAmount =
-    proposal.items.reduce(
-      (sum, item) =>
-        sum + Number(item.totalAmount || 0),
-      0
-    );
-
-  const discountAmount =
-    Number(proposal.discountAmount || 0);
-
-  const additionAmount =
-    Number(proposal.additionAmount || 0);
-
-  const totalAmount = Math.max(
-    0,
-    subtotalAmount -
-      discountAmount +
-      additionAmount
+  const { subtotalAmount, totalAmount } = standaloneTotals(
+    proposal.items, proposal.discountAmount, proposal.additionAmount,
   );
+  const terms = standaloneDraftTerms({ ...proposal, totalAmount });
 
   return prisma.standaloneProposal.update({
     where: {
@@ -256,6 +223,7 @@ async function calculateProposalTotals(
     data: {
       subtotalAmount,
       totalAmount,
+      ...terms,
     },
   });
 }
@@ -682,30 +650,18 @@ export function registerStandaloneProposalRoutes({
                 req.body?.paymentMode ||
                 "ENTRADA_PARCELAS",
 
-              discountAmount:
-                numberOr(
-                  req.body?.discountAmount
-                ),
+              discountAmount: nonnegativeCents(req.body?.discountAmount === undefined ? 0 : req.body.discountAmount),
 
-              additionAmount:
-                numberOr(
-                  req.body?.additionAmount
-                ),
+              additionAmount: nonnegativeCents(req.body?.additionAmount === undefined ? 0 : req.body.additionAmount),
 
-              entryAmount:
-                numberOr(
-                  req.body?.entryAmount
-                ),
+              entryAmount: nonnegativeCents(req.body?.entryAmount === undefined ? 0 : req.body.entryAmount),
 
               installmentQty:
                 intOrNull(
                   req.body?.installmentQty
                 ),
 
-              installmentAmount:
-                intOrNull(
-                  req.body?.installmentAmount
-                ),
+              installmentAmount: req.body?.installmentAmount == null ? null : nonnegativeCents(req.body.installmentAmount),
 
               paymentText:
                 textOrNull(
@@ -766,8 +722,8 @@ export function registerStandaloneProposalRoutes({
           error
         );
 
-        return res.status(500).json({
-          message:
+        return res.status(error instanceof TypeError || error instanceof RangeError ? 400 : 500).json({
+          message: error instanceof TypeError || error instanceof RangeError ? error.message :
             "Erro ao criar proposta avulsa.",
         });
       }
@@ -824,148 +780,22 @@ export function registerStandaloneProposalRoutes({
           });
         }
 
-        const discountAmount =
-          req.body?.discountAmount !== undefined
-            ? Math.max(
-                0,
-                Math.round(
-                  numberOr(
-                    req.body.discountAmount
-                  )
-                )
-              )
-            : existing.discountAmount;
-
-        const additionAmount =
-          req.body?.additionAmount !== undefined
-            ? Math.max(
-                0,
-                Math.round(
-                  numberOr(
-                    req.body.additionAmount
-                  )
-                )
-              )
-            : existing.additionAmount;
-
-        const commercialTotal =
-          Math.max(
-            0,
-            existing.subtotalAmount -
-              discountAmount +
-              additionAmount
-          );
-
-        let entryAmount =
-          req.body?.entryAmount !== undefined
-            ? Math.max(
-                0,
-                Math.round(
-                  numberOr(
-                    req.body.entryAmount
-                  )
-                )
-              )
-            : existing.entryAmount;
-
-        let installmentQty =
-          req.body?.installmentQty !== undefined
-            ? intOrNull(
-                req.body.installmentQty
-              )
-            : existing.installmentQty;
-
-        let installmentAmount:
-          number | null =
-            existing.installmentAmount;
-
-        if (
-          requestedPaymentMode ===
-          "A_VISTA"
-        ) {
-          entryAmount =
-            commercialTotal;
-
-          installmentQty = null;
-          installmentAmount = null;
-        }
-
-        if (
-          requestedPaymentMode ===
-          "PARCELADO"
-        ) {
-          entryAmount = 0;
-
-          if (
-            !installmentQty ||
-            installmentQty < 1
-          ) {
-            return res.status(400).json({
-              message:
-                "Informe a quantidade de parcelas.",
-            });
-          }
-
-          installmentAmount =
-            Math.round(
-              commercialTotal /
-                installmentQty
-            );
-        }
-
-        if (
-          requestedPaymentMode ===
-          "ENTRADA_PARCELAS"
-        ) {
-          if (
-            entryAmount < 0 ||
-            entryAmount >
-              commercialTotal
-          ) {
-            return res.status(400).json({
-              message:
-                "O valor da entrada é inválido.",
-            });
-          }
-
-          if (
-            !installmentQty ||
-            installmentQty < 1
-          ) {
-            return res.status(400).json({
-              message:
-                "Informe a quantidade de parcelas.",
-            });
-          }
-
-          const remaining =
-            Math.max(
-              0,
-              commercialTotal -
-                entryAmount
-            );
-
-          installmentAmount =
-            Math.round(
-              remaining /
-                installmentQty
-            );
-        }
-
-        if (
-          requestedPaymentMode ===
-          "PERSONALIZADO"
-        ) {
-          installmentAmount =
-            req.body
-              ?.installmentAmount !==
-            undefined
-              ? intOrNull(
-                  req.body
-                    .installmentAmount
-                )
-              : existing.installmentAmount;
-        }
+        const discountAmount = nonnegativeCents(req.body?.discountAmount === undefined ? existing.discountAmount : req.body.discountAmount);
+        const additionAmount = nonnegativeCents(req.body?.additionAmount === undefined ? existing.additionAmount : req.body.additionAmount);
+        const { totalAmount: commercialTotal } = standaloneTotals(
+          [{ totalAmount: existing.subtotalAmount }], discountAmount, additionAmount,
+        );
+        const inputEntry = req.body?.entryAmount === undefined ? existing.entryAmount : req.body.entryAmount;
+        const inputQty = req.body?.installmentQty === undefined ? existing.installmentQty : req.body.installmentQty;
+        const terms = standalonePaymentTerms({
+          totalAmount: commercialTotal,
+          paymentMode: requestedPaymentMode,
+          entryAmount: inputEntry,
+          installmentQty: inputQty,
+          installmentAmount: req.body?.installmentAmount === undefined ? existing.installmentAmount : req.body.installmentAmount,
+          paymentText: req.body?.paymentText === undefined ? existing.paymentText : textOrNull(req.body.paymentText),
+        });
+        const { entryAmount, installmentQty, installmentAmount } = terms;
 
         const proposal =
           await prisma.standaloneProposal.update({
@@ -1083,13 +913,7 @@ export function registerStandaloneProposalRoutes({
 
               installmentAmount,
 
-              paymentText:
-                req.body?.paymentText !==
-                undefined
-                  ? textOrNull(
-                      req.body.paymentText
-                    )
-                  : existing.paymentText,
+              paymentText: terms.paymentText,
 
               executionDays:
                 req.body?.executionDays !==
@@ -1164,8 +988,8 @@ export function registerStandaloneProposalRoutes({
           error
         );
 
-        return res.status(500).json({
-          message:
+        return res.status(error instanceof TypeError || error instanceof RangeError ? 400 : 500).json({
+          message: error instanceof TypeError || error instanceof RangeError ? error.message :
             "Erro ao atualizar proposta avulsa.",
         });
       }
@@ -1190,11 +1014,7 @@ export function registerStandaloneProposalRoutes({
             req.body?.catalogServiceId
           );
 
-        const quantity =
-          numberOr(
-            req.body?.quantity,
-            1
-          );
+        const quantity = req.body?.quantity === undefined ? 1 : req.body.quantity;
 
         if (
           !Number.isInteger(
@@ -1257,12 +1077,9 @@ export function registerStandaloneProposalRoutes({
           });
         }
 
-        let unitAmount =
-          Number(
-            req.body?.unitAmount ??
-            service.baseAmount ??
-            0
-          );
+        let unitAmount = nonnegativeCents(
+          req.body?.unitAmount === undefined ? service.baseAmount : req.body.unitAmount,
+        );
 
         let manualPrice =
           req.body?.unitAmount !==
@@ -1297,8 +1114,7 @@ export function registerStandaloneProposalRoutes({
             });
           }
 
-          unitAmount =
-            tier.unitAmount;
+          unitAmount = nonnegativeCents(tier.unitAmount);
           manualPrice = false;
         }
 
@@ -1314,17 +1130,14 @@ export function registerStandaloneProposalRoutes({
         }
 
         let totalAmount =
-          Math.round(
-            quantity * unitAmount
-          );
+          standaloneItemTotal(unitAmount, quantity);
 
         if (
           service.minimumAmount &&
           totalAmount <
             service.minimumAmount
         ) {
-          totalAmount =
-            service.minimumAmount;
+          totalAmount = nonnegativeCents(service.minimumAmount);
         }
 
         const last =
@@ -1465,8 +1278,8 @@ export function registerStandaloneProposalRoutes({
           error
         );
 
-        return res.status(500).json({
-          message:
+        return res.status(error instanceof TypeError || error instanceof RangeError ? 400 : 500).json({
+          message: error instanceof TypeError || error instanceof RangeError ? error.message :
             "Erro ao adicionar serviço à proposta.",
         });
       }
@@ -1492,16 +1305,9 @@ export function registerStandaloneProposalRoutes({
             ""
           ).trim();
 
-        const quantity =
-          numberOr(
-            req.body?.quantity,
-            1
-          );
+        const quantity = req.body?.quantity === undefined ? 1 : req.body.quantity;
 
-        const unitAmount =
-          numberOr(
-            req.body?.unitAmount
-          );
+        const unitAmount = nonnegativeCents(req.body?.unitAmount);
 
         if (!serviceName) {
           return res.status(400).json({
@@ -1535,9 +1341,7 @@ export function registerStandaloneProposalRoutes({
         }
 
         const totalAmount =
-          Math.round(
-            quantity * unitAmount
-          );
+          standaloneItemTotal(unitAmount, quantity);
 
         const last =
           await prisma.standaloneProposalItem.findFirst({
@@ -1632,8 +1436,8 @@ export function registerStandaloneProposalRoutes({
           error
         );
 
-        return res.status(500).json({
-          message:
+        return res.status(error instanceof TypeError || error instanceof RangeError ? 400 : 500).json({
+          message: error instanceof TypeError || error instanceof RangeError ? error.message :
             "Erro ao adicionar item manual.",
         });
       }
@@ -1674,25 +1478,17 @@ export function registerStandaloneProposalRoutes({
         const quantity =
           req.body?.quantity !==
           undefined
-            ? numberOr(
-                req.body.quantity,
-                item.quantity
-              )
+            ? req.body.quantity
             : item.quantity;
 
         const unitAmount =
           req.body?.unitAmount !==
           undefined
-            ? numberOr(
-                req.body.unitAmount,
-                item.unitAmount
-              )
-            : item.unitAmount;
+            ? nonnegativeCents(req.body.unitAmount)
+            : nonnegativeCents(item.unitAmount);
 
         const totalAmount =
-          Math.round(
-            quantity * unitAmount
-          );
+          standaloneItemTotal(unitAmount, quantity);
 
         const updated =
           await prisma.standaloneProposalItem.update({
@@ -1804,8 +1600,8 @@ export function registerStandaloneProposalRoutes({
           error
         );
 
-        return res.status(500).json({
-          message:
+        return res.status(error instanceof TypeError || error instanceof RangeError ? 400 : 500).json({
+          message: error instanceof TypeError || error instanceof RangeError ? error.message :
             "Erro ao atualizar item da proposta.",
         });
       }
@@ -3094,11 +2890,7 @@ export function registerStandaloneProposalRoutes({
             )
             .join("");
 
-        const paymentDescription =
-          proposal.paymentText ||
-          paymentModeLabel(
-            proposal.paymentMode
-          );
+        const paymentDescription = standaloneDocumentTerms(proposal).paymentText || paymentModeLabel(proposal.paymentMode);
 
         const content = `
           <div

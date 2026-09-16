@@ -1,3 +1,5 @@
+import { assertMoneyCents, formatBRL } from "../../lib/money";
+import { standaloneDocumentTerms } from "./standalone-money";
 import PDFDocument from "pdfkit";
 import crypto from "crypto";
 import fs from "fs";
@@ -22,13 +24,7 @@ const CONTENT_WIDTH =
   PAGE_RIGHT;
 
 function money(value?: number | null) {
-  return ((Number(value || 0)) / 100).toLocaleString(
-    "pt-BR",
-    {
-      style: "currency",
-      currency: "BRL",
-    }
-  );
+  return value == null ? "—" : formatBRL(assertMoneyCents(value));
 }
 
 function formatDate(value?: Date | string | null) {
@@ -1268,6 +1264,8 @@ export async function generateStandaloneProposalPdf(
     );
   }
 
+  const paymentTerms = standaloneDocumentTerms(proposal);
+
   if (
     proposal.items.length === 0
   ) {
@@ -1517,19 +1515,7 @@ export async function generateStandaloneProposalPdf(
 
   paragraph(
     doc,
-    proposal.paymentText ||
-    (
-      proposal.paymentMode ===
-      "A_VISTA"
-        ? `Pagamento à vista no valor total de ${money(
-            proposal.totalAmount
-          )}.`
-        : proposal.entryAmount > 0
-        ? `Entrada de ${money(
-            proposal.entryAmount
-          )}, com saldo remanescente conforme condições comerciais pactuadas.`
-        : "Pagamento conforme condições comerciais acordadas entre as partes."
-    )
+    paymentTerms.paymentText || "Pagamento conforme condições comerciais acordadas entre as partes."
   );
 
   sectionTitle(
@@ -1699,6 +1685,7 @@ export async function generateStandaloneProposalPdf(
         proposal.additionAmount,
       totalAmount:
         proposal.totalAmount,
+      paymentTerms,
       generatedAt:
         new Date().toISOString(),
       hash,

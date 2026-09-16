@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
+    "test:money-flows": "node --require ts-node/register --test src/lib/money-flows.test.ts",
     "test:money": "node --require ts-node/register --test src/lib/money.test.ts",
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "prisma:generate": "prisma generate",

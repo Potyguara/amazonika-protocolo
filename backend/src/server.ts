@@ -1,3 +1,5 @@
+import { assertPrismaIntCents, parseReaisInput, sumCents } from "./lib/money";
+import { copyPaymentSchedule } from "./lib/payment-schedule";
 import "dotenv/config";
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
@@ -3489,13 +3491,7 @@ paymentMode: proposal.paymentMode,
           notes: `Contrato gerado automaticamente a partir da proposta ${proposal.proposalNumber}.`,
 
           paymentSchedule: {
-            create: proposal.paymentSchedule.map((item) => ({
-              type: item.type,
-              installmentNumber: item.installmentNumber,
-              totalInstallments: item.totalInstallments,
-              amountCents: item.amountCents,
-              dueDate: item.dueDate,
-            })),
+            create: copyPaymentSchedule(proposal.paymentSchedule),
           },
         },
         include: {
@@ -15586,7 +15582,8 @@ function normalizeProposalPaymentSchedule(
       type,
       installmentNumber,
       totalInstallments,
-      amountCents: Math.round(amount * 100),
+      // Fronteira legada da API: row.amount ainda chega em reais.
+      amountCents: assertPrismaIntCents(parseReaisInput(String(amount), "en-US")),
       dueDate,
     };
   });
@@ -15689,12 +15686,7 @@ function normalizeProposalPaymentSchedule(
     }
   }
 
-  const totalScheduleCents =
-    normalized.reduce(
-      (sum, row) =>
-        sum + row.amountCents,
-      0
-    );
+  const totalScheduleCents = sumCents(normalized.map(row => row.amountCents));
 
   const proposalTotalCents =
     Math.round(
@@ -15710,6 +15702,7 @@ function normalizeProposalPaymentSchedule(
     );
   }
 
+  // Fronteira temporária com o cabeçalho legado Proposal (reais); não participa da cópia ao contrato.
   return {
     normalized,
     entryAmount:

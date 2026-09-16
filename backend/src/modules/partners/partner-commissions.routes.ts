@@ -1,3 +1,4 @@
+import { commissionToLegacyFinanceReais } from "./commission-money";
 import { Express } from "express";
 import { PrismaClient } from "@prisma/client";
 
@@ -194,6 +195,14 @@ export function registerPartnerCommissionRoutes({
           });
         }
 
+        // Proteção temporária da fronteira com FinancialTransaction.amount (Int em reais).
+        let legacyFinanceAmount: number;
+        try {
+          legacyFinanceAmount = commissionToLegacyFinanceReais(commission.commissionAmount);
+        } catch (error) {
+          return res.status(409).json({ message: (error as Error).message });
+        }
+
         const requestedPaidAt =
           req.body?.paidAt
             ? new Date(req.body.paidAt)
@@ -269,7 +278,7 @@ export function registerPartnerCommissionRoutes({
                     // PartnerCommission é armazenada em centavos.
                     // FinancialTransaction usa valores em reais.
                     amount:
-                      commission.commissionAmount / 100,
+                      legacyFinanceAmount,
 
                     dueDate:
                       commission.dueDate,

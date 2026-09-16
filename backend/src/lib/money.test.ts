@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   applyRateCents, assertMoneyCents, assertPrismaIntCents, centsToBbValue,
   distributeCents, formatBRL, MoneyCents, MoneyLocale, parseReaisInput,
+  multiplyCents, percentToBasisPoints, sumCents,
 } from "./money";
 
 const cents = assertMoneyCents;
@@ -104,4 +105,25 @@ test("rates use integer basis points and explicit half-away-from-zero rounding",
     assert.throws(() => applyRateCents(cents(100), rate));
   }
   assert.throws(() => applyRateCents(1.5 as MoneyCents, 100));
+});
+
+test("fractional quantities use exact decimal ratios, without converting cents to reais", () => {
+  assert.equal(multiplyCents(cents(12345), 1.5), 18518);
+  assert.equal(multiplyCents(cents(100), 0.29), 29);
+  assert.equal(multiplyCents(cents(1000000), 1e-6), 1);
+  assert.equal(multiplyCents(cents(-1), 0.5), -1);
+  assert.throws(() => multiplyCents(cents(1), 0));
+  assert.throws(() => multiplyCents(cents(1), NaN));
+  assert.throws(() => multiplyCents(cents(Number.MAX_SAFE_INTEGER), 2));
+});
+
+test("percentage boundary rejects precision loss; sum protects intermediate values", () => {
+  assert.equal(percentToBasisPoints(12.34), 1234);
+  assert.equal(percentToBasisPoints(0.29), 29);
+  assert.throws(() => percentToBasisPoints(12.345));
+  assert.throws(() => percentToBasisPoints(NaN));
+  assert.throws(() => percentToBasisPoints(-1));
+  assert.equal(sumCents([cents(Number.MAX_SAFE_INTEGER), cents(1), cents(-1)]), Number.MAX_SAFE_INTEGER);
+  assert.throws(() => sumCents([cents(Number.MAX_SAFE_INTEGER), cents(1)]));
+  assert.throws(() => sumCents([1.5 as MoneyCents]));
 });

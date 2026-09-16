@@ -1,3 +1,5 @@
+import { percentToBasisPoints } from "../../lib/money";
+import { calculateCommission, getContractBaseAmount } from "./commission-money";
 import { Express } from "express";
 import { PrismaClient } from "@prisma/client";
 
@@ -13,7 +15,12 @@ function normalizePercent(value: unknown) {
 
   if (!Number.isFinite(number)) return null;
 
-  return Math.round(number * 100) / 100;
+  try {
+    percentToBasisPoints(number);
+    return number;
+  } catch {
+    return null;
+  }
 }
 
 async function findCurrentContract(
@@ -28,6 +35,7 @@ async function findCurrentContract(
       },
     },
     include: {
+      paymentSchedule: { select: { amountCents: true } },
       proposal: {
         select: {
           id: true,
@@ -39,42 +47,6 @@ async function findCurrentContract(
       createdAt: "desc",
     },
   });
-}
-
-function getContractBaseAmount(contract: any) {
-  if (!contract) return 0;
-
-  /*
-   * A proposta é nossa fonte preferencial porque totalAmount
-   * já é armazenado em centavos.
-   */
-  if (
-    contract.proposal &&
-    Number.isFinite(Number(contract.proposal.totalAmount))
-  ) {
-    return Math.max(
-      0,
-      Math.round(Number(contract.proposal.totalAmount) * 100)
-    );
-  }
-
-  /*
-   * Fallback temporário para contratos sem proposta.
-   * O domínio monetário será padronizado na Sprint 0.
-   */
-  return Math.max(
-    0,
-    Math.round(Number(contract.contractValue || 0) * 100)
-  );
-}
-
-function calculateCommission(
-  baseAmount: number,
-  percent: number
-) {
-  return Math.round(
-    baseAmount * (percent / 100)
-  );
 }
 
 export function registerPartnerReferralRoutes({
@@ -159,7 +131,7 @@ export function registerPartnerReferralRoutes({
             protocolId
           );
 
-        if (currentContract) {
+        if (currentContract && referral.status !== "PAGA") {
           const baseAmount =
             getContractBaseAmount(currentContract);
 
