@@ -89,7 +89,7 @@ export async function releasePartnerCommissionForEntryPayment(
       id: commission.id,
     },
     data: {
-      contractId: contract.id,
+      contractId,
       baseAmount,
       commissionAmount,
 
