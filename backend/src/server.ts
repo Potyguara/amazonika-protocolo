@@ -8234,9 +8234,38 @@ app.post(
       notes,
     } = req.body;
 
-    if (!protocolId || !clientId || !description || !amount || !dueDate) {
+    if (
+      !protocolId ||
+      !clientId ||
+      !description ||
+      amount === undefined ||
+      amount === null ||
+      amount === "" ||
+      !dueDate
+    ) {
       return res.status(400).json({
         message: "Protocolo, cliente, descrição, valor e vencimento são obrigatórios.",
+      });
+    }
+
+    let amountCents: number;
+
+    try {
+      amountCents = assertPrismaIntCents(
+        parseReaisInput(String(amount), "en-US")
+      );
+    } catch (moneyError) {
+      return res.status(400).json({
+        message:
+          moneyError instanceof Error
+            ? moneyError.message
+            : "Valor do pagamento inválido.",
+      });
+    }
+
+    if (amountCents <= 0) {
+      return res.status(400).json({
+        message: "O valor do pagamento deve ser maior que zero.",
       });
     }
 
@@ -8246,7 +8275,8 @@ app.post(
         protocolId: Number(protocolId),
         clientId: Number(clientId),
         description,
-        amount: Number(amount),
+        amount: amountCents / 100,
+        amountCents,
         dueDate: new Date(dueDate),
         status: status || "PENDENTE",
         paymentMethod,
@@ -8291,8 +8321,33 @@ function generateBbPaymentTxid(paymentId: number) {
   return base.replace(/[^a-zA-Z0-9]/g, "").slice(0, 35);
 }
 
-function paymentAmountToCents(amount: number) {
-  return Math.round(Number(amount || 0) * 100);
+function paymentAmountToCents(payment: {
+  amount?: number | null;
+  amountCents?: number | null;
+}) {
+  if (
+    payment.amountCents !== null &&
+    payment.amountCents !== undefined
+  ) {
+    const cents = assertPrismaIntCents(payment.amountCents);
+
+    if (cents <= 0) {
+      throw new Error("Valor em centavos do pagamento é inválido.");
+    }
+
+    return cents;
+  }
+
+  // Compatibilidade transitória para pagamentos históricos em reais.
+  const cents = assertPrismaIntCents(
+    parseReaisInput(String(payment.amount || 0), "en-US")
+  );
+
+  if (cents <= 0) {
+    throw new Error("Valor legado do pagamento é inválido.");
+  }
+
+  return cents;
 }
 
 function billingChargeAmountToCents(charge: {
@@ -8396,7 +8451,7 @@ app.post(
         });
       }
 
-      const amountInCents = paymentAmountToCents(payment.amount);
+      const amountInCents = paymentAmountToCents(payment);
 
       if (amountInCents <= 0) {
         return res.status(400).json({
