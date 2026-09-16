@@ -23,6 +23,7 @@ export async function releasePartnerCommissionForEntryPayment(
       },
       orderBy: {
         updatedAt: "desc",
+        contractValueCents: true,
       },
     });
 
@@ -48,6 +49,7 @@ export async function releasePartnerCommissionForEntryPayment(
         proposal: {
           select: {
             totalAmount: true,
+            totalAmountCents: true,
           },
         },
       },
