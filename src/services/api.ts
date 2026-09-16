@@ -719,6 +719,56 @@ createFinanceTransaction(data: {
   );
 },
 
+financeTransactionPaymentPlan(
+  id: number
+) {
+  return request(
+    `/finance/transactions/${id}/payment-plan`
+  );
+},
+
+convertFinanceTransactionToPaymentPlan(
+  id: number,
+  data: {
+    type?: "ENTRADA" | "PARCELA" | "SAIDA";
+    source?:
+      | "CONTRATO"
+      | "SERVICO_AVULSO"
+      | "CUSTO_FIXO"
+      | "SALARIO"
+      | "COMISSAO_PARCEIRO"
+      | "IMPOSTO"
+      | "TAXA"
+      | "OUTRO";
+    categoryId?: number | null;
+    protocolId?: number | null;
+    clientId?: number | null;
+    catalogServiceId?: number | null;
+    description?: string;
+    amount: number;
+    entryAmount: number;
+    entryStatus?: "PENDENTE" | "PAGO" | "CANCELADO";
+    entryDueDate?: string | null;
+    entryPaidAt?: string | null;
+    entryAutoChargeEnabled?: boolean;
+    clientName?: string | null;
+    notes?: string | null;
+    installments: Array<{
+      amount: number;
+      dueDate: string;
+      autoChargeEnabled: boolean;
+    }>;
+  }
+) {
+  return request(
+    `/finance/transactions/${id}/convert-to-payment-plan`,
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+    }
+  );
+},
+
 updateFinanceTransaction(
   id: number,
   data: {

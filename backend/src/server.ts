@@ -8128,7 +8128,6 @@ app.patch(
       where: { id: current.protocolId },
       data: {
         responsibleUserId: targetManagerUserId,
-        status: appointment.status === "CANCELADO" ? "CANCELADO" : "AGENDADO",
       },
     });
 
@@ -9942,7 +9941,9 @@ async function processFinanceAutoCharges(
                   effectiveTxid,
 
                 amountCents:
-                  transaction.amount,
+                  financeAmountToCents(
+                    transaction.amount
+                  ),
 
                 dueDate:
                   dueDateOnly,
@@ -10038,7 +10039,9 @@ async function processFinanceAutoCharges(
                 transaction.totalInstallments,
 
               amountInCents:
-                transaction.amount,
+                financeAmountToCents(
+                  transaction.amount
+                ),
 
               dueDate:
                 dueDateOnly,
@@ -12445,6 +12448,1089 @@ app.post(
   }
 );
 
+
+/*
+ * ============================================================
+ * FINANCEIRO V2
+ * CONVERTER LANÇAMENTO SIMPLES EM PLANO DE RECEBIMENTO
+ * ============================================================
+ *
+ * Esta operação é intencionalmente separada do PUT genérico.
+ *
+ * Regras:
+ * - somente lançamento avulso;
+ * - não pode possuir BillingCharge;
+ * - não pode estar pago;
+ * - não pode já pertencer a um grupo de parcelamento;
+ * - reaproveita o lançamento original como entrada quando
+ *   houver entrada;
+ * - se não houver entrada, reaproveita o lançamento original
+ *   como a primeira parcela;
+ * - cria as demais parcelas atomicamente;
+ * - nenhuma cobrança é emitida nesta rota. Apenas é preparada
+ *   para o processador automático.
+ */
+app.post(
+  "/finance/transactions/:id/convert-to-payment-plan",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  async (req: any, res) => {
+    try {
+      const id =
+        Number(req.params.id);
+
+      if (!id) {
+        return res.status(400).json({
+          message:
+            "ID do lançamento inválido.",
+        });
+      }
+
+      const {
+        type,
+        source,
+        categoryId,
+        protocolId,
+        clientId,
+        catalogServiceId,
+        description,
+        amount,
+        entryAmount,
+        entryStatus,
+        entryDueDate,
+        entryPaidAt,
+        entryAutoChargeEnabled,
+        installments,
+        clientName,
+        notes,
+      } = req.body || {};
+
+      const current =
+        await prisma.financialTransaction.findUnique({
+          where: {
+            id,
+          },
+
+          include: {
+            billingCharge: {
+              select: {
+                id: true,
+                contractId: true,
+                status: true,
+              },
+            },
+          },
+        });
+
+      if (!current) {
+        return res.status(404).json({
+          message:
+            "Lançamento financeiro não encontrado.",
+        });
+      }
+
+      /*
+       * Contratos possuem cronograma próprio.
+       * O Financeiro não pode reescrevê-lo.
+       */
+      if (
+        current.source === "CONTRATO" ||
+        current.billingCharge?.contractId != null
+      ) {
+        return res.status(409).json({
+          message:
+            "Este lançamento pertence a uma obrigação contratual e não pode ser convertido pelo Financeiro.",
+          code:
+            "CONTRACTUAL_TRANSACTION_LOCKED",
+        });
+      }
+
+      /*
+       * Se já existe cobrança operacional, não alteramos
+       * a composição financeira.
+       */
+      if (current.billingCharge) {
+        return res.status(409).json({
+          message:
+            `Este lançamento possui a cobrança #${current.billingCharge.id}. Cancele ou remova primeiro a cobrança antes de alterar o parcelamento.`,
+          code:
+            "BILLING_TRANSACTION_LOCKED",
+          billingChargeId:
+            current.billingCharge.id,
+        });
+      }
+
+      if (
+        current.status === "PAGO" ||
+        current.paymentConfirmedAt
+      ) {
+        return res.status(409).json({
+          message:
+            "Um lançamento já pago não pode ser transformado em parcelamento.",
+          code:
+            "PAID_TRANSACTION_LOCKED",
+        });
+      }
+
+      if (
+        current.installmentGroupId
+      ) {
+        return res.status(409).json({
+          message:
+            "Este lançamento já pertence a um plano financeiro.",
+          code:
+            "PAYMENT_PLAN_ALREADY_EXISTS",
+        });
+      }
+
+      const totalAmount =
+        toIntMoney(amount);
+
+      if (
+        totalAmount <= 0
+      ) {
+        return res.status(400).json({
+          message:
+            "Informe um valor total maior que zero.",
+        });
+      }
+
+      const finalEntryAmount =
+        entryAmount !== undefined &&
+        entryAmount !== null &&
+        entryAmount !== ""
+          ? toIntMoney(entryAmount)
+          : 0;
+
+      if (
+        finalEntryAmount < 0 ||
+        finalEntryAmount >
+          totalAmount
+      ) {
+        return res.status(400).json({
+          message:
+            "O valor da entrada é inválido.",
+        });
+      }
+
+      if (
+        !Array.isArray(installments) ||
+        installments.length === 0
+      ) {
+        return res.status(400).json({
+          message:
+            "Informe ao menos uma parcela futura.",
+        });
+      }
+
+      const normalizedInstallments:
+        Array<{
+          amount: number;
+          dueDate: Date;
+          autoChargeEnabled: boolean;
+        }> = [];
+
+      for (
+        let index = 0;
+        index < installments.length;
+        index += 1
+      ) {
+        const raw =
+          installments[index] || {};
+
+        const installmentAmount =
+          toIntMoney(raw.amount);
+
+        if (
+          installmentAmount <= 0
+        ) {
+          return res.status(400).json({
+            message:
+              `Informe um valor válido para a parcela ${index + 1}.`,
+          });
+        }
+
+        const installmentDueDate =
+          normalizeNullableDate(
+            raw.dueDate
+          );
+
+        if (
+          !installmentDueDate
+        ) {
+          return res.status(400).json({
+            message:
+              `Informe o vencimento da parcela ${index + 1}.`,
+          });
+        }
+
+        normalizedInstallments.push({
+          amount:
+            installmentAmount,
+
+          dueDate:
+            installmentDueDate,
+
+          autoChargeEnabled:
+            Boolean(
+              raw.autoChargeEnabled
+            ),
+        });
+      }
+
+      const installmentsTotal =
+        normalizedInstallments.reduce(
+          (sum, item) =>
+            sum + item.amount,
+          0
+        );
+
+      const distributedTotal =
+        finalEntryAmount +
+        installmentsTotal;
+
+      if (
+        distributedTotal !==
+        totalAmount
+      ) {
+        return res.status(400).json({
+          message:
+            "A entrada somada às parcelas deve ser igual ao valor total do serviço.",
+        });
+      }
+
+      /*
+       * Cobrança automática exige Client real.
+       */
+      const automaticChargeRequested =
+        Boolean(
+          entryAutoChargeEnabled
+        ) ||
+        normalizedInstallments.some(
+          (item) =>
+            item.autoChargeEnabled
+        );
+
+      const finalClientId =
+        clientId !== undefined
+          ? (
+              clientId
+                ? Number(clientId)
+                : null
+            )
+          : current.clientId;
+
+      if (
+        automaticChargeRequested &&
+        !finalClientId
+      ) {
+        return res.status(400).json({
+          message:
+            "Cobrança automática exige um cliente cadastrado e selecionado.",
+        });
+      }
+
+      const installmentGroupId =
+        [
+          "FIN",
+          Date.now(),
+          crypto
+            .randomBytes(4)
+            .toString("hex")
+            .toUpperCase(),
+        ].join("-");
+
+      const totalFutureInstallments =
+        normalizedInstallments.length;
+
+      const finalDescription =
+        String(
+          description ||
+          current.description
+        ).trim();
+
+      const finalSource =
+        source ||
+        current.source;
+
+      const finalType =
+        type ||
+        current.type;
+
+      const result =
+        await prisma.$transaction(
+          async (tx) => {
+            const transactions = [];
+
+            /*
+             * ------------------------------------------------
+             * COM ENTRADA:
+             * lançamento original torna-se a entrada.
+             * ------------------------------------------------
+             */
+            if (
+              finalEntryAmount > 0
+            ) {
+              const finalEntryDueDate =
+                normalizeNullableDate(
+                  entryDueDate ||
+                  current.dueDate
+                );
+
+              if (
+                !finalEntryDueDate
+              ) {
+                throw new Error(
+                  "Informe o vencimento da entrada."
+                );
+              }
+
+              const finalEntryStatus =
+                entryStatus ||
+                "PENDENTE";
+
+              if (
+                finalEntryStatus ===
+                "CANCELADO"
+              ) {
+                throw new Error(
+                  "A entrada do novo plano não pode ser criada como cancelada."
+                );
+              }
+
+              const finalEntryPaidAt =
+                finalEntryStatus ===
+                "PAGO"
+                  ? normalizeNullableDate(
+                      entryPaidAt
+                    ) ||
+                    new Date()
+                  : null;
+
+              const updatedEntry =
+                await tx.financialTransaction.update({
+                  where: {
+                    id:
+                      current.id,
+                  },
+
+                  data: {
+                    type:
+                      finalType,
+
+                    source:
+                      finalSource,
+
+                    status:
+                      finalEntryStatus,
+
+                    categoryId:
+                      categoryId !== undefined
+                        ? (
+                            categoryId
+                              ? Number(categoryId)
+                              : null
+                          )
+                        : current.categoryId,
+
+                    protocolId:
+                      protocolId !== undefined
+                        ? (
+                            protocolId
+                              ? Number(protocolId)
+                              : null
+                          )
+                        : current.protocolId,
+
+                    clientId:
+                      finalClientId,
+
+                    catalogServiceId:
+                      catalogServiceId !== undefined
+                        ? (
+                            catalogServiceId
+                              ? Number(catalogServiceId)
+                              : null
+                          )
+                        : current.catalogServiceId,
+
+                    description:
+                      finalDescription,
+
+                    amount:
+                      finalEntryAmount,
+
+                    dueDate:
+                      finalEntryDueDate,
+
+                    paidAt:
+                      finalEntryPaidAt,
+
+                    competenceMonth:
+                      financeCompetenceFromDate(
+                        finalEntryDueDate
+                      ),
+
+                    clientName:
+                      clientName !== undefined
+                        ? clientName || null
+                        : current.clientName,
+
+                    notes:
+                      notes !== undefined
+                        ? notes || null
+                        : current.notes,
+
+                    installmentGroupId,
+
+                    installmentNumber:
+                      0,
+
+                    totalInstallments:
+                      totalFutureInstallments,
+
+                    autoChargeEnabled:
+                      finalEntryStatus !==
+                        "PAGO" &&
+                      Boolean(
+                        entryAutoChargeEnabled
+                      ),
+
+                    paymentProvider:
+                      finalEntryStatus !==
+                        "PAGO" &&
+                      entryAutoChargeEnabled
+                        ? "BANCO_DO_BRASIL"
+                        : null,
+
+                    providerChargeId:
+                      null,
+
+                    providerTxId:
+                      null,
+
+                    chargeStatus:
+                      finalEntryStatus !==
+                        "PAGO" &&
+                      entryAutoChargeEnabled
+                        ? "PENDING"
+                        : null,
+
+                    chargeCreatedAt:
+                      null,
+
+                    chargeExpiresAt:
+                      null,
+                  },
+                });
+
+              transactions.push(
+                updatedEntry
+              );
+
+              /*
+               * Todas as parcelas futuras são novas.
+               */
+              for (
+                let index = 0;
+                index <
+                normalizedInstallments.length;
+                index += 1
+              ) {
+                const plan =
+                  normalizedInstallments[index];
+
+                const installment =
+                  await tx.financialTransaction.create({
+                    data: {
+                      type:
+                        "PARCELA",
+
+                      source:
+                        finalSource,
+
+                      status:
+                        "PENDENTE",
+
+                      categoryId:
+                        categoryId !== undefined
+                          ? (
+                              categoryId
+                                ? Number(categoryId)
+                                : null
+                            )
+                          : current.categoryId,
+
+                      protocolId:
+                        protocolId !== undefined
+                          ? (
+                              protocolId
+                                ? Number(protocolId)
+                                : null
+                            )
+                          : current.protocolId,
+
+                      clientId:
+                        finalClientId,
+
+                      catalogServiceId:
+                        catalogServiceId !== undefined
+                          ? (
+                              catalogServiceId
+                                ? Number(catalogServiceId)
+                                : null
+                            )
+                          : current.catalogServiceId,
+
+                      description:
+                        finalDescription,
+
+                      amount:
+                        plan.amount,
+
+                      dueDate:
+                        plan.dueDate,
+
+                      paidAt:
+                        null,
+
+                      competenceMonth:
+                        financeCompetenceFromDate(
+                          plan.dueDate
+                        ),
+
+                      clientName:
+                        clientName !== undefined
+                          ? clientName || null
+                          : current.clientName,
+
+                      notes:
+                        notes !== undefined
+                          ? notes || null
+                          : current.notes,
+
+                      installmentGroupId,
+
+                      installmentNumber:
+                        index + 1,
+
+                      totalInstallments:
+                        totalFutureInstallments,
+
+                      createdById:
+                        req.user?.id ||
+                        current.createdById ||
+                        null,
+
+                      autoChargeEnabled:
+                        plan.autoChargeEnabled,
+
+                      paymentProvider:
+                        plan.autoChargeEnabled
+                          ? "BANCO_DO_BRASIL"
+                          : null,
+
+                      chargeStatus:
+                        plan.autoChargeEnabled
+                          ? "PENDING"
+                          : null,
+                    },
+                  });
+
+                transactions.push(
+                  installment
+                );
+              }
+            } else {
+              /*
+               * ------------------------------------------------
+               * SEM ENTRADA:
+               * lançamento original torna-se a parcela 1.
+               * ------------------------------------------------
+               */
+              const firstPlan =
+                normalizedInstallments[0];
+
+              const updatedFirstInstallment =
+                await tx.financialTransaction.update({
+                  where: {
+                    id:
+                      current.id,
+                  },
+
+                  data: {
+                    type:
+                      "PARCELA",
+
+                    source:
+                      finalSource,
+
+                    status:
+                      "PENDENTE",
+
+                    categoryId:
+                      categoryId !== undefined
+                        ? (
+                            categoryId
+                              ? Number(categoryId)
+                              : null
+                          )
+                        : current.categoryId,
+
+                    protocolId:
+                      protocolId !== undefined
+                        ? (
+                            protocolId
+                              ? Number(protocolId)
+                              : null
+                          )
+                        : current.protocolId,
+
+                    clientId:
+                      finalClientId,
+
+                    catalogServiceId:
+                      catalogServiceId !== undefined
+                        ? (
+                            catalogServiceId
+                              ? Number(catalogServiceId)
+                              : null
+                          )
+                        : current.catalogServiceId,
+
+                    description:
+                      finalDescription,
+
+                    amount:
+                      firstPlan.amount,
+
+                    dueDate:
+                      firstPlan.dueDate,
+
+                    paidAt:
+                      null,
+
+                    competenceMonth:
+                      financeCompetenceFromDate(
+                        firstPlan.dueDate
+                      ),
+
+                    clientName:
+                      clientName !== undefined
+                        ? clientName || null
+                        : current.clientName,
+
+                    notes:
+                      notes !== undefined
+                        ? notes || null
+                        : current.notes,
+
+                    installmentGroupId,
+
+                    installmentNumber:
+                      1,
+
+                    totalInstallments:
+                      totalFutureInstallments,
+
+                    autoChargeEnabled:
+                      firstPlan.autoChargeEnabled,
+
+                    paymentProvider:
+                      firstPlan.autoChargeEnabled
+                        ? "BANCO_DO_BRASIL"
+                        : null,
+
+                    providerChargeId:
+                      null,
+
+                    providerTxId:
+                      null,
+
+                    chargeStatus:
+                      firstPlan.autoChargeEnabled
+                        ? "PENDING"
+                        : null,
+
+                    chargeCreatedAt:
+                      null,
+
+                    chargeExpiresAt:
+                      null,
+                  },
+                });
+
+              transactions.push(
+                updatedFirstInstallment
+              );
+
+              for (
+                let index = 1;
+                index <
+                normalizedInstallments.length;
+                index += 1
+              ) {
+                const plan =
+                  normalizedInstallments[index];
+
+                const installment =
+                  await tx.financialTransaction.create({
+                    data: {
+                      type:
+                        "PARCELA",
+
+                      source:
+                        finalSource,
+
+                      status:
+                        "PENDENTE",
+
+                      categoryId:
+                        categoryId !== undefined
+                          ? (
+                              categoryId
+                                ? Number(categoryId)
+                                : null
+                            )
+                          : current.categoryId,
+
+                      protocolId:
+                        protocolId !== undefined
+                          ? (
+                              protocolId
+                                ? Number(protocolId)
+                                : null
+                            )
+                          : current.protocolId,
+
+                      clientId:
+                        finalClientId,
+
+                      catalogServiceId:
+                        catalogServiceId !== undefined
+                          ? (
+                              catalogServiceId
+                                ? Number(catalogServiceId)
+                                : null
+                            )
+                          : current.catalogServiceId,
+
+                      description:
+                        finalDescription,
+
+                      amount:
+                        plan.amount,
+
+                      dueDate:
+                        plan.dueDate,
+
+                      paidAt:
+                        null,
+
+                      competenceMonth:
+                        financeCompetenceFromDate(
+                          plan.dueDate
+                        ),
+
+                      clientName:
+                        clientName !== undefined
+                          ? clientName || null
+                          : current.clientName,
+
+                      notes:
+                        notes !== undefined
+                          ? notes || null
+                          : current.notes,
+
+                      installmentGroupId,
+
+                      installmentNumber:
+                        index + 1,
+
+                      totalInstallments:
+                        totalFutureInstallments,
+
+                      createdById:
+                        req.user?.id ||
+                        current.createdById ||
+                        null,
+
+                      autoChargeEnabled:
+                        plan.autoChargeEnabled,
+
+                      paymentProvider:
+                        plan.autoChargeEnabled
+                          ? "BANCO_DO_BRASIL"
+                          : null,
+
+                      chargeStatus:
+                        plan.autoChargeEnabled
+                          ? "PENDING"
+                          : null,
+                    },
+                  });
+
+                transactions.push(
+                  installment
+                );
+              }
+            }
+
+            await tx.auditLog.create({
+              data: {
+                userId:
+                  req.user?.id ||
+                  null,
+
+                userName:
+                  req.user?.name ||
+                  null,
+
+                userEmail:
+                  req.user?.email ||
+                  null,
+
+                userRole:
+                  req.user?.role ||
+                  null,
+
+                action:
+                  "CONVERT_FINANCIAL_TRANSACTION_TO_PAYMENT_PLAN",
+
+                entity:
+                  "FinancialTransaction",
+
+                entityId:
+                  String(
+                    current.id
+                  ),
+
+                description:
+                  `Lançamento financeiro ${current.id} convertido em plano de recebimento.`,
+
+                metadata:
+                  JSON.stringify({
+                    originalTransactionId:
+                      current.id,
+
+                    installmentGroupId,
+
+                    totalAmount,
+
+                    entryAmount:
+                      finalEntryAmount,
+
+                    installments:
+                      normalizedInstallments.map(
+                        (item, index) => ({
+                          number:
+                            index + 1,
+
+                          amount:
+                            item.amount,
+
+                          dueDate:
+                            item.dueDate,
+
+                          autoChargeEnabled:
+                            item.autoChargeEnabled,
+                        })
+                      ),
+                  }),
+              },
+            });
+
+            return transactions;
+          }
+        );
+
+      return res.status(200).json({
+        mode:
+          "PAYMENT_PLAN_CONVERSION",
+
+        originalTransactionId:
+          current.id,
+
+        installmentGroupId,
+
+        totalAmount,
+
+        entryAmount:
+          finalEntryAmount,
+
+        installmentsTotal,
+
+        transactions:
+          result,
+      });
+    } catch (error) {
+      console.error(
+        "Erro ao converter lançamento em plano financeiro:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          error instanceof Error
+            ? error.message
+            : "Erro ao converter lançamento em plano financeiro.",
+      });
+    }
+  }
+);
+
+
+
+/*
+ * ==========================================================
+ * FINANCEIRO V2 — RECUPERAR PLANO FINANCEIRO COMPLETO
+ * ==========================================================
+ *
+ * Não utiliza filtro de competência/mês.
+ *
+ * A partir de qualquer lançamento pertencente a um
+ * installmentGroupId, recupera diretamente do banco:
+ *
+ * installmentNumber = 0   -> entrada
+ * installmentNumber = 1..N -> parcelas futuras
+ */
+app.get(
+  "/finance/transactions/:id/payment-plan",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  async (req: any, res) => {
+    try {
+      const id = Number(req.params.id);
+
+      if (!id) {
+        return res.status(400).json({
+          message: "ID do lançamento inválido.",
+        });
+      }
+
+      const current =
+        await prisma.financialTransaction.findUnique({
+          where: {
+            id,
+          },
+          include: {
+            category: true,
+
+            protocol: {
+              include: {
+                client: true,
+                serviceType: true,
+              },
+            },
+
+            catalogService: true,
+
+            billingCharge: {
+              select: {
+                id: true,
+                contractId: true,
+                chargeType: true,
+                status: true,
+                amount: true,
+                dueDate: true,
+                installmentNumber: true,
+                totalInstallments: true,
+              },
+            },
+          },
+        });
+
+      if (!current) {
+        return res.status(404).json({
+          message: "Lançamento financeiro não encontrado.",
+        });
+      }
+
+      /*
+       * Lançamento simples:
+       * devolvemos a própria transação dentro do mesmo
+       * formato utilizado pelos planos.
+       */
+      if (!current.installmentGroupId) {
+        return res.json({
+          installmentGroupId: null,
+          transactions: [current],
+        });
+      }
+
+      /*
+       * IMPORTANTE:
+       * esta consulta NÃO possui filtro por mês.
+       *
+       * Assim uma entrada de setembro consegue recuperar
+       * parcelas de outubro, novembro, dezembro etc.
+       */
+      const transactions =
+        await prisma.financialTransaction.findMany({
+          where: {
+            installmentGroupId:
+              current.installmentGroupId,
+          },
+
+          include: {
+            category: true,
+
+            protocol: {
+              include: {
+                client: true,
+                serviceType: true,
+              },
+            },
+
+            catalogService: true,
+
+            billingCharge: {
+              select: {
+                id: true,
+                contractId: true,
+                chargeType: true,
+                status: true,
+                amount: true,
+                dueDate: true,
+                installmentNumber: true,
+                totalInstallments: true,
+              },
+            },
+          },
+
+          orderBy: [
+            {
+              installmentNumber: "asc",
+            },
+            {
+              id: "asc",
+            },
+          ],
+        });
+
+      return res.json({
+        installmentGroupId:
+          current.installmentGroupId,
+
+        transactions,
+      });
+    } catch (error) {
+      console.error(
+        "Erro ao recuperar plano financeiro:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          error instanceof Error
+            ? error.message
+            : "Erro ao recuperar plano financeiro.",
+      });
+    }
+  }
+);
+
+
 app.put(
   "/finance/transactions/:id",
   authMiddleware,
@@ -12501,6 +13587,10 @@ app.put(
      * O Financeiro não pode reescrever o contrato.
      */
     if (currentTransaction.billingCharge) {
+      const isContractual =
+        currentTransaction.source === "CONTRATO" ||
+        currentTransaction.billingCharge.contractId != null;
+
       const protectedFields = [
         "type",
         "source",
@@ -12525,9 +13615,12 @@ app.put(
 
       if (attemptedProtectedFields.length > 0) {
         return res.status(409).json({
-          message:
-            "Este lançamento foi originado por uma cobrança contratual. Valor, vencimento, status e vínculos são definidos pelo fluxo do contrato e não podem ser alterados manualmente no Financeiro.",
-          code: "CONTRACTUAL_TRANSACTION_LOCKED",
+          message: isContractual
+            ? "Este lançamento pertence a uma obrigação contratual. Valor, vencimento, status e vínculos devem ser alterados pelo fluxo do contrato."
+            : "Este serviço avulso possui uma cobrança bancária vinculada. Remova ou cancele primeiro a cobrança antes de alterar valor, vencimento, status ou vínculos.",
+          code: isContractual
+            ? "CONTRACTUAL_TRANSACTION_LOCKED"
+            : "BILLING_TRANSACTION_LOCKED",
           billingChargeId:
             currentTransaction.billingCharge.id,
           protectedFields:
@@ -12638,11 +13731,19 @@ app.patch(
       }
 
       if (currentTransaction.billingCharge) {
+        const isContractual =
+          currentTransaction.source === "CONTRATO" ||
+          currentTransaction.billingCharge.contractId != null;
+
         return res.status(409).json({
-          message:
-            "Este lançamento pertence a uma cobrança contratual. O pagamento deve ser confirmado exclusivamente pelo fluxo de Cobranças para preservar contrato, recibo, histórico e conciliação financeira.",
-          code: "CONTRACTUAL_TRANSACTION_LOCKED",
-          billingChargeId: currentTransaction.billingCharge.id,
+          message: isContractual
+            ? "Este lançamento pertence a uma obrigação contratual. O pagamento deve ser confirmado pelo fluxo de Cobranças."
+            : "Este serviço avulso possui uma cobrança bancária vinculada. O pagamento deve ser confirmado pelo fluxo da cobrança para preservar a conciliação financeira.",
+          code: isContractual
+            ? "CONTRACTUAL_TRANSACTION_LOCKED"
+            : "BILLING_TRANSACTION_LOCKED",
+          billingChargeId:
+            currentTransaction.billingCharge.id,
         });
       }
 
@@ -12722,11 +13823,19 @@ app.delete(
       }
 
       if (transaction.billingCharge) {
+        const isContractual =
+          transaction.source === "CONTRATO" ||
+          transaction.billingCharge.contractId != null;
+
         return res.status(409).json({
-          message:
-            "Este lançamento pertence a uma cobrança contratual e não pode ser excluído pelo Financeiro. Qualquer alteração deve ocorrer pelo fluxo de Cobranças.",
-          code: "CONTRACTUAL_TRANSACTION_LOCKED",
-          billingChargeId: transaction.billingCharge.id,
+          message: isContractual
+            ? "Este lançamento pertence a uma obrigação contratual e não pode ser excluído diretamente pelo Financeiro."
+            : "Este serviço avulso possui uma cobrança bancária vinculada e não pode ser excluído enquanto essa cobrança existir. Cancele ou remova primeiro a cobrança.",
+          code: isContractual
+            ? "CONTRACTUAL_TRANSACTION_LOCKED"
+            : "BILLING_TRANSACTION_LOCKED",
+          billingChargeId:
+            transaction.billingCharge.id,
         });
       }
 

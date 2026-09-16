@@ -10419,7 +10419,7 @@ function FinancePage() {
   const [transactionType, setTransactionType] =
     useState<FinanceTransactionType>("ENTRADA");
   const [transactionSource, setTransactionSource] =
-    useState<FinanceTransactionSource>("CONTRATO");
+    useState<FinanceTransactionSource>("SERVICO_AVULSO");
   const [transactionStatus, setTransactionStatus] =
     useState<FinanceTransactionStatus>("PENDENTE");
   const [transactionCategoryId, setTransactionCategoryId] = useState("");
@@ -10745,7 +10745,7 @@ function FinancePage() {
   function resetTransactionForm() {
     setEditingTransaction(null);
     setTransactionType("ENTRADA");
-    setTransactionSource("CONTRATO");
+    setTransactionSource("SERVICO_AVULSO");
     setTransactionStatus("PENDENTE");
     setTransactionCategoryId("");
     setTransactionCatalogServiceId("");
@@ -10777,7 +10777,9 @@ function FinancePage() {
     );
   }
 
-  function startEditTransaction(item: BackendFinanceTransaction) {
+  async function startEditTransaction(
+    item: BackendFinanceTransaction
+  ) {
     if (item.billingCharge) {
       setSuccess("");
       setError(
@@ -10786,72 +10788,352 @@ function FinancePage() {
       return;
     }
 
-    setEditingTransaction(item);
-    setShowTransactionForm(true);
-    setTransactionType(item.type);
-    setTransactionSource(item.source);
-    setTransactionStatus(item.status);
-    setTransactionCategoryId(
-      item.category?.id
-        ? String(item.category.id)
-        : ""
-    );
+    try {
+      clearMessages();
 
-    setTransactionCatalogServiceId(
-      item.catalogServiceId
-        ? String(item.catalogServiceId)
-        : ""
-    );
+      /*
+       * ====================================================
+       * FINANCEIRO V2 — RECUPERAÇÃO REAL DO PLANO
+       * ====================================================
+       *
+       * Não reconstruímos mais o plano usando apenas
+       * "transactions", pois esse estado é filtrado pelo
+       * mês atualmente exibido no Financeiro.
+       *
+       * O backend recupera o installmentGroupId completo
+       * diretamente do banco, inclusive parcelas pertencentes
+       * a outros meses.
+       */
 
-    setTransactionDescription(
-      item.description || ""
-    );
-    setTransactionAmount(String(item.amount || ""));
-    setTransactionDueDate(item.dueDate ? item.dueDate.slice(0, 10) : "");
-    setTransactionPaidAt(item.paidAt ? item.paidAt.slice(0, 10) : "");
+      let paymentPlanTransactions:
+        BackendFinanceTransaction[] = [];
 
-    setTransactionClientId(
-      item.clientId ||
-      null
-    );
+      if (item.installmentGroupId) {
+        const response =
+          (await api.financeTransactionPaymentPlan(
+            item.id
+          )) as {
+            installmentGroupId?: string | null;
+            transactions?: BackendFinanceTransaction[];
+          };
 
-    setTransactionClientName(
-      item.clientName ||
-      item.protocol?.client?.name ||
-      ""
-    );
+        paymentPlanTransactions =
+          Array.isArray(response?.transactions)
+            ? response.transactions
+            : [];
+      }
 
-    setTransactionNotes(
-      item.notes ||
-      ""
-    );
+      paymentPlanTransactions =
+        paymentPlanTransactions
+          .slice()
+          .sort(
+            (a, b) =>
+              Number(
+                a.installmentNumber ?? 0
+              ) -
+              Number(
+                b.installmentNumber ?? 0
+              )
+          );
 
-    /*
-     * A edição continua individual.
-     * Não recria o grupo.
-     */
-    setTransactionInstallmentEnabled(
-      false
-    );
+      const entryTransaction =
+        item.installmentGroupId
+          ? paymentPlanTransactions.find(
+              (transaction) =>
+                Number(
+                  transaction.installmentNumber
+                ) === 0
+            ) || null
+          : null;
 
-    setTransactionInstallmentQty(
-      item.totalInstallments
-        ? String(
-            item.totalInstallments
+      const futureInstallments =
+        item.installmentGroupId
+          ? paymentPlanTransactions
+              .filter(
+                (transaction) =>
+                  Number(
+                    transaction.installmentNumber
+                  ) > 0
+              )
+              .sort(
+                (a, b) =>
+                  Number(
+                    a.installmentNumber ?? 0
+                  ) -
+                  Number(
+                    b.installmentNumber ?? 0
+                  )
+              )
+          : [];
+
+      const baseTransaction =
+        entryTransaction ||
+        paymentPlanTransactions[0] ||
+        item;
+
+      setEditingTransaction(
+        baseTransaction
+      );
+
+      setShowTransactionForm(
+        true
+      );
+
+      setTransactionType(
+        baseTransaction.type
+      );
+
+      setTransactionSource(
+        baseTransaction.source
+      );
+
+      setTransactionStatus(
+        entryTransaction?.status ||
+        baseTransaction.status
+      );
+
+      setTransactionCategoryId(
+        baseTransaction.category?.id
+          ? String(
+              baseTransaction.category.id
+            )
+          : ""
+      );
+
+      setTransactionCatalogServiceId(
+        baseTransaction.catalogServiceId
+          ? String(
+              baseTransaction.catalogServiceId
+            )
+          : ""
+      );
+
+      setTransactionDescription(
+        baseTransaction.description ||
+        ""
+      );
+
+      setTransactionClientId(
+        baseTransaction.clientId ||
+        null
+      );
+
+      setTransactionClientName(
+        baseTransaction.clientName ||
+        baseTransaction.protocol?.client?.name ||
+        ""
+      );
+
+      setClientSearch(
+        baseTransaction.clientName ||
+        baseTransaction.protocol?.client?.name ||
+        ""
+      );
+
+      setClientResults(
+        []
+      );
+
+      setTransactionNotes(
+        baseTransaction.notes ||
+        ""
+      );
+
+      /*
+       * ====================================================
+       * PLANO EXISTENTE
+       * ====================================================
+       */
+      if (
+        item.installmentGroupId &&
+        paymentPlanTransactions.length > 0
+      ) {
+        const totalAmount =
+          paymentPlanTransactions.reduce(
+            (
+              accumulator,
+              transaction
+            ) =>
+              accumulator +
+              Number(
+                transaction.amount ||
+                0
+              ),
+            0
+          );
+
+        setTransactionAmount(
+          String(totalAmount)
+        );
+
+        /*
+         * ENTRADA
+         */
+        if (entryTransaction) {
+          setTransactionEntryAmount(
+            String(
+              entryTransaction.amount ||
+              0
+            )
+          );
+
+          setTransactionDueDate(
+            entryTransaction.dueDate
+              ? entryTransaction.dueDate.slice(
+                  0,
+                  10
+                )
+              : ""
+          );
+
+          setTransactionPaidAt(
+            entryTransaction.paidAt
+              ? entryTransaction.paidAt.slice(
+                  0,
+                  10
+                )
+              : ""
+          );
+
+          setTransactionStatus(
+            entryTransaction.status
+          );
+        } else {
+          setTransactionEntryAmount(
+            ""
+          );
+
+          setTransactionDueDate(
+            ""
+          );
+
+          setTransactionPaidAt(
+            ""
+          );
+        }
+
+        /*
+         * PARCELAS FUTURAS
+         */
+        setTransactionInstallmentEnabled(
+          true
+        );
+
+        setTransactionInstallmentQty(
+          String(
+            Math.max(
+              1,
+              futureInstallments.length
+            )
           )
-        : "2"
-    );
+        );
 
-    setTransactionInstallmentDates(
-      []
-    );
+        setTransactionInstallmentAmounts(
+          futureInstallments.map(
+            (transaction) =>
+              String(
+                transaction.amount ||
+                0
+              )
+          )
+        );
 
-    setTransactionAutoChargeEnabled(
-      Boolean(
-        item.autoChargeEnabled
-      )
-    );
+        setTransactionInstallmentDates(
+          futureInstallments.map(
+            (transaction) =>
+              transaction.dueDate
+                ? transaction.dueDate.slice(
+                    0,
+                    10
+                  )
+                : ""
+          )
+        );
+
+        setTransactionAutoChargeEnabled(
+          paymentPlanTransactions.some(
+            (transaction) =>
+              Boolean(
+                transaction.autoChargeEnabled
+              )
+          )
+        );
+
+        return;
+      }
+
+      /*
+       * ====================================================
+       * LANÇAMENTO SIMPLES
+       * ====================================================
+       */
+      setTransactionAmount(
+        String(
+          item.amount ||
+          ""
+        )
+      );
+
+      setTransactionDueDate(
+        item.dueDate
+          ? item.dueDate.slice(
+              0,
+              10
+            )
+          : ""
+      );
+
+      setTransactionPaidAt(
+        item.paidAt
+          ? item.paidAt.slice(
+              0,
+              10
+            )
+          : ""
+      );
+
+      setTransactionInstallmentEnabled(
+        false
+      );
+
+      setTransactionInstallmentQty(
+        "2"
+      );
+
+      setTransactionEntryAmount(
+        ""
+      );
+
+      setTransactionInstallmentAmounts(
+        []
+      );
+
+      setTransactionInstallmentDates(
+        []
+      );
+
+      setTransactionAutoChargeEnabled(
+        Boolean(
+          item.autoChargeEnabled
+        )
+      );
+    } catch (err) {
+      setShowTransactionForm(
+        false
+      );
+
+      setEditingTransaction(
+        null
+      );
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao recuperar o plano financeiro."
+      );
+    }
   }
+
 
   /*
    * ======================================================
@@ -11056,7 +11338,7 @@ function FinancePage() {
     );
   }
 
-  async function handleSaveTransaction() {
+async function handleSaveTransaction() {
     try {
       setSaving(true);
       clearMessages();
@@ -11070,18 +11352,21 @@ function FinancePage() {
       }
 
       /*
-       * Cobrança automática exige vínculo real com
-       * um cliente cadastrado. Nome digitado livremente
-       * continua permitido apenas para controle manual.
+       * FINANCEIRO V2
+       *
+       * Toda ENTRADA deve possuir vínculo real com um
+       * cliente cadastrado.
+       *
+       * Serviço avulso não exige protocolo nem contrato,
+       * mas não pode possuir cliente apenas digitado
+       * livremente.
        */
       if (
-        !editingTransaction &&
         transactionType === "ENTRADA" &&
-        transactionAutoChargeEnabled &&
         !transactionClientId
       ) {
         throw new Error(
-          "Para cobrança automática, selecione um cliente cadastrado usando Buscar cliente."
+          "Selecione um cliente cadastrado usando Buscar cliente antes de salvar a entrada."
         );
       }
 
@@ -11096,8 +11381,14 @@ function FinancePage() {
        * entrada + soma das parcelas futuras.
        */
       if (
-        !editingTransaction &&
-        transactionInstallmentEnabled
+        transactionInstallmentEnabled &&
+        (
+          !editingTransaction ||
+          (
+            !editingTransaction.installmentGroupId &&
+            !editingTransaction.billingCharge
+          )
+        )
       ) {
         const totalServiceAmount =
           Number(
@@ -11345,9 +11636,118 @@ function FinancePage() {
             : undefined,
       };
 
-      if (editingTransaction) {
-        await api.updateFinanceTransaction(editingTransaction.id, payload);
-        setSuccess("Lançamento financeiro atualizado com sucesso.");
+      const convertingExistingTransactionToPaymentPlan =
+        Boolean(
+          editingTransaction &&
+          transactionInstallmentEnabled &&
+          !editingTransaction.installmentGroupId &&
+          !editingTransaction.billingCharge
+        );
+
+      if (
+        editingTransaction &&
+        convertingExistingTransactionToPaymentPlan
+      ) {
+        await api.convertFinanceTransactionToPaymentPlan(
+          editingTransaction.id,
+          {
+            type: transactionType,
+            source: transactionSource,
+
+            categoryId:
+              transactionCategoryId
+                ? Number(transactionCategoryId)
+                : null,
+
+            clientId:
+              transactionClientId ||
+              null,
+
+            catalogServiceId:
+              transactionCatalogServiceId
+                ? Number(transactionCatalogServiceId)
+                : null,
+
+            description:
+              transactionDescription,
+
+            /*
+             * Valor TOTAL do serviço original.
+             */
+            amount:
+              Number(transactionAmount),
+
+            /*
+             * Composição do novo plano financeiro.
+             */
+            entryAmount:
+              Number(
+                transactionEntryAmount ||
+                  0
+              ),
+
+            entryStatus:
+              transactionStatus,
+
+            entryDueDate:
+              transactionDueDate ||
+              null,
+
+            entryPaidAt:
+              transactionStatus === "PAGO"
+                ? transactionPaidAt ||
+                  new Date()
+                    .toISOString()
+                    .slice(0, 10)
+                : null,
+
+            entryAutoChargeEnabled:
+              transactionStatus !== "PAGO"
+                ? transactionAutoChargeEnabled
+                : false,
+
+            clientName:
+              transactionClientName ||
+              null,
+
+            notes:
+              transactionNotes ||
+              null,
+
+            installments:
+              transactionInstallmentDates.map(
+                (
+                  dueDate,
+                  index
+                ) => ({
+                  amount:
+                    Number(
+                      transactionInstallmentAmounts[
+                        index
+                      ] || 0
+                    ),
+
+                  dueDate,
+
+                  autoChargeEnabled:
+                    transactionAutoChargeEnabled,
+                })
+              ),
+          }
+        );
+
+        setSuccess(
+          `Lançamento convertido em plano financeiro com ${transactionInstallmentQty} parcela(s) futura(s).`
+        );
+      } else if (editingTransaction) {
+        await api.updateFinanceTransaction(
+          editingTransaction.id,
+          payload
+        );
+
+        setSuccess(
+          "Lançamento financeiro atualizado com sucesso."
+        );
       } else {
         await api.createFinanceTransaction(
           payload
@@ -12581,16 +12981,31 @@ async function handleDeleteSalary(id: number) {
       value={transactionClientName}
       onChange={(event) => {
         /*
-         * Se o usuário digitar manualmente,
-         * desfaz o vínculo anterior.
+         * O texto digitado serve somente para pesquisa.
+         *
+         * Qualquer alteração manual desfaz a seleção
+         * anterior até que um cliente cadastrado seja
+         * escolhido novamente nos resultados.
          */
         setTransactionClientId(null);
         setTransactionClientName(event.target.value);
         setClientSearch(event.target.value);
       }}
-      placeholder="Nome do cliente, empresa ou origem"
+      placeholder={
+        transactionType === "ENTRADA"
+          ? "Digite para buscar um cliente cadastrado"
+          : "Nome do cliente, empresa ou origem"
+      }
     />
   </label>
+
+  {transactionType === "ENTRADA" && (
+    <small className="table-small">
+      {transactionClientId
+        ? "✓ Cliente cadastrado selecionado."
+        : "Selecione obrigatoriamente um cliente nos resultados da busca."}
+    </small>
+  )}
 
   <div className="form-actions compact-actions">
     <button
@@ -12704,9 +13119,8 @@ async function handleDeleteSalary(id: number) {
 
               </div>
 
-              {!editingTransaction &&
-                transactionType ===
-                  "ENTRADA" && (
+              {transactionType === "ENTRADA" &&
+                !editingTransaction?.billingCharge && (
                   <section className="finance-installment-planner finance-v2-planner">
                     <div className="finance-v2-header">
                       <div>
@@ -13355,12 +13769,23 @@ async function handleDeleteSalary(id: number) {
 
 <td>
   <div className="table-actions">
-    {item.billingCharge ? (
+    {item.source === "CONTRATO" ? (
       <span
         className="mini-button"
-        title={`Lançamento originado pela cobrança #${item.billingCharge.id}`}
+        title={
+          item.billingCharge?.contractId
+            ? `Lançamento vinculado ao contrato #${item.billingCharge.contractId}`
+            : "Lançamento originado de contrato"
+        }
       >
         🔒 Contratual
+      </span>
+    ) : item.billingCharge ? (
+      <span
+        className="mini-button"
+        title={`Serviço avulso com cobrança #${item.billingCharge.id} emitida`}
+      >
+        🔒 Cobrança emitida
       </span>
     ) : (
       <button
@@ -13372,35 +13797,40 @@ async function handleDeleteSalary(id: number) {
       </button>
     )}
 
-    {!item.billingCharge && item.status !== "PAGO" && (
-      <button
-        className="mini-button"
-        type="button"
-        onClick={() => handlePayTransaction(item)}
-      >
-        Pagar
-      </button>
-    )}
+    {!item.billingCharge &&
+      item.source !== "CONTRATO" &&
+      item.status !== "PAGO" && (
+        <button
+          className="mini-button"
+          type="button"
+          onClick={() => handlePayTransaction(item)}
+        >
+          Pagar
+        </button>
+      )}
 
-    {!item.billingCharge && item.status !== "CANCELADO" && (
-      <button
-        className="mini-button"
-        type="button"
-        onClick={() => handleCancelTransaction(item)}
-      >
-        Cancelar
-      </button>
-    )}
+    {!item.billingCharge &&
+      item.source !== "CONTRATO" &&
+      item.status !== "CANCELADO" && (
+        <button
+          className="mini-button"
+          type="button"
+          onClick={() => handleCancelTransaction(item)}
+        >
+          Cancelar
+        </button>
+      )}
 
-    {!item.billingCharge && (
-      <button
-        className="mini-button danger"
-        type="button"
-        onClick={() => handleDeleteTransaction(item.id)}
-      >
-        Excluir
-      </button>
-    )}
+    {!item.billingCharge &&
+      item.source !== "CONTRATO" && (
+        <button
+          className="mini-button danger"
+          type="button"
+          onClick={() => handleDeleteTransaction(item.id)}
+        >
+          Excluir
+        </button>
+      )}
   </div>
 </td>
                   </tr>
