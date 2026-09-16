@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { copyPaymentSchedule } from "./payment-schedule";
-import { calculateCommission, commissionToLegacyFinanceReais, getContractBaseAmount } from "../modules/partners/commission-money";
+import { calculateCommission, getContractBaseAmount } from "../modules/partners/commission-money";
 import { standaloneDraftTerms, standaloneDocumentTerms, standaloneItemTotal, standalonePaymentTerms, standaloneTotals } from "../modules/standalone-proposals/standalone-money";
 import { releasePartnerCommissionForEntryPayment } from "../modules/partners/partner-commission.service";
 import { registerPartnerCommissionRoutes } from "../modules/partners/partner-commissions.routes";
@@ -75,12 +75,10 @@ test("commission canonical path never reads legacy reais; base 123456 at 12.34% 
   assert.throws(() => calculateCommission(base, 12.345));
 });
 
-test("explicit legacy commission boundaries neither reinterpret cents nor silently truncate", () => {
+test("explicit legacy commission bases do not reinterpret canonical cents", () => {
   assert.equal(getContractBaseAmount({ proposal: { totalAmount: 1234 } }), 123400);
   assert.equal(getContractBaseAmount({ contractValue: 1234.56 }), 123456);
   assert.throws(() => getContractBaseAmount({ contractValue: 1.234 }));
-  assert.equal(commissionToLegacyFinanceReais(12300), 123);
-  for (const amount of [12345, 1, 0, -100, 1.5]) assert.throws(() => commissionToLegacyFinanceReais(amount));
 });
 
 test("commission release uses existing schedule columns and writes cents, with an in-memory repository", async () => {
@@ -91,7 +89,7 @@ test("commission release uses existing schedule columns and writes cents, with a
       update: async (args: any) => { written = args.data; return args.data; },
     },
     contract: { findUnique: async (args: any) => {
-      assert.deepEqual(args.include.paymentSchedule, { select: { amountCents: true } });
+      assert.deepEqual(args.select.paymentSchedule, { select: { amountCents: true } });
       return { id: 2, status: "ASSINADO", paymentSchedule: [{ amountCents: 123456 }],
         get proposal(): never { throw new Error("No cents -> reais -> cents"); } };
     } },
@@ -114,17 +112,51 @@ function fakeResponse() {
     json(body: any) { this.body = body; return this; } };
 }
 
-test("commission payment route blocks fractional legacy writes before starting a transaction", async () => {
+test("commission payment writes canonical cents and only derives the legacy mirror", async () => {
   const { app, routes } = fakeApp();
+  let financialWrite: any;
+  const commission = {
+    id: 1,
+    commissionAmount: 12345,
+    status: "DISPONIVEL_PARA_PAGAMENTO",
+    financialTransactionId: null,
+    financialTransaction: null,
+    protocolId: 2,
+    contractId: 3,
+    partnerId: 4,
+    percent: 10,
+    dueDate: new Date("2026-10-01T12:00:00Z"),
+    partner: { name: "Parceiro" },
+    protocol: {
+      protocolNumber: "P-1",
+      client: { name: "Cliente" },
+      serviceType: { name: "Serviço" },
+    },
+    contract: { contractNumber: "C-1" },
+  };
+  const tx = {
+    financialCategory: { upsert: async () => ({ id: 5 }) },
+    financialTransaction: {
+      create: async ({ data }: any) => {
+        financialWrite = data;
+        return { id: 6, ...data };
+      },
+    },
+    partnerCommission: {
+      update: async () => ({ ...commission, status: "PAGA" }),
+    },
+    auditLog: { create: async () => ({}) },
+  };
   const prisma = {
-    partnerCommission: { findUnique: async () => ({ commissionAmount: 12345, status: "DISPONIVEL_PARA_PAGAMENTO" }) },
-    $transaction: async () => { assert.fail("Must not write to Financeiro"); },
+    partnerCommission: { findUnique: async () => commission },
+    $transaction: async (callback: any) => callback(tx),
   };
   registerPartnerCommissionRoutes({ app, prisma: prisma as any, authMiddleware: () => {}, requireRoles: () => () => {} });
   const res = fakeResponse();
-  await routes.get("post /partner-commissions/:id/pay")!({ params: { id: "1" }, body: {} }, res);
-  assert.equal(res.code, 409);
-  assert.match(res.body.message, /Financeiro legado/);
+  await routes.get("post /partner-commissions/:id/pay")!({ params: { id: "1" }, body: {}, user: {} }, res);
+  assert.equal(res.code, 200);
+  assert.equal(financialWrite.amountCents, 12345);
+  assert.equal(financialWrite.amount, 123);
 });
 
 test("StandaloneProposal route persists exact terms and rejects zero obligations before writing", async (t) => {

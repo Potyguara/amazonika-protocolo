@@ -1,4 +1,5 @@
 import { assertPrismaIntCents } from "../../lib/money";
+import { legacyReaisFromCents } from "../../lib/canonical-money";
 import { Express } from "express";
 import { PrismaClient } from "@prisma/client";
 
@@ -276,7 +277,10 @@ export function registerPartnerCommissionRoutes({
                       canonicalCommissionAmount,
 
                     amount:
-                      Math.trunc(canonicalCommissionAmount / 100),
+                      legacyReaisFromCents(
+                        canonicalCommissionAmount,
+                        "integer-reais"
+                      ),
 
                     dueDate:
                       commission.dueDate,

@@ -1,5 +1,14 @@
-import { assertPrismaIntCents, parseReaisInput, sumCents } from "./lib/money";
+import { applyRateCents, assertPrismaIntCents, parseReaisInput, sumCents } from "./lib/money";
 import { copyPaymentSchedule } from "./lib/payment-schedule";
+import {
+  canonicalCentsOrLegacy,
+  legacyReaisFromCents,
+  normalizeFinancialPlanMoney,
+  proposalItemMoney,
+  proposalToContractMoney,
+  proposalToProtocolMoney,
+  reaisInputToCents,
+} from "./lib/canonical-money";
 import "dotenv/config";
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
@@ -3487,21 +3496,11 @@ app.post(
           templateType: "CONTRATO_PRESTACAO_SERVICOS",
           status: "GERADO",
 
-contractValue: proposalTotalCents / 100,
-contractValueCents: proposalTotalCents,
-entryAmount:
-  proposal.entryAmountCents !== null &&
-  proposal.entryAmountCents !== undefined
-    ? assertPrismaIntCents(proposal.entryAmountCents) / 100
-    : proposal.entryAmount,
-entryAmountCents:
-  proposal.entryAmountCents !== null &&
-  proposal.entryAmountCents !== undefined
-    ? assertPrismaIntCents(proposal.entryAmountCents)
-    : assertPrismaIntCents(
-        parseReaisInput(String(proposal.entryAmount || 0), "en-US")
-      ),
-paymentMode: proposal.paymentMode,
+          ...proposalToContractMoney(
+            proposalTotalCents,
+            proposalEntryAmountCents
+          ),
+          paymentMode: proposal.paymentMode,
 
           title: `Contrato de Prestação de Serviços — ${proposal.protocol.protocolNumber}`,
           objectText,
@@ -6393,27 +6392,32 @@ async function generateProposalNumber() {
 function calculateProposalTotals(items: any[]) {
   const normalizedItems = items.map((item, index) => {
     const quantity = Number(item.quantity || 1);
-    const unitAmount = toIntMoney(item.unitAmount || item.amount || 0);
-    const totalAmount = quantity * unitAmount;
+    const money = proposalItemMoney(
+      quantity,
+      item.unitAmount ?? item.amount ?? 0
+    );
 
     return {
       serviceName: String(item.serviceName || "").trim(),
       description: item.description || null,
       quantity,
-      unitAmount,
-      totalAmount,
+      ...money,
       sortOrder: index + 1,
     };
   });
 
-  const totalAmount = normalizedItems.reduce(
-    (sum, item) => sum + item.totalAmount,
-    0
+  const totalAmountCents = sumCents(
+    normalizedItems.map((item) => item.totalAmountCents)
+  );
+  const totalAmount = legacyReaisFromCents(
+    totalAmountCents,
+    "integer-reais"
   );
 
   return {
     normalizedItems,
     totalAmount,
+    totalAmountCents,
   };
 }
 
@@ -7434,7 +7438,11 @@ app.post(
 
       const managerUserId = Number(req.body.managerUserId);
       const competenceMonth = getCompetenceMonth(req.body.competenceMonth);
-      const amount = toIntMoney(req.body.amount);
+      const amountCents = reaisInputToCents(
+        req.body.amount,
+        "Valor do adiantamento"
+      );
+      const amount = legacyReaisFromCents(amountCents, "integer-reais");
       const paidAt = req.body.paidAt ? new Date(req.body.paidAt) : new Date();
 
       if (!managerUserId || amount <= 0) {
@@ -7462,6 +7470,7 @@ app.post(
           managerUserId,
           competenceMonth,
           amount,
+          amountCents,
           paidAt,
           description: req.body.description || "Adiantamento de pró-labore",
           notes: req.body.notes || null,
@@ -7776,6 +7785,10 @@ app.post(
     }
 
     const protocolNumber = await nextProtocolNumber();
+    const estimatedValueCents =
+      estimatedValue !== undefined && estimatedValue !== null && estimatedValue !== ""
+        ? reaisInputToCents(estimatedValue, "Valor estimado")
+        : null;
 
     const protocol = await prisma.protocol.create({
       data: {
@@ -7784,7 +7797,14 @@ app.post(
         serviceTypeId: Number(serviceTypeId),
         description,
         priority,
-        estimatedValue: estimatedValue ? Number(estimatedValue) : null,
+        estimatedValue:
+          estimatedValueCents !== null
+            ? legacyReaisFromCents(
+                estimatedValueCents,
+                "decimal-reais"
+              )
+            : null,
+        estimatedValueCents,
         deadlineDate: deadlineDate ? new Date(deadlineDate) : null,
         createdByUserId: req.user?.id,
         responsibleUserId: req.user?.id,
@@ -8369,15 +8389,9 @@ function billingChargeAmountToCents(charge: {
     return cents;
   }
 
-  const legacyAmount = Number(charge.amount || 0);
-
-  if (!Number.isFinite(legacyAmount) || legacyAmount <= 0) {
-    throw new Error(
-      "Valor legado da cobrança é inválido."
-    );
-  }
-
-  return Math.round(legacyAmount * 100);
+  const cents = reaisInputToCents(charge.amount, "Valor legado da cobrança");
+  if (cents <= 0) throw new Error("Valor legado da cobrança é inválido.");
+  return cents;
 }
 
 function extractBbPixCopiaECola(result: any) {
@@ -8442,12 +8456,6 @@ app.post(
       if (payment.status === "CANCELADO") {
         return res.status(400).json({
           message: "Não é possível emitir cobrança para pagamento cancelado.",
-        });
-      }
-
-      if (!payment.amount || Number(payment.amount) <= 0) {
-        return res.status(400).json({
-          message: "O valor do pagamento deve ser maior que zero.",
         });
       }
 
@@ -9033,16 +9041,6 @@ function toIntMoney(value: any) {
  *
  * A conversão para centavos ocorre na borda bancária.
  */
-function financeAmountToCents(value: any) {
-  const amount = Number(value || 0);
-
-  if (!Number.isFinite(amount)) {
-    return 0;
-  }
-
-  return Math.round(amount * 100);
-}
-
 function normalizeNullableDate(value: any) {
   if (!value) return null;
 
@@ -9728,6 +9726,12 @@ async function processFinanceAutoCharges(
       let billingCharge =
         transaction.billingCharge;
 
+      const transactionAmountCents = canonicalCentsOrLegacy(
+        transaction.amountCents,
+        transaction.amount,
+        "Valor da transação financeira"
+      );
+
       if (!billingCharge) {
         billingCharge =
           await prisma.billingCharge.create({
@@ -9777,17 +9781,16 @@ async function processFinanceAutoCharges(
                * compatibilidade de telas/rotas antigas.
                */
               amount:
-                Math.round(
-                  transaction.amount
+                legacyReaisFromCents(
+                  transactionAmountCents,
+                  "integer-reais"
                 ),
 
               /*
                * Valor bancário canônico em centavos.
                */
               amountCents:
-                financeAmountToCents(
-                  transaction.amount
-                ),
+                transactionAmountCents,
 
               dueDate:
                 transaction.dueDate,
@@ -9850,9 +9853,7 @@ async function processFinanceAutoCharges(
                   null,
 
                 amountCents:
-                  financeAmountToCents(
-                    transaction.amount
-                  ),
+                  transactionAmountCents,
 
                 dueDate:
                   dueDateOnly,
@@ -9966,9 +9967,7 @@ async function processFinanceAutoCharges(
               effectiveTxid,
 
             amountInCents:
-            financeAmountToCents(
-              transaction.amount
-            ),
+              transactionAmountCents,
 
             dueDate:
               transaction.dueDate,
@@ -10054,9 +10053,7 @@ async function processFinanceAutoCharges(
                   effectiveTxid,
 
                 amountCents:
-                  financeAmountToCents(
-                    transaction.amount
-                  ),
+                  transactionAmountCents,
 
                 dueDate:
                   dueDateOnly,
@@ -10152,9 +10149,7 @@ async function processFinanceAutoCharges(
                 transaction.totalInstallments,
 
               amountInCents:
-                financeAmountToCents(
-                  transaction.amount
-                ),
+                transactionAmountCents,
 
               dueDate:
                 dueDateOnly,
@@ -12725,36 +12720,6 @@ app.post(
         });
       }
 
-      const totalAmount =
-        toIntMoney(amount);
-
-      if (
-        totalAmount <= 0
-      ) {
-        return res.status(400).json({
-          message:
-            "Informe um valor total maior que zero.",
-        });
-      }
-
-      const finalEntryAmount =
-        entryAmount !== undefined &&
-        entryAmount !== null &&
-        entryAmount !== ""
-          ? toIntMoney(entryAmount)
-          : 0;
-
-      if (
-        finalEntryAmount < 0 ||
-        finalEntryAmount >
-          totalAmount
-      ) {
-        return res.status(400).json({
-          message:
-            "O valor da entrada é inválido.",
-        });
-      }
-
       if (
         !Array.isArray(installments) ||
         installments.length === 0
@@ -12765,9 +12730,37 @@ app.post(
         });
       }
 
+      let normalizedMoneyPlan: ReturnType<typeof normalizeFinancialPlanMoney>;
+      try {
+        normalizedMoneyPlan = normalizeFinancialPlanMoney({
+          total: amount,
+          entry: entryAmount,
+          installments: installments.map((item: any) => item?.amount),
+        });
+      } catch (moneyError) {
+        return res.status(400).json({
+          message:
+            moneyError instanceof Error
+              ? moneyError.message
+              : "Plano financeiro inválido.",
+        });
+      }
+
+      const totalAmountCents = normalizedMoneyPlan.totalAmountCents;
+      const finalEntryAmountCents = normalizedMoneyPlan.entryAmountCents;
+      const totalAmount = legacyReaisFromCents(
+        totalAmountCents,
+        "integer-reais"
+      );
+      const finalEntryAmount = legacyReaisFromCents(
+        finalEntryAmountCents,
+        "integer-reais"
+      );
+
       const normalizedInstallments:
         Array<{
           amount: number;
+          amountCents: number;
           dueDate: Date;
           autoChargeEnabled: boolean;
         }> = [];
@@ -12780,17 +12773,12 @@ app.post(
         const raw =
           installments[index] || {};
 
-        const installmentAmount =
-          toIntMoney(raw.amount);
-
-        if (
-          installmentAmount <= 0
-        ) {
-          return res.status(400).json({
-            message:
-              `Informe um valor válido para a parcela ${index + 1}.`,
-          });
-        }
+        const installmentAmountCents =
+          normalizedMoneyPlan.installmentAmountsCents[index];
+        const installmentAmount = legacyReaisFromCents(
+          installmentAmountCents,
+          "integer-reais"
+        );
 
         const installmentDueDate =
           normalizeNullableDate(
@@ -12810,6 +12798,9 @@ app.post(
           amount:
             installmentAmount,
 
+          amountCents:
+            installmentAmountCents,
+
           dueDate:
             installmentDueDate,
 
@@ -12820,26 +12811,15 @@ app.post(
         });
       }
 
-      const installmentsTotal =
-        normalizedInstallments.reduce(
-          (sum, item) =>
-            sum + item.amount,
-          0
-        );
-
-      const distributedTotal =
-        finalEntryAmount +
-        installmentsTotal;
-
-      if (
-        distributedTotal !==
-        totalAmount
-      ) {
-        return res.status(400).json({
-          message:
-            "A entrada somada às parcelas deve ser igual ao valor total do serviço.",
-        });
-      }
+      const installmentsTotalCents = sumCents(
+        normalizedInstallments.map((item) =>
+          assertPrismaIntCents(item.amountCents)
+        )
+      );
+      const installmentsTotal = legacyReaisFromCents(
+        installmentsTotalCents,
+        "integer-reais"
+      );
 
       /*
        * Cobrança automática exige Client real.
@@ -12922,7 +12902,7 @@ app.post(
              * ------------------------------------------------
              */
             if (
-              finalEntryAmount > 0
+              finalEntryAmountCents > 0
             ) {
               const finalEntryDueDate =
                 normalizeNullableDate(
@@ -13012,6 +12992,9 @@ app.post(
 
                     amount:
                       finalEntryAmount,
+
+                    amountCents:
+                      finalEntryAmountCents,
 
                     dueDate:
                       finalEntryDueDate,
@@ -13141,6 +13124,9 @@ app.post(
                       amount:
                         plan.amount,
 
+                      amountCents:
+                        plan.amountCents,
+
                       dueDate:
                         plan.dueDate,
 
@@ -13256,6 +13242,9 @@ app.post(
 
                     amount:
                       firstPlan.amount,
+
+                    amountCents:
+                      firstPlan.amountCents,
 
                     dueDate:
                       firstPlan.dueDate,
@@ -13374,6 +13363,9 @@ app.post(
                       amount:
                         plan.amount,
 
+                      amountCents:
+                        plan.amountCents,
+
                       dueDate:
                         plan.dueDate,
 
@@ -13469,9 +13461,12 @@ app.post(
                     installmentGroupId,
 
                     totalAmount,
+                    totalAmountCents,
 
                     entryAmount:
                       finalEntryAmount,
+                    entryAmountCents:
+                      finalEntryAmountCents,
 
                     installments:
                       normalizedInstallments.map(
@@ -13481,6 +13476,8 @@ app.post(
 
                           amount:
                             item.amount,
+                          amountCents:
+                            item.amountCents,
 
                           dueDate:
                             item.dueDate,
@@ -13507,11 +13504,15 @@ app.post(
         installmentGroupId,
 
         totalAmount,
+        totalAmountCents,
 
         entryAmount:
           finalEntryAmount,
+        entryAmountCents:
+          finalEntryAmountCents,
 
         installmentsTotal,
+        installmentsTotalCents,
 
         transactions:
           result,
@@ -13715,6 +13716,10 @@ function financeMutationHandler(operation: "UPDATE" | "PAY" | "DELETE") {
         const consolidated = isFinancialTransactionConsolidated(current);
         const body = req.body || {};
         const notesOnly = Object.keys(body).every((key) => key === "notes");
+        const updatedAmountCents =
+          operation === "UPDATE" && body.amount !== undefined
+            ? reaisInputToCents(body.amount, "Valor da transação")
+            : undefined;
 
         if (operation === "PAY" && current.status === "CANCELADO") {
           return conflict("FINANCIAL_TRANSACTION_CANCELLED",
@@ -13780,7 +13785,11 @@ function financeMutationHandler(operation: "UPDATE" | "PAY" | "DELETE") {
                 clientId: financeRelationUpdate(body.clientId),
                 catalogServiceId: financeRelationUpdate(body.catalogServiceId),
                 description: body.description,
-                amount: body.amount === undefined ? undefined : toIntMoney(body.amount),
+                amount:
+                  updatedAmountCents === undefined
+                    ? undefined
+                    : legacyReaisFromCents(updatedAmountCents, "integer-reais"),
+                amountCents: updatedAmountCents,
                 dueDate: body.dueDate === undefined ? undefined : normalizeNullableDate(body.dueDate),
                 paidAt: body.paidAt === undefined ? undefined : normalizeNullableDate(body.paidAt),
                 competenceMonth: body.competenceMonth === undefined
@@ -13808,6 +13817,9 @@ function financeMutationHandler(operation: "UPDATE" | "PAY" | "DELETE") {
       if (outcome.status === 204) return res.status(204).send();
       return res.status(outcome.status).json(outcome.body);
     } catch (error) {
+      if (error instanceof TypeError || error instanceof RangeError) {
+        return res.status(400).json({ message: error.message });
+      }
       console.error("Erro na operação financeira protegida:", error);
       return res.status(500).json({ message: "Não foi possível concluir a operação financeira. Atualize os dados antes de tentar novamente." });
     }
@@ -14051,10 +14063,11 @@ app.post(
     const fixedCost = await prisma.fixedCost.create({
       data: {
         description: String(description).trim(),
-        amount: toIntMoney(amount),
-        amountCents: assertPrismaIntCents(
-          parseReaisInput(String(amount), "en-US")
+        amount: legacyReaisFromCents(
+          reaisInputToCents(amount, "Valor do custo fixo"),
+          "integer-reais"
         ),
+        amountCents: reaisInputToCents(amount, "Valor do custo fixo"),
         categoryId: categoryId ? Number(categoryId) : null,
         dueDay: Number(dueDay),
         active: active === undefined ? true : Boolean(active),
@@ -14089,12 +14102,16 @@ app.put(
       where: { id },
       data: {
         description,
-        amount: amount !== undefined ? toIntMoney(amount) : undefined,
+        amount:
+          amount !== undefined
+            ? legacyReaisFromCents(
+                reaisInputToCents(amount, "Valor do custo fixo"),
+                "integer-reais"
+              )
+            : undefined,
         amountCents:
           amount !== undefined
-            ? assertPrismaIntCents(
-                parseReaisInput(String(amount), "en-US")
-              )
+            ? reaisInputToCents(amount, "Valor do custo fixo")
             : undefined,
         categoryId: categoryId ? Number(categoryId) : null,
         dueDay: dueDay !== undefined ? Number(dueDay) : undefined,
@@ -14163,10 +14180,11 @@ app.post(
       data: {
         employeeName: String(employeeName).trim(),
         roleDescription: roleDescription || null,
-        amount: toIntMoney(amount),
-        amountCents: assertPrismaIntCents(
-          parseReaisInput(String(amount), "en-US")
+        amount: legacyReaisFromCents(
+          reaisInputToCents(amount, "Valor do salário"),
+          "integer-reais"
         ),
+        amountCents: reaisInputToCents(amount, "Valor do salário"),
         categoryId: categoryId ? Number(categoryId) : null,
         dueDay: Number(dueDay),
         active: active === undefined ? true : Boolean(active),
@@ -14204,12 +14222,16 @@ app.put(
       data: {
         employeeName,
         roleDescription,
-        amount: amount !== undefined ? toIntMoney(amount) : undefined,
+        amount:
+          amount !== undefined
+            ? legacyReaisFromCents(
+                reaisInputToCents(amount, "Valor do salário"),
+                "integer-reais"
+              )
+            : undefined,
         amountCents:
           amount !== undefined
-            ? assertPrismaIntCents(
-                parseReaisInput(String(amount), "en-US")
-              )
+            ? reaisInputToCents(amount, "Valor do salário")
             : undefined,
         categoryId: categoryId ? Number(categoryId) : null,
         dueDay: dueDay !== undefined ? Number(dueDay) : undefined,
@@ -14243,6 +14265,15 @@ app.patch(
       responsibleUserId,
     } = req.body;
 
+    const estimatedValueCents =
+      estimatedValue !== undefined && estimatedValue !== ""
+        ? reaisInputToCents(estimatedValue, "Valor estimado")
+        : undefined;
+    const finalValueCents =
+      finalValue !== undefined && finalValue !== ""
+        ? reaisInputToCents(finalValue, "Valor final")
+        : undefined;
+
     const protocol = await prisma.protocol.update({
       where: { id },
       data: {
@@ -14250,13 +14281,15 @@ app.patch(
         description,
         priority,
         estimatedValue:
-          estimatedValue !== undefined && estimatedValue !== ""
-            ? Number(estimatedValue)
+          estimatedValueCents !== undefined
+            ? legacyReaisFromCents(estimatedValueCents, "decimal-reais")
             : undefined,
+        estimatedValueCents,
         finalValue:
-          finalValue !== undefined && finalValue !== ""
-            ? Number(finalValue)
+          finalValueCents !== undefined
+            ? legacyReaisFromCents(finalValueCents, "decimal-reais")
             : undefined,
+        finalValueCents,
         deadlineDate: deadlineDate ? new Date(deadlineDate) : undefined,
         status,
         responsibleUserId: responsibleUserId
@@ -14747,7 +14780,11 @@ app.post(
       data: {
         description,
         category,
-        amount: Number(amount),
+        amount: legacyReaisFromCents(
+          reaisInputToCents(amount, "Valor do custo fixo"),
+          "integer-reais"
+        ),
+        amountCents: reaisInputToCents(amount, "Valor do custo fixo"),
         dueDay: dueDay ? Number(dueDay) : null,
         recurrence: recurrence || "MENSAL",
         notes,
@@ -15405,10 +15442,11 @@ app.post(
         data: {
           managerUserId: Number(managerUserId),
           competenceMonth,
-          amount: toIntMoney(amount),
-          amountCents: assertPrismaIntCents(
-            parseReaisInput(String(amount), "en-US")
+          amount: legacyReaisFromCents(
+            reaisInputToCents(amount, "Valor do adiantamento"),
+            "integer-reais"
           ),
+          amountCents: reaisInputToCents(amount, "Valor do adiantamento"),
           paidAt: paidAt ? new Date(paidAt) : new Date(),
           description: description || "Adiantamento de pró-labore",
           notes: notes || null,
@@ -15514,7 +15552,11 @@ app.put(
         data: {
           managerUserId: Number(managerUserId),
           competenceMonth,
-          amount: toIntMoney(amount),
+          amount: legacyReaisFromCents(
+            reaisInputToCents(amount, "Valor do adiantamento"),
+            "integer-reais"
+          ),
+          amountCents: reaisInputToCents(amount, "Valor do adiantamento"),
           paidAt: paidAt ? new Date(paidAt) : existing.paidAt,
           description: description || "Adiantamento de pró-labore",
           notes: notes || null,
@@ -15989,11 +16031,12 @@ app.put(
       const {
         normalizedItems,
         totalAmount,
+        totalAmountCents,
       } = calculateProposalTotals(
         items
       );
 
-      if (totalAmount <= 0) {
+      if (totalAmountCents <= 0) {
         return res.status(400).json({
           message:
             "O valor total da proposta deve ser maior que zero.",
@@ -16014,7 +16057,7 @@ app.put(
         normalizedScheduleResult =
           normalizeProposalPaymentSchedule(
             paymentSchedule,
-            assertPrismaIntCents(parseReaisInput(String(totalAmount), "en-US")),
+            totalAmountCents,
             paymentModeValue
           );
       } catch (scheduleError: any) {
@@ -16073,11 +16116,10 @@ app.put(
               paymentModeValue,
 
             totalAmount,
-            totalAmountCents:
-              assertPrismaIntCents(parseReaisInput(String(totalAmount), "en-US")),
+            totalAmountCents,
 
             entryAmount:
-              scheduleEntryAmount / 100,
+              legacyReaisFromCents(scheduleEntryAmount, "integer-reais"),
             entryAmountCents:
               scheduleEntryAmount,
 
@@ -16087,7 +16129,10 @@ app.put(
             installmentAmount:
               scheduleInstallmentAmount === null
                 ? null
-                : scheduleInstallmentAmount / 100,
+                : legacyReaisFromCents(
+                    scheduleInstallmentAmount,
+                    "integer-reais"
+                  ),
             installmentAmountCents:
               scheduleInstallmentAmount,
 
@@ -16370,22 +16415,26 @@ app.post(
         });
       }
 
-      const { normalizedItems, totalAmount } = calculateProposalTotals(items);
+      const {
+        normalizedItems,
+        totalAmount,
+        totalAmountCents,
+      } = calculateProposalTotals(items);
 
-const finalEntryAmount =
+const finalEntryAmountCents =
   paymentMode === "A_VISTA"
-    ? totalAmount
+    ? totalAmountCents
     : entryAmount !== undefined && entryAmount !== null && entryAmount !== ""
-    ? toIntMoney(entryAmount)
-    : Math.round(totalAmount * 0.3);
+    ? reaisInputToCents(entryAmount, "Valor da entrada")
+    : applyRateCents(totalAmountCents, 3000);
 
-if (finalEntryAmount < 0) {
+if (finalEntryAmountCents < 0) {
   return res.status(400).json({
     message: "O valor da entrada não pode ser negativo.",
   });
 }
 
-if (finalEntryAmount > totalAmount) {
+if (finalEntryAmountCents > totalAmountCents) {
   return res.status(400).json({
     message:
       "O valor da entrada não pode ser maior que o valor total da proposta.",
@@ -16418,7 +16467,7 @@ if (
       const normalizedScheduleResult =
         normalizeProposalPaymentSchedule(
           paymentSchedule,
-          assertPrismaIntCents(parseReaisInput(String(totalAmount), "en-US")),
+          totalAmountCents,
           paymentMode || "ENTRADA_PARCELAS"
         );
 
@@ -16447,15 +16496,20 @@ if (
           paymentMode: paymentMode || "ENTRADA_PARCELAS",
 
           totalAmount,
-          totalAmountCents:
-            assertPrismaIntCents(parseReaisInput(String(totalAmount), "en-US")),
-          entryAmount: scheduleEntryAmount / 100,
+          totalAmountCents,
+          entryAmount: legacyReaisFromCents(
+            scheduleEntryAmount,
+            "integer-reais"
+          ),
           entryAmountCents: scheduleEntryAmount,
           installmentQty: scheduleInstallmentQty,
           installmentAmount:
             scheduleInstallmentAmount === null
               ? null
-              : scheduleInstallmentAmount / 100,
+              : legacyReaisFromCents(
+                  scheduleInstallmentAmount,
+                  "integer-reais"
+                ),
           installmentAmountCents: scheduleInstallmentAmount,
 
           executionDays: executionDays ? Number(executionDays) : null,
@@ -16740,20 +16794,13 @@ app.post("/public/proposals/:token/accept", async (req, res) => {
       },
       data: {
         status: "ACORDO_FECHADO",
-        finalValue:
-          (proposal.totalAmountCents !== null &&
-          proposal.totalAmountCents !== undefined
-            ? assertPrismaIntCents(proposal.totalAmountCents)
-            : assertPrismaIntCents(
-                parseReaisInput(String(proposal.totalAmount || 0), "en-US")
-              )) / 100,
-        finalValueCents:
-          proposal.totalAmountCents !== null &&
-          proposal.totalAmountCents !== undefined
-            ? assertPrismaIntCents(proposal.totalAmountCents)
-            : assertPrismaIntCents(
-                parseReaisInput(String(proposal.totalAmount || 0), "en-US")
-              ),
+        ...proposalToProtocolMoney(
+          canonicalCentsOrLegacy(
+            proposal.totalAmountCents,
+            proposal.totalAmount,
+            "Valor total da proposta"
+          )
+        ),
       },
     });
 
@@ -18809,9 +18856,12 @@ app.post(
         });
       }
 
-      // BillingCharge.amount utiliza reais no fluxo legado atual.
-      // ContractPaymentSchedule.amountCents é a fonte canônica em centavos.
-      const entryAmount = entrySchedule.amountCents / 100;
+      // ContractPaymentSchedule.amountCents é a fonte canônica.
+      // BillingCharge.amount é apenas o espelho legado em reais inteiros.
+      const entryAmount = legacyReaisFromCents(
+        entrySchedule.amountCents,
+        "integer-reais"
+      );
 
       /*
        * O cronograma original permanece imutável.
@@ -19133,14 +19183,12 @@ app.post(
                       installmentSchedule.length
                     } do contrato ${contract.contractNumber}`,
 
-                  /*
-                   * Valor financeiro contratado.
-                   * amount continua em reais por compatibilidade
-                   * com o fluxo atual de BillingCharge.
-                   */
+                  // amount é somente o espelho legado em reais inteiros.
                   amount:
-                    scheduleItem.amountCents /
-                    100,
+                    legacyReaisFromCents(
+                      scheduleItem.amountCents,
+                      "integer-reais"
+                    ),
                   amountCents:
                     assertPrismaIntCents(scheduleItem.amountCents),
 
@@ -19450,6 +19498,11 @@ if (
         });
       }
 
+      const documentAmountCents =
+        req.body?.amount !== undefined && req.body?.amount !== ""
+          ? reaisInputToCents(req.body.amount, "Valor do documento fiscal")
+          : null;
+
       const document = await prisma.fiscalDocument.create({
         data: {
           protocolId: charge.protocolId,
@@ -19465,9 +19518,10 @@ if (
           number: req.body?.number || null,
           issuedAt: normalizeNullableDate(req.body?.issuedAt),
           amount:
-            req.body?.amount !== undefined && req.body?.amount !== ""
-              ? toIntMoney(req.body.amount)
+            documentAmountCents !== null
+              ? legacyReaisFromCents(documentAmountCents, "integer-reais")
               : null,
+          amountCents: documentAmountCents,
 
           fileName: req.file.originalname,
           filePath: `/uploads/documents/${req.file.filename}`,
@@ -20381,7 +20435,14 @@ async function generateReceiptPdfForBillingCharge(charge: any): Promise<{
   doc.pipe(stream);
 
   const paidAt = charge.paidAt || new Date();
-  const paidAmount = Number(charge.paidAmount || charge.amount || 0);
+  const paidAmount = legacyReaisFromCents(
+    canonicalCentsOrLegacy(
+      charge.paidAmountCents ?? charge.amountCents,
+      charge.paidAmount ?? charge.amount,
+      "Valor do recibo"
+    ),
+    "decimal-reais"
+  );
 
   const formatDateBR = (value: Date | string | null | undefined) => {
     if (!value) return "-";
@@ -20609,19 +20670,30 @@ app.post(
 
       const paidAt = normalizeNullableDate(req.body?.paidAt) || new Date();
 
-const paidAmountCents =
-  req.body?.paidAmount !== undefined && req.body?.paidAmount !== ""
-    ? assertPrismaIntCents(
-        parseReaisInput(String(req.body.paidAmount), "en-US")
-      )
-    : charge.amountCents !== null && charge.amountCents !== undefined
-    ? assertPrismaIntCents(charge.amountCents)
-    : assertPrismaIntCents(
-        parseReaisInput(String(charge.amount || 0), "en-US")
-      );
+      const paidAmountCents =
+        req.body?.paidAmount !== undefined && req.body?.paidAmount !== ""
+          ? reaisInputToCents(req.body.paidAmount, "Valor pago")
+          : canonicalCentsOrLegacy(
+              charge.amountCents,
+              charge.amount,
+              "Valor da cobrança"
+            );
 
-// Espelho legado somente enquanto paidAmount ainda existir no schema.
-const paidAmount = paidAmountCents / 100;
+      if (paidAmountCents <= 0) {
+        return res.status(400).json({
+          message: "O valor pago deve ser maior que zero.",
+        });
+      }
+
+      // Espelho persistido legado e valor decimal restrito às saídas humanas.
+      const paidAmount = legacyReaisFromCents(
+        paidAmountCents,
+        "integer-reais"
+      );
+      const paidAmountReais = legacyReaisFromCents(
+        paidAmountCents,
+        "decimal-reais"
+      );
 
       const paidCharge = await prisma.billingCharge.update({
         where: { id: charge.id },
@@ -20737,6 +20809,7 @@ const paidAmount = paidAmountCents / 100;
               }`,
 
               amount: paidAmount,
+              amountCents: paidAmountCents,
               dueDate: charge.dueDate,
               paidAt,
               competenceMonth,
@@ -20816,7 +20889,7 @@ const paidAmount = paidAmountCents / 100;
           const receiptPdf = await generateReceiptPdfForBillingCharge({
             ...paidCharge,
             paidAt,
-            paidAmount,
+            paidAmount: paidAmountReais,
           });
 
           generatedReceipt = await prisma.fiscalDocument.create({
@@ -20862,7 +20935,7 @@ const paidAmount = paidAmountCents / 100;
             metadata: {
               billingChargeId: charge.id,
               fiscalDocumentId: generatedReceipt.id,
-              amount: paidAmount,
+              amount: paidAmountReais,
               amountCents: paidAmountCents,
               paidAt,
               filePath: receiptPdf.publicPath,
@@ -20901,7 +20974,7 @@ const paidAmount = paidAmountCents / 100;
                         <div style="background:#f8fbf9;border:1px solid #dfe7e2;border-radius:14px;padding:16px;margin:18px 0;">
                           <p><strong>Contrato:</strong> ${charge.contract?.contractNumber || "-"}</p>
                           <p><strong>Serviço:</strong> ${charge.protocol.serviceType?.name || "-"}</p>
-                          <p><strong>Valor pago:</strong> ${formatMoneyBR(paidAmount)}</p>
+                          <p><strong>Valor pago:</strong> ${formatMoneyBR(paidAmountReais)}</p>
                           <p><strong>Data do pagamento:</strong> ${new Intl.DateTimeFormat("pt-BR", {
                             timeZone: "America/Belem",
                             day: "2-digit",
@@ -21002,7 +21075,8 @@ const paidAmount = paidAmountCents / 100;
         createdById: req.user?.id || null,
         metadata: {
           billingChargeId: charge.id,
-          amount: paidAmount,
+          amount: paidAmountReais,
+          amountCents: paidAmountCents,
           paidAt,
           protocolStatus:
             charge.chargeType === "ENTRADA"
@@ -21126,7 +21200,7 @@ app.post(
         return res.json(payment);
       }
 
-      const amountInCents = Math.round(Number(payment.amount || 0) * 100);
+      const amountInCents = paymentAmountToCents(payment);
 
       if (amountInCents <= 0) {
         return res.status(400).json({
