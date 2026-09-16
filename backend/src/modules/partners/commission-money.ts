@@ -4,8 +4,9 @@ import {
 
 type CommissionContract = {
   paymentSchedule?: readonly { amountCents: number }[];
-  proposal?: { totalAmount: number } | null;
+  proposal?: { totalAmount: number; totalAmountCents?: number | null } | null;
   contractValue?: number | null;
+  contractValueCents?: number | null;
 };
 
 export function getContractBaseAmount(contract: CommissionContract | null) {
@@ -17,8 +18,17 @@ export function getContractBaseAmount(contract: CommissionContract | null) {
       return amount;
     })));
   }
-  // Fronteira legada explícita: Proposal.totalAmount e Contract.contractValue ainda são REAIS.
-  // Apenas contratos sem cronograma usam esta origem. Não acessar os campos opcionais da 2A.
+  // Cabeçalhos canônicos têm precedência quando já reconciliados.
+  const canonicalCents =
+    contract.contractValueCents ??
+    contract.proposal?.totalAmountCents;
+  if (canonicalCents != null) {
+    const cents = assertPrismaIntCents(canonicalCents);
+    if (cents < 0) throw new RangeError("Base contratual negativa.");
+    return cents;
+  }
+
+  // Fronteira legada explícita apenas para contratos ainda não reconciliados.
   const legacyReais = contract.proposal?.totalAmount ?? contract.contractValue;
   if (legacyReais == null) return assertPrismaIntCents(0);
   const cents = assertPrismaIntCents(parseReaisInput(String(legacyReais), "en-US"));
@@ -32,11 +42,3 @@ export function calculateCommission(baseAmount: number, percent: number) {
   return assertPrismaIntCents(applyRateCents(base, percentToBasisPoints(percent)));
 }
 
-/** Temporary outbound boundary until Financeiro 2B: its amount is Int in REAIS. */
-export function commissionToLegacyFinanceReais(commissionAmount: number): number {
-  const cents = assertPrismaIntCents(commissionAmount);
-  if (cents <= 0 || cents % 100 !== 0) {
-    throw new RangeError("Comissão com centavos não pode ser paga pelo Financeiro legado. Aguarde a migração monetária do Financeiro.");
-  }
-  return cents / 100;
-}
