@@ -18751,6 +18751,7 @@ app.post(
             `Entrada referente ao contrato ${contract.contractNumber}`,
 
           amount: entryAmount,
+          amountCents: assertPrismaIntCents(entrySchedule.amountCents),
 
           // O ORIGINAL continua no ContractPaymentSchedule.
           // Aqui usamos o vencimento atualmente vigente.
@@ -19044,6 +19045,8 @@ app.post(
                   amount:
                     scheduleItem.amountCents /
                     100,
+                  amountCents:
+                    assertPrismaIntCents(scheduleItem.amountCents),
 
                   /*
                    * BillingCharge recebe o vencimento vigente.
