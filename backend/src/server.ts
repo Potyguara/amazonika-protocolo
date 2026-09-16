@@ -11753,10 +11753,16 @@ app.post(
         });
       }
 
+      const totalAmountCents =
+        assertPrismaIntCents(
+          parseReaisInput(String(amount), "en-US")
+        );
+
+      // Espelho legado em reais inteiros durante a transição.
       const totalAmount =
         toIntMoney(amount);
 
-      if (totalAmount <= 0) {
+      if (totalAmountCents <= 0) {
         return res.status(400).json({
           message:
             "Informe um valor total maior que zero.",
@@ -11900,6 +11906,8 @@ app.post(
 
               amount:
                 totalAmount,
+              amountCents:
+                totalAmountCents,
 
               dueDate:
                 finalDueDate,
@@ -12024,19 +12032,22 @@ app.post(
        * --------------------------------------------------
        */
 
-      const finalEntryAmount =
+      const finalEntryAmountCents =
         entryAmount !== undefined &&
         entryAmount !== null &&
         entryAmount !== ""
-          ? toIntMoney(
-              entryAmount
+          ? assertPrismaIntCents(
+              parseReaisInput(String(entryAmount), "en-US")
             )
           : 0;
 
+      const finalEntryAmount =
+        toIntMoney(finalEntryAmountCents / 100);
+
       if (
         finalEntryAmount < 0 ||
-        finalEntryAmount >
-          totalAmount
+        finalEntryAmountCents >
+          totalAmountCents
       ) {
         return res.status(400).json({
           message:
@@ -12047,6 +12058,7 @@ app.post(
       const normalizedInstallments:
         Array<{
           amount: number;
+          amountCents: number;
           dueDate: Date;
           autoChargeEnabled: boolean;
         }> = [];
@@ -12067,13 +12079,15 @@ app.post(
               index
             ] || {};
 
-          const installmentAmount =
-            toIntMoney(
-              raw.amount
+          const installmentAmountCents =
+            assertPrismaIntCents(
+              parseReaisInput(String(raw.amount), "en-US")
             );
+          const installmentAmount =
+            toIntMoney(raw.amount);
 
           if (
-            installmentAmount <=
+            installmentAmountCents <=
             0
           ) {
             return res.status(400).json({
@@ -12099,6 +12113,8 @@ app.post(
           normalizedInstallments.push({
             amount:
               installmentAmount,
+            amountCents:
+              installmentAmountCents,
 
             dueDate:
               installmentDueDate,
@@ -12124,20 +12140,20 @@ app.post(
             item
           ) =>
             accumulator +
-            item.amount,
+            item.amountCents,
           0
         );
 
       const distributedTotal =
-        finalEntryAmount +
+        finalEntryAmountCents +
         installmentsTotal;
 
       if (
         distributedTotal !==
-        totalAmount
+        totalAmountCents
       ) {
         const difference =
-          totalAmount -
+          totalAmountCents -
           distributedTotal;
 
         return res.status(400).json({
@@ -12165,7 +12181,7 @@ app.post(
       }
 
       if (
-        finalEntryAmount === 0 &&
+        finalEntryAmountCents === 0 &&
         normalizedInstallments.length ===
           0
       ) {
@@ -12206,7 +12222,7 @@ app.post(
              */
 
             if (
-              finalEntryAmount >
+              finalEntryAmountCents >
               0
             ) {
               const finalEntryDueDate =
@@ -12282,6 +12298,8 @@ app.post(
 
                     amount:
                       finalEntryAmount,
+                    amountCents:
+                      finalEntryAmountCents,
 
                     dueDate:
                       finalEntryDueDate,
@@ -12407,6 +12425,8 @@ app.post(
                      */
                     amount:
                       plan.amount,
+                    amountCents:
+                      plan.amountCents,
 
                     dueDate:
                       plan.dueDate,
