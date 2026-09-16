@@ -374,6 +374,12 @@ model ServiceType {
 }
 
 model Protocol {
+
+  // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
+  // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
+  estimatedValueCents Int?
+  finalValueCents Int?
+
   id                Int    @id @default(autoincrement())
   protocolNumber    String @unique
   clientId          Int
@@ -461,6 +467,12 @@ enum PaymentDueDateExtensionStatus {
 }
 
 model Contract {
+
+  // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
+  // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
+  contractValueCents Int?
+  entryAmountCents Int?
+
   id Int @id @default(autoincrement())
 
   protocolId  Int
@@ -603,6 +615,11 @@ model PaymentDueDateExtension {
 }
 
 model BillingCharge {
+
+  // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
+  // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
+  paidAmountCents Int?
+
   id Int @id @default(autoincrement())
 
   protocolId  Int?
@@ -700,6 +717,11 @@ model BillingCharge {
 }
 
 model FiscalDocument {
+
+  // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
+  // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
+  amountCents Int?
+
   id Int @id @default(autoincrement())
 
   protocolId      Int
@@ -741,6 +763,11 @@ model FiscalDocument {
 }
 
 model Payment {
+
+  // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
+  // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
+  amountCents Int?
+
   id                Int           @id @default(autoincrement())
   contractId        Int?
   protocolId        Int
@@ -870,6 +897,11 @@ model FinancialCategory {
 }
 
 model FinancialTransaction {
+
+  // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
+  // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
+  amountCents Int?
+
   id Int @id @default(autoincrement())
 
   type   FinancialTransactionType
@@ -962,6 +994,11 @@ model FinancialTransaction {
 }
 
 model EmployeeSalary {
+
+  // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
+  // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
+  amountCents Int?
+
   id              Int     @id @default(autoincrement())
   employeeName    String
   roleDescription String?
@@ -983,6 +1020,11 @@ model EmployeeSalary {
 }
 
 model FixedCost {
+
+  // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
+  // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
+  amountCents Int?
+
   id          Int    @id @default(autoincrement())
   description String
   amount      Int
@@ -1079,6 +1121,11 @@ model FinanceAutoChargeSettings {
 }
 
 model ProLaboreAdvance {
+
+  // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
+  // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
+  amountCents Int?
+
   id              Int    @id @default(autoincrement())
   managerUserId   Int
   competenceMonth String
@@ -1165,6 +1212,13 @@ model ContractSignatureOtp {
 }
 
 model Proposal {
+
+  // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
+  // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
+  totalAmountCents Int?
+  entryAmountCents Int?
+  installmentAmountCents Int?
+
   id             Int    @id @default(autoincrement())
   proposalNumber String @unique
 
@@ -1243,6 +1297,12 @@ enum ProposalPaymentScheduleType {
 }
 
 model ProposalItem {
+
+  // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
+  // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
+  unitAmountCents Int?
+  totalAmountCents Int?
+
   id Int @id @default(autoincrement())
 
   proposalId Int
