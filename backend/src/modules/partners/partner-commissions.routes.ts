@@ -1,4 +1,4 @@
-import { commissionToLegacyFinanceReais } from "./commission-money";
+import { assertPrismaIntCents } from "../../lib/money";
 import { Express } from "express";
 import { PrismaClient } from "@prisma/client";
 
@@ -195,13 +195,8 @@ export function registerPartnerCommissionRoutes({
           });
         }
 
-        // Proteção temporária da fronteira com FinancialTransaction.amount (Int em reais).
-        let legacyFinanceAmount: number;
-        try {
-          legacyFinanceAmount = commissionToLegacyFinanceReais(commission.commissionAmount);
-        } catch (error) {
-          return res.status(409).json({ message: (error as Error).message });
-        }
+        const canonicalCommissionAmount =
+          assertPrismaIntCents(commission.commissionAmount);
 
         const requestedPaidAt =
           req.body?.paidAt
@@ -275,10 +270,13 @@ export function registerPartnerCommissionRoutes({
                         commission.protocol.protocolNumber
                       }`,
 
-                    // PartnerCommission é armazenada em centavos.
-                    // FinancialTransaction usa valores em reais.
+                    // Escrita canônica em centavos. O campo legado continua
+                    // espelhado somente enquanto consumidores antigos existirem.
+                    amountCents:
+                      canonicalCommissionAmount,
+
                     amount:
-                      legacyFinanceAmount,
+                      Math.trunc(canonicalCommissionAmount / 100),
 
                     dueDate:
                       commission.dueDate,
