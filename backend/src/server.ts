@@ -14052,6 +14052,9 @@ app.post(
       data: {
         description: String(description).trim(),
         amount: toIntMoney(amount),
+        amountCents: assertPrismaIntCents(
+          parseReaisInput(String(amount), "en-US")
+        ),
         categoryId: categoryId ? Number(categoryId) : null,
         dueDay: Number(dueDay),
         active: active === undefined ? true : Boolean(active),
@@ -14087,6 +14090,12 @@ app.put(
       data: {
         description,
         amount: amount !== undefined ? toIntMoney(amount) : undefined,
+        amountCents:
+          amount !== undefined
+            ? assertPrismaIntCents(
+                parseReaisInput(String(amount), "en-US")
+              )
+            : undefined,
         categoryId: categoryId ? Number(categoryId) : null,
         dueDay: dueDay !== undefined ? Number(dueDay) : undefined,
         active: active === undefined ? undefined : Boolean(active),
@@ -15388,6 +15397,9 @@ app.post(
           managerUserId: Number(managerUserId),
           competenceMonth,
           amount: toIntMoney(amount),
+          amountCents: assertPrismaIntCents(
+            parseReaisInput(String(amount), "en-US")
+          ),
           paidAt: paidAt ? new Date(paidAt) : new Date(),
           description: description || "Adiantamento de pró-labore",
           notes: notes || null,
