@@ -3425,10 +3425,18 @@ app.post(
           (item) => item.type === "ENTRADA"
         );
 
+      const proposalEntryAmountCents =
+        proposal.entryAmountCents !== null &&
+        proposal.entryAmountCents !== undefined
+          ? assertPrismaIntCents(proposal.entryAmountCents)
+          : assertPrismaIntCents(
+              parseReaisInput(String(proposal.entryAmount || 0), "en-US")
+            );
+
       if (
         entryScheduleItem &&
-        Math.round(Number(proposal.entryAmount || 0) * 100) !==
-          Number(entryScheduleItem.amountCents || 0)
+        proposalEntryAmountCents !==
+          assertPrismaIntCents(entryScheduleItem.amountCents)
       ) {
         return res.status(400).json({
           message:
