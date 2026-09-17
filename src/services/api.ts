@@ -1576,6 +1576,7 @@ markBillingChargePaid(
   data?: {
     paidAt?: string;
     paidAmount?: number;
+    paidAmountCents?: number;
     notes?: string;
   }
 ) {

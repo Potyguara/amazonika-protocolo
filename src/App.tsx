@@ -10,6 +10,11 @@ import {
 import PartnerReferralPanel from "./components/partners/PartnerReferralPanel";
 import PartnersFinanceTab from "./components/finance/PartnersFinanceTab";
 import { api, setAuth, clearAuth } from "./services/api";
+import {
+  centsToReaisFormValue,
+  formatMoneyCents,
+  reaisFormValueToCents,
+} from "./lib/money";
 import CatalogPage from "./pages/CatalogPage";
 import {
   ForgotPasswordPage,
@@ -703,6 +708,17 @@ type BackendManagementSummary = {
   cashPercent: number;
   managersCount: number;
 
+  faturamentoMensalCents: number;
+  custosFixosCents: number;
+  salariosFuncionariosCents: number;
+  saidasProjetadasCents: number;
+  adiantamentosTotaisCents: number;
+
+  liquidoAntesCaixaCents: number;
+  caixaEmpresaCents: number;
+  liquidoDistribuivelCents: number;
+  proLaboreIndividualCents: number;
+
   faturamentoMensal: number;
   custosFixos: number;
   salariosFuncionarios: number;
@@ -718,6 +734,9 @@ type BackendManagementSummary = {
     id: number;
     name: string;
     email: string;
+    proLaboreCents: number;
+    advancesCents: number;
+    saldoReceberCents: number;
     proLabore: number;
     advances: number;
     saldoReceber: number;
@@ -727,6 +746,9 @@ type BackendManagementSummary = {
     id: number;
     name: string;
     email: string;
+    proLaboreCents: number;
+    advancesCents: number;
+    saldoReceberCents: number;
     proLabore: number;
     advances: number;
     saldoReceber: number;
@@ -737,6 +759,7 @@ type BackendManagementSummary = {
     managerUserId: number;
     managerName: string;
     managerEmail: string;
+    amountCents: number;
     amount: number;
     paidAt: string;
     description?: string | null;
@@ -746,6 +769,8 @@ type BackendManagementSummary = {
 cashExtract: Array<{
   label: string;
   type: string;
+  amountCents?: number;
+  valueCents?: number;
   amount?: number;
   value?: number;
   description?: string | null;
@@ -962,6 +987,7 @@ type BackendBillingCharge = {
 
   description: string;
   amount: number;
+  amountCents?: number | null;
   dueDate: string;
 
   installmentNumber?: number | null;
@@ -979,6 +1005,7 @@ type BackendBillingCharge = {
 
   paidAt?: string | null;
   paidAmount?: number | null;
+  paidAmountCents?: number | null;
 
   sentToClientAt?: string | null;
 
@@ -1274,6 +1301,37 @@ function money(value: number | string | null | undefined) {
     style: "currency",
     currency: "BRL",
   }).format(numericValue);
+}
+
+function formatOptionalMoneyCents(
+  value: number | null | undefined
+) {
+  return value == null ? "Valor canônico indisponível" : formatMoneyCents(value);
+}
+
+function optionalReaisFormValue(
+  value: number | null | undefined,
+  label: string
+) {
+  if (value == null) {
+    throw new Error(`${label} não possui valor canônico em centavos.`);
+  }
+
+  return centsToReaisFormValue(value);
+}
+
+function formValueToCentsOrZero(value: string) {
+  if (value.trim() === "") return 0;
+
+  try {
+    return reaisFormValueToCents(value);
+  } catch {
+    return 0;
+  }
+}
+
+function normalizedReaisFormNumber(value: string) {
+  return Number(centsToReaisFormValue(reaisFormValueToCents(value)));
 }
 
 function currentRole(): Role | null {
@@ -2736,24 +2794,24 @@ function ManagementMoneyCards({ month }: { month: string }) {
     );
   }
 
-  const totalManagersProLabore = (data.managers || []).reduce(
-    (sum, manager) => sum + Number(manager.saldoReceber || 0),
+  const totalManagersProLaboreCents = (data.managers || []).reduce(
+    (sum, manager) => sum + manager.saldoReceberCents,
     0
   );
 
-  const totalManagersAdvances = (data.managers || []).reduce(
-    (sum, manager) => sum + Number(manager.advances || 0),
+  const totalManagersAdvancesCents = (data.managers || []).reduce(
+    (sum, manager) => sum + manager.advancesCents,
     0
   );
 
-  const myProLabore = data.currentManager?.saldoReceber || 0;
+  const myProLaboreCents = data.currentManager?.saldoReceberCents ?? 0;
 
-  const managerGrossProLabore =
-    data.currentManager?.proLabore || data.proLaboreIndividual || 0;
+  const managerGrossProLaboreCents =
+    data.currentManager?.proLaboreCents ?? data.proLaboreIndividualCents;
 
-  const cardProLaboreValue = isProgrammer
-    ? totalManagersProLabore
-    : myProLabore;
+  const cardProLaboreValueCents = isProgrammer
+    ? totalManagersProLaboreCents
+    : myProLaboreCents;
 
   const cardProLaboreTitle = isProgrammer
     ? "PRÓ-LABORE DOS GESTORES"
@@ -2762,17 +2820,19 @@ function ManagementMoneyCards({ month }: { month: string }) {
   const cardProLaboreSubtitle = isProgrammer
     ? `Gestores ativos: ${
         data.managersCount || data.managers?.length || 0
-      } · Adiantamentos: ${money(totalManagersAdvances)}`
-    : `Pró-labore atual = ${money(managerGrossProLabore)}`;
+      } · Adiantamentos: ${formatMoneyCents(totalManagersAdvancesCents)}`
+    : `Pró-labore atual = ${formatMoneyCents(managerGrossProLaboreCents)}`;
 
   const cardProLaboreHint = isProgrammer
     ? "Clique para ver o extrato consolidado dos gestores"
     : "Clique para ver o extrato do pró-labore";
 
-  const cashValue = showCash ? money(data.caixaEmpresa || 0) : "R$ •••••";
+  const cashValue = showCash
+    ? formatMoneyCents(data.caixaEmpresaCents)
+    : "R$ •••••";
 
   const proLaboreValue = showProLabore
-    ? money(cardProLaboreValue)
+    ? formatMoneyCents(cardProLaboreValueCents)
     : "R$ •••••";
 
   const proLaboreSubtitleValue = showProLabore
@@ -2882,7 +2942,7 @@ function ManagementMoneyCards({ month }: { month: string }) {
               <>
                 <div className="management-extract-highlight">
                   <span>Caixa reservado</span>
-                  <strong>{money(data.caixaEmpresa || 0)}</strong>
+                  <strong>{formatMoneyCents(data.caixaEmpresaCents)}</strong>
 
                   <p>
                     Percentual aplicado sobre o líquido mensal:{" "}
@@ -2937,7 +2997,11 @@ function ManagementMoneyCards({ month }: { month: string }) {
                         </small>
                       </span>
 
-                      <b>{money(item.value ?? item.amount ?? 0)}</b>
+                      <b>
+                        {formatOptionalMoneyCents(
+                          item.valueCents ?? item.amountCents
+                        )}
+                      </b>
                     </div>
                   ))}
                 </div>
@@ -2950,7 +3014,7 @@ function ManagementMoneyCards({ month }: { month: string }) {
                   <>
                     <div className="management-extract-highlight">
                       <span>Pró-labore consolidado dos gestores</span>
-                      <strong>{money(totalManagersProLabore)}</strong>
+                      <strong>{formatMoneyCents(totalManagersProLaboreCents)}</strong>
 
                       <p>
                         Total previsto para gestores após desconto dos
@@ -2968,22 +3032,22 @@ function ManagementMoneyCards({ month }: { month: string }) {
 
                       <div>
                         <span>Pró-labore bruto individual</span>
-                        <strong>{money(data.proLaboreIndividual || 0)}</strong>
+                        <strong>{formatMoneyCents(data.proLaboreIndividualCents)}</strong>
                       </div>
 
                       <div>
                         <span>Total de adiantamentos</span>
-                        <strong>{money(totalManagersAdvances)}</strong>
+                        <strong>{formatMoneyCents(totalManagersAdvancesCents)}</strong>
                       </div>
 
                       <div>
                         <span>Saldo líquido total dos gestores</span>
-                        <strong>{money(totalManagersProLabore)}</strong>
+                        <strong>{formatMoneyCents(totalManagersProLaboreCents)}</strong>
                       </div>
 
                       <div>
                         <span>Líquido distribuível</span>
-                        <strong>{money(data.liquidoDistribuivel || 0)}</strong>
+                        <strong>{formatMoneyCents(data.liquidoDistribuivelCents)}</strong>
                       </div>
                     </div>
 
@@ -3010,13 +3074,13 @@ function ManagementMoneyCards({ month }: { month: string }) {
 
                               <td>{manager.email}</td>
 
-                              <td>{money(manager.proLabore || 0)}</td>
+                              <td>{formatMoneyCents(manager.proLaboreCents)}</td>
 
-                              <td>{money(manager.advances || 0)}</td>
+                              <td>{formatMoneyCents(manager.advancesCents)}</td>
 
                               <td>
                                 <strong>
-                                  {money(manager.saldoReceber || 0)}
+                                  {formatMoneyCents(manager.saldoReceberCents)}
                                 </strong>
                               </td>
                             </tr>
@@ -3034,16 +3098,15 @@ function ManagementMoneyCards({ month }: { month: string }) {
                     <div className="management-extract-highlight">
                       <span>Meu pró-labore líquido previsto</span>
                       <strong>
-                        {money(data.currentManager?.saldoReceber || 0)}
+                        {formatMoneyCents(data.currentManager?.saldoReceberCents ?? 0)}
                       </strong>
 
                       <p>
                         Pró-labore individual bruto:{" "}
                         <b>
-                          {money(
-                            data.currentManager?.proLabore ||
-                              data.proLaboreIndividual ||
-                              0
+                          {formatMoneyCents(
+                            data.currentManager?.proLaboreCents ??
+                              data.proLaboreIndividualCents
                           )}
                         </b>
                       </p>
@@ -3058,10 +3121,9 @@ function ManagementMoneyCards({ month }: { month: string }) {
                       <div>
                         <span>Pró-labore bruto individual</span>
                         <strong>
-                          {money(
-                            data.currentManager?.proLabore ||
-                              data.proLaboreIndividual ||
-                              0
+                          {formatMoneyCents(
+                            data.currentManager?.proLaboreCents ??
+                              data.proLaboreIndividualCents
                           )}
                         </strong>
                       </div>
@@ -3069,14 +3131,14 @@ function ManagementMoneyCards({ month }: { month: string }) {
                       <div>
                         <span>Adiantamentos recebidos</span>
                         <strong>
-                          {money(data.currentManager?.advances || 0)}
+                          {formatMoneyCents(data.currentManager?.advancesCents ?? 0)}
                         </strong>
                       </div>
 
                       <div>
                         <span>Saldo a receber</span>
                         <strong>
-                          {money(data.currentManager?.saldoReceber || 0)}
+                          {formatMoneyCents(data.currentManager?.saldoReceberCents ?? 0)}
                         </strong>
                       </div>
 
@@ -3119,7 +3181,7 @@ function ManagementMoneyCards({ month }: { month: string }) {
                               </small>
                             </span>
 
-                            <b>{money(advance.amount || 0)}</b>
+                            <b>{formatMoneyCents(advance.amountCents)}</b>
                           </div>
                         ))}
                     </div>
@@ -3206,28 +3268,18 @@ function AdminDashboard() {
     dashboard?.latestProtocols ??
     [];
 
-  const received =
-    financeSummary?.entradasRecebidas ??
-    dashboard?.received ??
-    dashboard?.receivedAmount ??
-    0;
-
-  const pending =
-    financeSummary?.entradasPendentes ??
-    dashboard?.pending ??
-    dashboard?.pendingAmount ??
-    0;
-
-  const fixedCosts = financeSummary?.custoFixoMensal ?? 0;
-  const salaries = financeSummary?.salariosMensais ?? 0;
-  const projectedExpenses = financeSummary?.saidasProjetadas ?? 0;
-  const projectedResult = financeSummary?.resultadoPrevisto ?? 0;
-  const realizedResult = financeSummary?.resultadoRealizado ?? 0;
+  const receivedCents = financeSummary?.entradasRecebidasCents ?? 0;
+  const pendingCents = financeSummary?.entradasPendentesCents ?? 0;
+  const fixedCostsCents = financeSummary?.custoFixoMensalCents ?? 0;
+  const salariesCents = financeSummary?.salariosMensaisCents ?? 0;
+  const projectedExpensesCents = financeSummary?.saidasProjetadasCents ?? 0;
+  const projectedResultCents = financeSummary?.resultadoPrevistoCents ?? 0;
+  const realizedResultCents = financeSummary?.resultadoRealizadoCents ?? 0;
 
   const maxChartValue = Math.max(
-    financeSummary?.entradas || 0,
-    financeSummary?.saidasProjetadas || 0,
-    Math.abs(financeSummary?.resultadoPrevisto || 0),
+    financeSummary?.entradasCents ?? 0,
+    financeSummary?.saidasProjetadasCents ?? 0,
+    Math.abs(financeSummary?.resultadoPrevistoCents ?? 0),
     1
   );
 
@@ -3311,14 +3363,14 @@ function AdminDashboard() {
               <>
                 <MetricCard
                   title="Recebido"
-                  value={money(received)}
+                  value={formatMoneyCents(receivedCents)}
                   hint="pagamentos confirmados"
                   icon={WalletCards}
                 />
 
                 <MetricCard
                   title="A receber"
-                  value={money(pending)}
+                  value={formatMoneyCents(pendingCents)}
                   hint="receitas pendentes"
                   icon={Clock}
                 />
@@ -3347,29 +3399,29 @@ function AdminDashboard() {
                 <div className="finance-kpi-grid">
                   <div>
                     <span>Receitas previstas</span>
-                    <strong>{money(financeSummary.entradas)}</strong>
+                    <strong>{formatMoneyCents(financeSummary.entradasCents)}</strong>
                   </div>
 
                   <div>
                     <span>Receitas recebidas</span>
-                    <strong>{money(financeSummary.entradasRecebidas)}</strong>
+                    <strong>{formatMoneyCents(financeSummary.entradasRecebidasCents)}</strong>
                   </div>
 
                   <div>
                     <span>Saídas projetadas</span>
-                    <strong>{money(projectedExpenses)}</strong>
+                    <strong>{formatMoneyCents(projectedExpensesCents)}</strong>
                   </div>
 
                   <div>
                     <span>Resultado previsto</span>
                     <strong
                       className={
-                        projectedResult >= 0
+                        projectedResultCents >= 0
                           ? "positive-result"
                           : "negative-result"
                       }
                     >
-                      {money(projectedResult)}
+                      {formatMoneyCents(projectedResultCents)}
                     </strong>
                   </div>
                 </div>
@@ -3378,13 +3430,13 @@ function AdminDashboard() {
                   <div className="dashboard-chart-row">
                     <div>
                       <strong>Receitas</strong>
-                      <span>{money(financeSummary.entradas)}</span>
+                      <span>{formatMoneyCents(financeSummary.entradasCents)}</span>
                     </div>
 
                     <div className="dashboard-chart-track">
                       <div
                         className="dashboard-chart-fill income"
-                        style={{ width: chartWidth(financeSummary.entradas) }}
+                        style={{ width: chartWidth(financeSummary.entradasCents) }}
                       />
                     </div>
                   </div>
@@ -3392,13 +3444,13 @@ function AdminDashboard() {
                   <div className="dashboard-chart-row">
                     <div>
                       <strong>Despesas projetadas</strong>
-                      <span>{money(projectedExpenses)}</span>
+                      <span>{formatMoneyCents(projectedExpensesCents)}</span>
                     </div>
 
                     <div className="dashboard-chart-track">
                       <div
                         className="dashboard-chart-fill expense"
-                        style={{ width: chartWidth(projectedExpenses) }}
+                        style={{ width: chartWidth(projectedExpensesCents) }}
                       />
                     </div>
                   </div>
@@ -3406,15 +3458,15 @@ function AdminDashboard() {
                   <div className="dashboard-chart-row">
                     <div>
                       <strong>Resultado previsto</strong>
-                      <span>{money(projectedResult)}</span>
+                      <span>{formatMoneyCents(projectedResultCents)}</span>
                     </div>
 
                     <div className="dashboard-chart-track">
                       <div
                         className={`dashboard-chart-fill ${
-                          projectedResult >= 0 ? "income" : "expense"
+                          projectedResultCents >= 0 ? "income" : "expense"
                         }`}
-                        style={{ width: chartWidth(projectedResult) }}
+                        style={{ width: chartWidth(projectedResultCents) }}
                       />
                     </div>
                   </div>
@@ -3429,34 +3481,34 @@ function AdminDashboard() {
                 <div className="detail-list">
                   <div>
                     <span>Custos fixos mensais</span>
-                    <strong>{money(fixedCosts)}</strong>
+                    <strong>{formatMoneyCents(fixedCostsCents)}</strong>
                   </div>
 
                   <div>
                     <span>Salários mensais</span>
-                    <strong>{money(salaries)}</strong>
+                    <strong>{formatMoneyCents(salariesCents)}</strong>
                   </div>
 
                   <div>
                     <span>Saídas lançadas</span>
-                    <strong>{money(financeSummary.saidasLancadas)}</strong>
+                    <strong>{formatMoneyCents(financeSummary.saidasLancadasCents)}</strong>
                   </div>
 
                   <div>
                     <span>Saídas pagas</span>
-                    <strong>{money(financeSummary.saidasPagas)}</strong>
+                    <strong>{formatMoneyCents(financeSummary.saidasPagasCents)}</strong>
                   </div>
 
                   <div>
                     <span>Resultado realizado</span>
                     <strong
                       className={
-                        realizedResult >= 0
+                        realizedResultCents >= 0
                           ? "positive-result"
                           : "negative-result"
                       }
                     >
-                      {money(realizedResult)}
+                      {formatMoneyCents(realizedResultCents)}
                     </strong>
                   </div>
                 </div>
@@ -3540,8 +3592,8 @@ function AdminDashboard() {
           const width = Math.max(
             6,
             Math.round(
-              (item.amount /
-                Math.max(...financeSummary.byCategory.map((row) => row.amount), 1)) *
+              (item.amountCents /
+                Math.max(...financeSummary.byCategory.map((row) => row.amountCents), 1)) *
                 100
             )
           );
@@ -3568,7 +3620,7 @@ function AdminDashboard() {
                 />
               </div>
 
-              <b>{money(item.amount)}</b>
+              <b>{formatMoneyCents(item.amountCents)}</b>
             </div>
           );
         })}
@@ -3661,10 +3713,18 @@ function ProLaboreAdvancesPage() {
   }
 
   function startEditAdvance(advance: BackendProLaboreAdvance) {
+    if (advance.amountCents == null) {
+      setSuccess("");
+      setError(
+        "Este adiantamento não possui valor canônico em centavos e não pode ser editado nesta tela."
+      );
+      return;
+    }
+
     setEditingAdvance(advance);
     setShowForm(true);
     setManagerUserId(String(advance.managerUserId));
-    setAmount(String(advance.amount || ""));
+    setAmount(centsToReaisFormValue(advance.amountCents));
     setPaidAt(advance.paidAt ? advance.paidAt.slice(0, 10) : today);
     setDescription(advance.description || "Adiantamento de pró-labore");
     setNotes(advance.notes || "");
@@ -3684,14 +3744,16 @@ function ProLaboreAdvancesPage() {
         throw new Error("Selecione o gestor.");
       }
 
-      if (!amount || Number(amount) <= 0) {
+      const amountCents = reaisFormValueToCents(amount);
+
+      if (amountCents <= 0) {
         throw new Error("Informe um valor válido.");
       }
 
       const payload = {
         managerUserId: Number(managerUserId),
         competenceMonth: month,
-        amount: Number(amount),
+        amount: Number(centsToReaisFormValue(amountCents)),
         paidAt: paidAt || today,
         description: description || "Adiantamento de pró-labore",
         notes: notes || "",
@@ -3722,7 +3784,9 @@ function ProLaboreAdvancesPage() {
 
   async function handleDeleteAdvance(advance: BackendProLaboreAdvance) {
     const confirmed = window.confirm(
-      `Deseja realmente excluir o adiantamento de ${money(advance.amount)}?`
+      `Deseja realmente excluir o adiantamento de ${formatOptionalMoneyCents(
+        advance.amountCents
+      )}?`
     );
 
     if (!confirmed) return;
@@ -3751,10 +3815,11 @@ function ProLaboreAdvancesPage() {
     }
   }
 
-  const totalAdvances = advances.reduce(
-    (sum, advance) => sum + Number(advance.amount || 0),
-    0
-  );
+  const totalAdvancesCents = advances.every(
+    (advance) => advance.amountCents != null
+  )
+    ? advances.reduce((sum, advance) => sum + (advance.amountCents as number), 0)
+    : null;
 
   const managersWithSummary = summary?.managers || [];
 
@@ -3824,7 +3889,7 @@ function ProLaboreAdvancesPage() {
           <div className="metrics-grid four">
             <MetricCard
               title="Adiantamentos"
-              value={money(totalAdvances)}
+              value={formatOptionalMoneyCents(totalAdvancesCents)}
               hint="total antecipado no mês"
               icon={WalletCards}
             />
@@ -3838,14 +3903,14 @@ function ProLaboreAdvancesPage() {
 
             <MetricCard
               title="Pró-labore bruto"
-              value={money(summary?.proLaboreIndividual || 0)}
+              value={formatOptionalMoneyCents(summary?.proLaboreIndividualCents)}
               hint="valor individual antes dos adiantamentos"
               icon={BarChart3}
             />
 
             <MetricCard
               title="Caixa da empresa"
-              value={money(summary?.caixaEmpresa || 0)}
+              value={formatOptionalMoneyCents(summary?.caixaEmpresaCents)}
               hint={`${summary?.cashPercent ?? 10}% reservado ao caixa`}
               icon={Clock}
             />
@@ -3980,10 +4045,10 @@ function ProLaboreAdvancesPage() {
                 <strong>{manager.name}</strong>
               </td>
               <td>{manager.email}</td>
-              <td>{money(manager.proLabore)}</td>
-              <td>{money(manager.advances)}</td>
+              <td>{formatMoneyCents(manager.proLaboreCents)}</td>
+              <td>{formatMoneyCents(manager.advancesCents)}</td>
               <td>
-                <strong>{money(manager.saldoReceber)}</strong>
+                <strong>{formatMoneyCents(manager.saldoReceberCents)}</strong>
               </td>
             </tr>
           ))}
@@ -4041,7 +4106,7 @@ function ProLaboreAdvancesPage() {
               </td>
 
               <td>
-                <strong>{money(advance.amount)}</strong>
+                <strong>{formatOptionalMoneyCents(advance.amountCents)}</strong>
               </td>
 
               <td>{advance.createdBy?.name || "-"}</td>
@@ -6948,8 +7013,16 @@ const confirmed = window.confirm(
   }
 
   async function handleMarkPaid(charge: BackendBillingCharge) {
+    if (charge.amountCents == null) {
+      setSuccess("");
+      setError(
+        "Esta cobrança não possui valor canônico em centavos e não pode ser baixada por esta tela."
+      );
+      return;
+    }
+
     const confirmed = window.confirm(
-      "Confirmar pagamento manual desta cobrança? O protocolo será liberado para execução."
+      `Confirmar o pagamento integral de ${formatMoneyCents(charge.amountCents)}? O protocolo será liberado para execução.`
     );
 
     if (!confirmed) return;
@@ -6961,7 +7034,6 @@ const confirmed = window.confirm(
 
       await api.markBillingChargePaid(charge.id, {
         paidAt: today,
-        paidAmount: charge.amount,
         notes: "Pagamento confirmado manualmente no painel administrativo.",
       });
 
@@ -10198,6 +10270,7 @@ type BackendFinanceTransaction = {
   status: FinanceTransactionStatus;
   description: string;
   amount: number;
+  amountCents?: number | null;
   dueDate?: string | null;
   paidAt?: string | null;
   competenceMonth?: string | null;
@@ -10244,6 +10317,8 @@ type BackendFinanceTransaction = {
     status?: string;
     paidAt?: string | null;
     amount?: number;
+    amountCents?: number | null;
+    paidAmountCents?: number | null;
     dueDate?: string | null;
     installmentNumber?: number | null;
     totalInstallments?: number | null;
@@ -10268,6 +10343,7 @@ type BackendFinanceFixedCost = {
   id: number;
   description: string;
   amount: number;
+  amountCents?: number | null;
   dueDay: number;
   active: boolean;
   notes?: string | null;
@@ -10279,6 +10355,7 @@ type BackendFinanceSalary = {
   employeeName: string;
   roleDescription?: string | null;
   amount: number;
+  amountCents?: number | null;
   dueDay: number;
   active: boolean;
   notes?: string | null;
@@ -10287,6 +10364,21 @@ type BackendFinanceSalary = {
 
 type BackendFinanceSummary = {
   month: string;
+
+  entradasCents: number;
+  entradasRecebidasCents: number;
+  entradasPendentesCents: number;
+
+  saidasLancadasCents: number;
+  saidasPagasCents: number;
+  saidasPendentesCents: number;
+
+  custoFixoMensalCents: number;
+  salariosMensaisCents: number;
+  saidasProjetadasCents: number;
+
+  resultadoPrevistoCents: number;
+  resultadoRealizadoCents: number;
 
   entradas: number;
   entradasRecebidas: number;
@@ -10310,6 +10402,7 @@ type BackendFinanceSummary = {
   byCategory: {
     category: string;
     type: FinanceTransactionType;
+    amountCents: number;
     amount: number;
     count: number;
     color?: string | null;
@@ -10370,6 +10463,7 @@ type BackendProLaboreAdvance = {
   managerUserId: number;
   competenceMonth: string;
   amount: number;
+  amountCents?: number | null;
   paidAt: string;
   description?: string | null;
   notes?: string | null;
@@ -10968,22 +11062,27 @@ function FinancePage() {
         item.installmentGroupId &&
         paymentPlanTransactions.length > 0
       ) {
-        const totalAmount =
+        const totalAmountCents =
           paymentPlanTransactions.reduce(
             (
               accumulator,
               transaction
-            ) =>
-              accumulator +
-              Number(
-                transaction.amount ||
-                0
-              ),
+            ) => {
+              const amountCents = transaction.amountCents;
+
+              if (amountCents == null) {
+                throw new Error(
+                  "O plano contém uma obrigação sem valor canônico em centavos."
+                );
+              }
+
+              return accumulator + amountCents;
+            },
             0
           );
 
         setTransactionAmount(
-          String(totalAmount)
+          centsToReaisFormValue(totalAmountCents)
         );
 
         /*
@@ -10991,9 +11090,9 @@ function FinancePage() {
          */
         if (entryTransaction) {
           setTransactionEntryAmount(
-            String(
-              entryTransaction.amount ||
-              0
+            optionalReaisFormValue(
+              entryTransaction.amountCents,
+              "A entrada do plano"
             )
           );
 
@@ -11051,9 +11150,9 @@ function FinancePage() {
         setTransactionInstallmentAmounts(
           futureInstallments.map(
             (transaction) =>
-              String(
-                transaction.amount ||
-                0
+              optionalReaisFormValue(
+                transaction.amountCents,
+                "Uma parcela do plano"
               )
           )
         );
@@ -11088,9 +11187,9 @@ function FinancePage() {
        * ====================================================
        */
       setTransactionAmount(
-        String(
-          item.amount ||
-          ""
+        optionalReaisFormValue(
+          item.amountCents,
+          "O lançamento"
         )
       );
 
@@ -11161,43 +11260,38 @@ function FinancePage() {
    * ======================================================
    */
 
-  const financeTotalServiceValue =
-    Number(transactionAmount || 0);
+  const financeTotalServiceCents =
+    formValueToCentsOrZero(transactionAmount);
 
-  const financeEntryValue =
-    Number(transactionEntryAmount || 0);
+  const financeEntryCents =
+    formValueToCentsOrZero(transactionEntryAmount);
 
-  const financeFutureInstallmentsValue =
+  const financeFutureInstallmentsCents =
     transactionInstallmentAmounts.reduce(
       (total, rawValue) => {
-        const value = Number(rawValue || 0);
-
-        return (
-          total +
-          (
-            Number.isFinite(value)
-              ? value
-              : 0
-          )
-        );
+        try {
+          return total + formValueToCentsOrZero(rawValue);
+        } catch {
+          return total;
+        }
       },
       0
     );
 
-  const financeDistributedValue =
-    financeEntryValue +
-    financeFutureInstallmentsValue;
+  const financeDistributedCents =
+    financeEntryCents +
+    financeFutureInstallmentsCents;
 
-  const financeBalanceValue =
+  const financeBalanceCents =
     Math.max(
       0,
-      financeTotalServiceValue -
-        financeEntryValue
+      financeTotalServiceCents -
+        financeEntryCents
     );
 
-  const financeDifferenceValue =
-    financeTotalServiceValue -
-    financeDistributedValue;
+  const financeDifferenceCents =
+    financeTotalServiceCents -
+    financeDistributedCents;
 
   function resizeFinanceInstallmentPlan(
     rawQty: string
@@ -11305,21 +11399,16 @@ function FinancePage() {
         )
       );
 
-    const balance =
-      Math.max(
-        0,
-        financeTotalServiceValue -
-          financeEntryValue
-      );
+    const totalCents = financeBalanceCents;
 
-    /*
-     * Trabalhamos em centavos para não gerar
-     * diferença de arredondamento.
-     */
-    const totalCents =
-      Math.round(
-        balance * 100
+    if (!Number.isInteger(quantity) || totalCents < quantity) {
+      setError(
+        "O saldo não permite gerar parcelas positivas de pelo menos um centavo."
       );
+      return;
+    }
+
+    setError("");
 
     const baseCents =
       Math.floor(
@@ -11347,9 +11436,7 @@ function FinancePage() {
                 : 0
             );
 
-          return (
-            cents / 100
-          ).toFixed(2);
+          return centsToReaisFormValue(cents);
         }
       );
 
@@ -11375,7 +11462,9 @@ async function handleSaveTransaction() {
         throw new Error("Informe a descrição do lançamento.");
       }
 
-      if (!transactionAmount || Number(transactionAmount) <= 0) {
+      const totalServiceAmountCents = reaisFormValueToCents(transactionAmount);
+
+      if (totalServiceAmountCents <= 0) {
         throw new Error("Informe um valor válido.");
       }
 
@@ -11418,25 +11507,13 @@ async function handleSaveTransaction() {
           )
         )
       ) {
-        const totalServiceAmount =
-          Number(
-            transactionAmount ||
-            0
-          );
-
-        const entryValue =
-          Number(
-            transactionEntryAmount ||
-            0
-          );
+        const entryAmountCents = transactionEntryAmount.trim() === ""
+          ? 0
+          : reaisFormValueToCents(transactionEntryAmount);
 
         if (
-          !Number.isFinite(
-            entryValue
-          ) ||
-          entryValue < 0 ||
-          entryValue >
-            totalServiceAmount
+          entryAmountCents < 0 ||
+          entryAmountCents > totalServiceAmountCents
         ) {
           throw new Error(
             "O valor da entrada é inválido."
@@ -11465,9 +11542,13 @@ async function handleSaveTransaction() {
 
         if (
           transactionInstallmentAmounts.some(
-            (rawAmount) =>
-              !rawAmount ||
-              Number(rawAmount) <= 0
+            (rawAmount) => {
+              try {
+                return reaisFormValueToCents(rawAmount) <= 0;
+              } catch {
+                return true;
+              }
+            }
           ) ||
           transactionInstallmentDates.some(
             (date) => !date
@@ -11478,28 +11559,13 @@ async function handleSaveTransaction() {
           );
         }
 
-        const futureInstallmentsValue =
+        const futureInstallmentsCents =
           transactionInstallmentAmounts.reduce(
             (
               accumulator,
               rawAmount
             ) => {
-              const parsed =
-                Number(
-                  rawAmount ||
-                  0
-                );
-
-              return (
-                accumulator +
-                (
-                  Number.isFinite(
-                    parsed
-                  )
-                    ? parsed
-                    : 0
-                )
-              );
+              return accumulator + reaisFormValueToCents(rawAmount);
             },
             0
           );
@@ -11516,19 +11582,12 @@ async function handleSaveTransaction() {
           transactionInstallmentAmounts.length >
             0
         ) {
-          const distributedTotal =
-            entryValue +
-            futureInstallmentsValue;
-
-          const difference =
-            Math.abs(
-              totalServiceAmount -
-              distributedTotal
-            );
+          const distributedTotalCents =
+            entryAmountCents +
+            futureInstallmentsCents;
 
           if (
-            difference >
-            0.009
+            distributedTotalCents !== totalServiceAmountCents
           ) {
             throw new Error(
               "A entrada somada às parcelas deve ser igual ao valor total do serviço."
@@ -11556,7 +11615,7 @@ async function handleSaveTransaction() {
 
         description:
           transactionDescription,
-        amount: Number(transactionAmount),
+        amount: normalizedReaisFormNumber(transactionAmount),
         dueDate: transactionDueDate || null,
         paidAt:
           transactionStatus === "PAGO"
@@ -11602,8 +11661,9 @@ async function handleSaveTransaction() {
           !editingTransaction &&
           transactionInstallmentEnabled
             ? Number(
-                transactionEntryAmount ||
-                  0
+                centsToReaisFormValue(
+                  formValueToCentsOrZero(transactionEntryAmount)
+                )
               )
             : undefined,
 
@@ -11648,12 +11708,9 @@ async function handleSaveTransaction() {
                   dueDate,
                   index
                 ) => ({
-                  amount:
-                    Number(
-                      transactionInstallmentAmounts[
-                        index
-                      ] || 0
-                    ),
+                  amount: normalizedReaisFormNumber(
+                    transactionInstallmentAmounts[index]
+                  ),
 
                   dueDate,
 
@@ -11702,17 +11759,16 @@ async function handleSaveTransaction() {
             /*
              * Valor TOTAL do serviço original.
              */
-            amount:
-              Number(transactionAmount),
+            amount: normalizedReaisFormNumber(transactionAmount),
 
             /*
              * Composição do novo plano financeiro.
              */
-            entryAmount:
-              Number(
-                transactionEntryAmount ||
-                  0
-              ),
+            entryAmount: Number(
+              centsToReaisFormValue(
+                formValueToCentsOrZero(transactionEntryAmount)
+              )
+            ),
 
             entryStatus:
               transactionStatus,
@@ -11748,12 +11804,9 @@ async function handleSaveTransaction() {
                   dueDate,
                   index
                 ) => ({
-                  amount:
-                    Number(
-                      transactionInstallmentAmounts[
-                        index
-                      ] || 0
-                    ),
+                  amount: normalizedReaisFormNumber(
+                    transactionInstallmentAmounts[index]
+                  ),
 
                   dueDate,
 
@@ -11835,10 +11888,18 @@ async function handleSaveTransaction() {
   }
 
   function startEditFixedCost(item: BackendFinanceFixedCost) {
+    if (item.amountCents == null) {
+      setSuccess("");
+      setError(
+        "Este custo fixo não possui valor canônico em centavos e não pode ser editado nesta tela."
+      );
+      return;
+    }
+
     setEditingFixedCost(item);
     setShowFixedCostForm(true);
     setFixedDescription(item.description || "");
-    setFixedAmount(String(item.amount || ""));
+    setFixedAmount(centsToReaisFormValue(item.amountCents));
     setFixedDueDay(String(item.dueDay || 10));
     setFixedCategoryId(item.category?.id ? String(item.category.id) : "");
     setFixedActive(item.active);
@@ -11854,13 +11915,15 @@ async function handleSaveTransaction() {
         throw new Error("Informe a descrição do custo fixo.");
       }
 
-      if (!fixedAmount || Number(fixedAmount) <= 0) {
+      const fixedAmountCents = reaisFormValueToCents(fixedAmount);
+
+      if (fixedAmountCents <= 0) {
         throw new Error("Informe um valor válido.");
       }
 
       const payload = {
         description: fixedDescription,
-        amount: Number(fixedAmount),
+        amount: Number(centsToReaisFormValue(fixedAmountCents)),
         categoryId: fixedCategoryId ? Number(fixedCategoryId) : null,
         dueDay: Number(fixedDueDay || 10),
         active: fixedActive,
@@ -11948,11 +12011,19 @@ async function handleDeleteCategory(id: number) {
   }
 
   function startEditSalary(item: BackendFinanceSalary) {
+    if (item.amountCents == null) {
+      setSuccess("");
+      setError(
+        "Este salário não possui valor canônico em centavos e não pode ser editado nesta tela."
+      );
+      return;
+    }
+
     setEditingSalary(item);
     setShowSalaryForm(true);
     setSalaryEmployeeName(item.employeeName || "");
     setSalaryRoleDescription(item.roleDescription || "");
-    setSalaryAmount(String(item.amount || ""));
+    setSalaryAmount(centsToReaisFormValue(item.amountCents));
     setSalaryDueDay(String(item.dueDay || 5));
     setSalaryCategoryId(item.category?.id ? String(item.category.id) : "");
     setSalaryActive(item.active);
@@ -11970,14 +12041,16 @@ async function handleDeleteCategory(id: number) {
         throw new Error("Informe o nome do funcionário.");
       }
 
-      if (!salaryAmount || Number(salaryAmount) <= 0) {
+      const salaryAmountCents = reaisFormValueToCents(salaryAmount);
+
+      if (salaryAmountCents <= 0) {
         throw new Error("Informe um valor válido.");
       }
 
       const payload = {
         employeeName: salaryEmployeeName,
         roleDescription: salaryRoleDescription || null,
-        amount: Number(salaryAmount),
+        amount: Number(centsToReaisFormValue(salaryAmountCents)),
         categoryId: salaryCategoryId ? Number(salaryCategoryId) : null,
         dueDay: Number(salaryDueDay || 5),
         active: salaryActive,
@@ -12063,11 +12136,11 @@ async function handleDeleteSalary(id: number) {
   }
 
   const maxCategoryAmount = Math.max(
-    ...(summary?.byCategory || []).map((item) => item.amount),
+    ...(summary?.byCategory || []).map((item) => item.amountCents),
     1
   );
 
-  const resultIsPositive = (summary?.resultadoPrevisto || 0) >= 0;
+  const resultIsPositive = (summary?.resultadoPrevistoCents ?? 0) >= 0;
 
 
   async function handleDeleteTransaction(id: number) {
@@ -12653,21 +12726,21 @@ async function handleDeleteSalary(id: number) {
           <div className="metrics-grid three">
             <MetricCard
               title="Receitas previstas"
-              value={money(summary.entradas)}
+              value={formatMoneyCents(summary.entradasCents)}
               hint="receitas lançadas no mês"
               icon={WalletCards}
             />
 
             <MetricCard
               title="Saídas projetadas"
-              value={money(summary.saidasProjetadas)}
+              value={formatMoneyCents(summary.saidasProjetadasCents)}
               hint="despesas + custos fixos + salários"
               icon={BarChart3}
             />
 
             <MetricCard
               title="Resultado previsto"
-              value={money(summary.resultadoPrevisto)}
+              value={formatMoneyCents(summary.resultadoPrevistoCents)}
               hint={resultIsPositive ? "saldo positivo" : "saldo negativo"}
               icon={Clock}
             />
@@ -12676,21 +12749,21 @@ async function handleDeleteSalary(id: number) {
           <div className="metrics-grid three">
             <MetricCard
               title="Recebido"
-              value={money(summary.entradasRecebidas)}
+              value={formatMoneyCents(summary.entradasRecebidasCents)}
               hint="receitas pagas"
               icon={WalletCards}
             />
 
             <MetricCard
               title="A receber"
-              value={money(summary.entradasPendentes)}
+              value={formatMoneyCents(summary.entradasPendentesCents)}
               hint="receitas pendentes"
               icon={Clock}
             />
 
             <MetricCard
               title="Resultado realizado"
-              value={money(summary.resultadoRealizado)}
+              value={formatMoneyCents(summary.resultadoRealizadoCents)}
               hint="recebido menos saídas pagas"
               icon={BarChart3}
             />
@@ -12711,7 +12784,7 @@ async function handleDeleteSalary(id: number) {
                 {summary.byCategory.map((item) => {
                   const width = Math.max(
                     6,
-                    Math.round((item.amount / maxCategoryAmount) * 100)
+                    Math.round((item.amountCents / maxCategoryAmount) * 100)
                   );
 
                   return (
@@ -12733,7 +12806,7 @@ async function handleDeleteSalary(id: number) {
                         />
                       </div>
 
-                      <b>{money(item.amount)}</b>
+                      <b>{formatMoneyCents(item.amountCents)}</b>
                     </div>
                   );
                 })}
@@ -12748,22 +12821,22 @@ async function handleDeleteSalary(id: number) {
               <div className="detail-list">
                 <div>
                   <span>Custos fixos ativos</span>
-                  <strong>{money(summary.custoFixoMensal)}</strong>
+                  <strong>{formatMoneyCents(summary.custoFixoMensalCents)}</strong>
                 </div>
 
                 <div>
                   <span>Folha salarial mensal</span>
-                  <strong>{money(summary.salariosMensais)}</strong>
+                  <strong>{formatMoneyCents(summary.salariosMensaisCents)}</strong>
                 </div>
 
                 <div>
                   <span>Saídas lançadas</span>
-                  <strong>{money(summary.saidasLancadas)}</strong>
+                  <strong>{formatMoneyCents(summary.saidasLancadasCents)}</strong>
                 </div>
 
                 <div>
                   <span>Saídas pendentes</span>
-                  <strong>{money(summary.saidasPendentes)}</strong>
+                  <strong>{formatMoneyCents(summary.saidasPendentesCents)}</strong>
                 </div>
 
                 <div>
@@ -12859,7 +12932,7 @@ async function handleDeleteSalary(id: number) {
                   <tbody>{viewingPaymentPlan.map((obligation) => (
                     <tr key={obligation.id}>
                       <td>{obligation.installmentNumber === 0 ? "Entrada" : `Parcela ${obligation.installmentNumber}`}</td>
-                      <td>{money(obligation.amount)}</td>
+                      <td>{formatOptionalMoneyCents(obligation.amountCents)}</td>
                       <td>{obligation.dueDate?.slice(0, 10) || "—"}</td>
                       <td>{isFinanceTransactionConsolidated(obligation)
                         ? "🔒 Pagamento consolidado"
@@ -13240,8 +13313,8 @@ async function handleDeleteSalary(id: number) {
                           </span>
 
                           <strong>
-                            {money(
-                              financeTotalServiceValue
+                            {formatMoneyCents(
+                              financeTotalServiceCents
                             )}
                           </strong>
 
@@ -13357,8 +13430,8 @@ async function handleDeleteSalary(id: number) {
                             </span>
 
                             <strong>
-                              {money(
-                                financeBalanceValue
+                            {formatMoneyCents(
+                                financeBalanceCents
                               )}
                             </strong>
                           </div>
@@ -13581,8 +13654,8 @@ async function handleDeleteSalary(id: number) {
                               </span>
 
                               <strong>
-                                {money(
-                                  financeTotalServiceValue
+                                {formatMoneyCents(
+                                  financeTotalServiceCents
                                 )}
                               </strong>
                             </div>
@@ -13593,8 +13666,8 @@ async function handleDeleteSalary(id: number) {
                               </span>
 
                               <strong>
-                                {money(
-                                  financeEntryValue
+                                {formatMoneyCents(
+                                  financeEntryCents
                                 )}
                               </strong>
                             </div>
@@ -13605,8 +13678,8 @@ async function handleDeleteSalary(id: number) {
                               </span>
 
                               <strong>
-                                {money(
-                                  financeFutureInstallmentsValue
+                                {formatMoneyCents(
+                                  financeFutureInstallmentsCents
                                 )}
                               </strong>
                             </div>
@@ -13617,17 +13690,15 @@ async function handleDeleteSalary(id: number) {
                               </span>
 
                               <strong>
-                                {money(
-                                  financeDistributedValue
+                                {formatMoneyCents(
+                                  financeDistributedCents
                                 )}
                               </strong>
                             </div>
 
                             <div
                               className={
-                                Math.abs(
-                                  financeDifferenceValue
-                                ) < 0.009
+                                financeDifferenceCents === 0
                                   ? "finance-v2-difference ok"
                                   : "finance-v2-difference warning"
                               }
@@ -13637,9 +13708,9 @@ async function handleDeleteSalary(id: number) {
                               </span>
 
                               <strong>
-                                {money(
+                                {formatMoneyCents(
                                   Math.abs(
-                                    financeDifferenceValue
+                                    financeDifferenceCents
                                   )
                                 )}
                               </strong>
@@ -13799,7 +13870,7 @@ async function handleDeleteSalary(id: number) {
                     <td>
                       {formatDate(item.dueDate)}
                     </td>
-                    <td>{money(item.amount)}</td>
+                    <td>{formatOptionalMoneyCents(item.amountCents)}</td>
 
                     <td>
                       <span
@@ -13972,7 +14043,7 @@ async function handleDeleteSalary(id: number) {
                     </td>
                     <td>{item.category?.name || "-"}</td>
                     <td>Dia {item.dueDay}</td>
-                    <td>{money(item.amount)}</td>
+                    <td>{formatOptionalMoneyCents(item.amountCents)}</td>
                     <td>
                       <span
                         className={`badge ${
@@ -14158,7 +14229,7 @@ async function handleDeleteSalary(id: number) {
                     <td>{item.roleDescription || "-"}</td>
                     <td>{item.category?.name || "-"}</td>
                     <td>Dia {item.dueDay}</td>
-                    <td>{money(item.amount)}</td>
+                    <td>{formatOptionalMoneyCents(item.amountCents)}</td>
                     <td>
                       <span
                         className={`badge ${
