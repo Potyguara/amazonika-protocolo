@@ -994,6 +994,7 @@ createProtocol(data: {
   description?: string;
   priority?: string;
   estimatedValue?: number;
+  estimatedValueCents?: number;
   deadlineDate?: string;
 }) {
   return request("/protocols", {
@@ -1078,6 +1079,8 @@ updateProtocol(
     priority?: string;
     estimatedValue?: number;
     finalValue?: number;
+    estimatedValueCents?: number;
+    finalValueCents?: number;
     deadlineDate?: string;
     status?: string;
     responsibleUserId?: number;
@@ -1289,7 +1292,7 @@ createProposal(data: {
    * A fonte detalhada das condições financeiras passa
    * a ser paymentSchedule.
    */
-  entryAmount?: number;
+  entryAmountCents?: number;
   installmentQty?: number | null;
 
   paymentSchedule: Array<{
@@ -1298,10 +1301,9 @@ createProposal(data: {
     totalInstallments: number | null;
 
     /*
-     * Valor enviado pela interface em REAIS.
-     * O backend converte para amountCents.
+     * Valor canônico enviado em centavos.
      */
-    amount: number;
+    amountCents: number;
 
     /*
      * YYYY-MM-DD
@@ -1318,7 +1320,7 @@ createProposal(data: {
     serviceName: string;
     description?: string | null;
     quantity: number;
-    unitAmount: number;
+    unitAmountCents: number;
   }>;
 }) {
   return request("/proposals", {
@@ -1338,14 +1340,14 @@ updateProposal(
     /*
      * Campos-resumo mantidos por compatibilidade.
      */
-    entryAmount?: number;
+    entryAmountCents?: number;
     installmentQty?: number | null;
 
     paymentSchedule: Array<{
       type: "ENTRADA" | "PARCELA";
       installmentNumber: number;
       totalInstallments: number | null;
-      amount: number;
+      amountCents: number;
       dueDate: string;
     }>;
 
@@ -1358,7 +1360,7 @@ updateProposal(
       serviceName: string;
       description?: string | null;
       quantity: number;
-      unitAmount: number;
+      unitAmountCents: number;
     }>;
   }
 ) {
@@ -1526,6 +1528,7 @@ uploadBillingFiscalDocument(
     number?: string;
     issuedAt?: string;
     amount?: number;
+    amountCents?: number;
     notes?: string;
   }
 ) {
@@ -1539,6 +1542,9 @@ uploadBillingFiscalDocument(
   if (data.number) formData.append("number", data.number);
   if (data.issuedAt) formData.append("issuedAt", data.issuedAt);
   if (data.amount !== undefined) formData.append("amount", String(data.amount));
+  if (data.amountCents !== undefined) {
+    formData.append("amountCents", String(data.amountCents));
+  }
   if (data.notes) formData.append("notes", data.notes);
 
   return fetch(`${API_URL}/billing-charges/${billingChargeId}/fiscal-documents`, {

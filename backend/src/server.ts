@@ -14,7 +14,8 @@ import {
   formatCanonicalCents,
   legacyReaisFromCents,
   normalizeFinancialPlanMoney,
-  proposalItemMoney,
+  proposalItemMoneyFromLegacyReais,
+  proposalItemMoneyFromCents,
   proposalToContractMoney,
   proposalToProtocolMoney,
   reaisInputToCents,
@@ -1392,19 +1393,6 @@ function authMiddleware(req: AuthRequest, res: Response, next: NextFunction) {
   } catch {
     return res.status(401).json({ message: "Token expirado ou inválido." });
   }
-}
-
-function formatMoneyBR(value: number | string | null | undefined) {
-  const numericValue = Number(value || 0);
-
-  if (!Number.isFinite(numericValue)) {
-    return "R$ 0,00";
-  }
-
-  return new Intl.NumberFormat("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  }).format(numericValue);
 }
 
 function requireRoles(roles: UserRole[]) {
@@ -3096,15 +3084,6 @@ async function generateContractNumber() {
 
 function formatCurrencyBRFromCents(value: unknown, label = "Valor") {
   return formatCanonicalCents(value, label);
-}
-
-function formatCurrencyBRFromFloat(value: number | null | undefined) {
-  const amount = Number(value || 0);
-
-  return amount.toLocaleString("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  });
 }
 
 function getBillingChargeStageLabel(charge: any) {
@@ -6453,10 +6432,12 @@ async function generateProposalNumber() {
 function calculateProposalTotals(items: any[]) {
   const normalizedItems = items.map((item, index) => {
     const quantity = Number(item.quantity || 1);
-    const money = proposalItemMoney(
-      quantity,
-      item.unitAmount ?? item.amount ?? 0
-    );
+    const money = item.unitAmountCents !== null && item.unitAmountCents !== undefined
+      ? proposalItemMoneyFromCents(quantity, item.unitAmountCents)
+      : proposalItemMoneyFromLegacyReais(
+          quantity,
+          item.unitAmount ?? item.amount ?? 0
+        );
 
     return {
       serviceName: String(item.serviceName || "").trim(),
@@ -7836,6 +7817,7 @@ app.post(
       description,
       priority,
       estimatedValue,
+      estimatedValueCents: requestedEstimatedValueCents,
       deadlineDate,
     } = req.body;
 
@@ -7847,8 +7829,12 @@ app.post(
 
     const protocolNumber = await nextProtocolNumber();
     const estimatedValueCents =
-      estimatedValue !== undefined && estimatedValue !== null && estimatedValue !== ""
-        ? reaisInputToCents(estimatedValue, "Valor estimado")
+      requestedEstimatedValueCents !== undefined &&
+      requestedEstimatedValueCents !== null &&
+      requestedEstimatedValueCents !== ""
+        ? requireCanonicalCents(requestedEstimatedValueCents, "Valor estimado")
+        : estimatedValue !== undefined && estimatedValue !== null && estimatedValue !== ""
+        ? reaisInputToCents(estimatedValue, "Valor estimado legado")
         : null;
 
     const protocol = await prisma.protocol.create({
@@ -8550,8 +8536,9 @@ app.post(
         proposalId: payment.contract?.proposalId || null,
         eventType: "COBRANCA_BB_PIX_EMITIDA",
         title: `Cobrança Pix BB emitida`,
-        description: `Cobrança Pix emitida para ${payment.client.name}, no valor de ${formatCurrencyBRFromFloat(
-          payment.amount
+        description: `Cobrança Pix emitida para ${payment.client.name}, no valor de ${formatCurrencyBRFromCents(
+          paymentAmountToCents(payment),
+          "Valor do pagamento"
         )}.`,
         recipient: payment.client.email || null,
         senderName: req.user?.name || null,
@@ -8565,6 +8552,7 @@ app.post(
           provider: "BB",
           providerEnv: process.env.BB_ENV || "SANDBOX",
           amount: payment.amount,
+          amountCents: payment.amountCents,
           pixCopiaECola,
           location,
         },
@@ -11013,8 +11001,11 @@ async function processFinanceAutoChargeEmailNotices() {
         getChargePublicUrl(charge);
 
       const amountText =
-        formatCurrencyBRFromFloat(
-          charge.amount
+        formatCurrencyBRFromCents(
+          requireCanonicalCents(
+            charge.amountCents,
+            "Valor da cobrança para aviso"
+          )
         );
 
       const dueDateText =
@@ -14405,18 +14396,24 @@ app.patch(
       priority,
       estimatedValue,
       finalValue,
+      estimatedValueCents: requestedEstimatedValueCents,
+      finalValueCents: requestedFinalValueCents,
       deadlineDate,
       status,
       responsibleUserId,
     } = req.body;
 
     const estimatedValueCents =
-      estimatedValue !== undefined && estimatedValue !== ""
-        ? reaisInputToCents(estimatedValue, "Valor estimado")
+      requestedEstimatedValueCents !== undefined && requestedEstimatedValueCents !== ""
+        ? requireCanonicalCents(requestedEstimatedValueCents, "Valor estimado")
+        : estimatedValue !== undefined && estimatedValue !== ""
+        ? reaisInputToCents(estimatedValue, "Valor estimado legado")
         : undefined;
     const finalValueCents =
-      finalValue !== undefined && finalValue !== ""
-        ? reaisInputToCents(finalValue, "Valor final")
+      requestedFinalValueCents !== undefined && requestedFinalValueCents !== ""
+        ? requireCanonicalCents(requestedFinalValueCents, "Valor final")
+        : finalValue !== undefined && finalValue !== ""
+        ? reaisInputToCents(finalValue, "Valor final legado")
         : undefined;
 
     const protocol = await prisma.protocol.update({
@@ -15880,6 +15877,7 @@ type ProposalPaymentScheduleInput = {
   installmentNumber?: number | null;
   totalInstallments?: number | null;
   amount?: number;
+  amountCents?: number;
   dueDate?: string;
 };
 
@@ -15910,9 +15908,17 @@ function normalizeProposalPaymentSchedule(
       );
     }
 
-    const amount = Number(row?.amount);
+    const amountCents = row?.amountCents !== null && row?.amountCents !== undefined
+      ? requireCanonicalCents(
+          row.amountCents,
+          `Valor da etapa financeira ${index + 1}`
+        )
+      : reaisInputToCents(
+          row?.amount,
+          `Valor legado da etapa financeira ${index + 1}`
+        );
 
-    if (!Number.isFinite(amount) || amount <= 0) {
+    if (amountCents <= 0) {
       throw new Error(
         `Valor inválido na etapa financeira ${index + 1}.`
       );
@@ -15968,8 +15974,7 @@ function normalizeProposalPaymentSchedule(
       type,
       installmentNumber,
       totalInstallments,
-      // Fronteira legada da API: row.amount ainda chega em reais.
-      amountCents: assertPrismaIntCents(parseReaisInput(String(amount), "en-US")),
+      amountCents,
       dueDate,
     };
   });
@@ -16604,6 +16609,7 @@ app.post(
         technicalScope,
         paymentMode,
         entryAmount,
+        entryAmountCents: requestedEntryAmountCents,
         installmentQty,
         paymentSchedule,
         executionDays,
@@ -16656,8 +16662,10 @@ app.post(
 const finalEntryAmountCents =
   paymentMode === "A_VISTA"
     ? totalAmountCents
+    : requestedEntryAmountCents !== undefined && requestedEntryAmountCents !== null
+    ? requireCanonicalCents(requestedEntryAmountCents, "Valor da entrada")
     : entryAmount !== undefined && entryAmount !== null && entryAmount !== ""
-    ? reaisInputToCents(entryAmount, "Valor da entrada")
+    ? reaisInputToCents(entryAmount, "Valor legado da entrada")
     : applyRateCents(totalAmountCents, 3000);
 
 if (finalEntryAmountCents < 0) {
@@ -19487,6 +19495,7 @@ app.post(
           charges: createdCharges.map((charge) => ({
             id: charge.id,
             amount: charge.amount,
+            amountCents: charge.amountCents,
             dueDate: charge.dueDate,
             installmentNumber: charge.installmentNumber,
             totalInstallments: charge.totalInstallments,
@@ -19738,8 +19747,13 @@ if (
       }
 
       const documentAmountCents =
-        req.body?.amount !== undefined && req.body?.amount !== ""
-          ? reaisInputToCents(req.body.amount, "Valor do documento fiscal")
+        req.body?.amountCents !== undefined && req.body?.amountCents !== ""
+          ? requireCanonicalCents(
+              Number(req.body.amountCents),
+              "Valor do documento fiscal"
+            )
+          : req.body?.amount !== undefined && req.body?.amount !== ""
+          ? reaisInputToCents(req.body.amount, "Valor legado do documento fiscal")
           : null;
 
       const document = await prisma.fiscalDocument.create({
@@ -19826,6 +19840,7 @@ if (
           moment,
           number: document.number,
           amount: document.amount,
+          amountCents: document.amountCents,
           nextStatus,
         },
       });
@@ -20069,6 +20084,7 @@ await createProposalHistory({
     totalInstallments: charge.totalInstallments,
     txid: updated.txid,
     amount: charge.amount,
+    amountCents: charge.amountCents,
     dueDate: charge.dueDate,
     pixLocation: updated.pixQrCode,
   },
@@ -20374,6 +20390,7 @@ app.post(
           newTxid: updated.txid,
           chargeType: updated.chargeType,
           amount: charge.amount,
+          amountCents: charge.amountCents,
           dueDate: charge.dueDate,
           pixLocation: updated.pixQrCode,
         },
@@ -20547,7 +20564,12 @@ app.post(
                 <p><strong>Protocolo:</strong> ${charge.protocol.protocolNumber}</p>
                 <p><strong>Serviço:</strong> ${charge.protocol.serviceType.name}</p>
                 <p><strong>Descrição:</strong> ${charge.description}</p>
-                <p><strong>Valor:</strong> ${formatMoneyBR(charge.amount)}</p>
+                <p><strong>Valor:</strong> ${formatCurrencyBRFromCents(
+                  requireCanonicalCents(
+                    charge.amountCents,
+                    "Valor da cobrança para e-mail"
+                  )
+                )}</p>
                 <p><strong>Vencimento:</strong> ${new Intl.DateTimeFormat("pt-BR", {
                   timeZone: "America/Belem",
                 }).format(charge.dueDate)}</p>
@@ -20688,13 +20710,11 @@ async function generateReceiptPdfForBillingCharge(charge: any): Promise<{
   doc.pipe(stream);
 
   const paidAt = charge.paidAt || new Date();
-  const paidAmount = legacyReaisFromCents(
-    canonicalCentsOrLegacy(
-      charge.paidAmountCents ?? charge.amountCents,
-      charge.paidAmount ?? charge.amount,
-      "Valor do recibo"
-    ),
-    "decimal-reais"
+  const paidAmountCents = canonicalCentsOrLegacy(
+    charge.paidAmountCents ?? charge.amountCents,
+    charge.paidAmount ?? charge.amount,
+    "LEGACY_CONFIRMED",
+    "Valor do recibo"
   );
 
   const formatDateBR = (value: Date | string | null | undefined) => {
@@ -20773,8 +20793,9 @@ doc
   .text(
     `Recebemos de ${charge.client?.name || "-"}, inscrito(a) no CPF/CNPJ ${
       charge.client?.cpfCnpj || "-"
-    }, a importância de ${formatMoneyBR(
-        paidAmount
+    }, a importância de ${formatCurrencyBRFromCents(
+        paidAmountCents,
+        "Valor do recibo"
       )}, referente ao pagamento da ${getBillingChargeStageLabel(
         charge
       )} vinculada ao contrato ${
@@ -20800,7 +20821,10 @@ doc
     });
 
   doc.text(`Data do pagamento: ${formatDateBR(paidAt)}`, { lineGap: 4 });
-  doc.text(`Valor recebido: ${formatMoneyBR(paidAmount)}`, {
+  doc.text(`Valor recebido: ${formatCurrencyBRFromCents(
+    paidAmountCents,
+    "Valor recebido"
+  )}`, {
     lineGap: 4,
   });
 
@@ -21233,7 +21257,10 @@ app.post(
                         <div style="background:#f8fbf9;border:1px solid #dfe7e2;border-radius:14px;padding:16px;margin:18px 0;">
                           <p><strong>Contrato:</strong> ${charge.contract?.contractNumber || "-"}</p>
                           <p><strong>Serviço:</strong> ${charge.protocol.serviceType?.name || "-"}</p>
-                          <p><strong>Valor pago:</strong> ${formatMoneyBR(paidAmountReais)}</p>
+                          <p><strong>Valor pago:</strong> ${formatCurrencyBRFromCents(
+                            paidAmountCents,
+                            "Valor pago no recibo"
+                          )}</p>
                           <p><strong>Data do pagamento:</strong> ${new Intl.DateTimeFormat("pt-BR", {
                             timeZone: "America/Belem",
                             day: "2-digit",

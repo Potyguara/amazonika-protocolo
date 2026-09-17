@@ -61,3 +61,88 @@ export function reaisFormValueToCents(value: string | number): MoneyCents {
 
   return assertMoneyCents(sign * cents);
 }
+
+function fromBigInt(value: bigint): MoneyCents {
+  const result = Number(value);
+
+  if (!Number.isSafeInteger(result)) {
+    throw new RangeError("Valor em centavos excede o limite seguro.");
+  }
+
+  return assertMoneyCents(result);
+}
+
+function decimalRatio(value: number): [bigint, bigint] {
+  if (!Number.isFinite(value)) {
+    throw new TypeError("Quantidade deve ser finita.");
+  }
+
+  const [mantissa, exponent = "0"] = String(value).toLowerCase().split("e");
+  const [whole, fraction = ""] = mantissa.split(".");
+  const numerator = BigInt(whole + fraction);
+  const scale = fraction.length - Number(exponent);
+
+  return scale >= 0
+    ? [numerator, 10n ** BigInt(scale)]
+    : [numerator * 10n ** BigInt(-scale), 1n];
+}
+
+function roundRatioCents(numerator: bigint, denominator: bigint): MoneyCents {
+  const absolute = numerator < 0n ? -numerator : numerator;
+  const quotient = absolute / denominator;
+  const rounded = quotient +
+    (2n * (absolute % denominator) >= denominator ? 1n : 0n);
+
+  return fromBigInt(numerator < 0n ? -rounded : rounded);
+}
+
+export function multiplyMoneyCents(
+  unitAmountCents: unknown,
+  quantity: number
+): MoneyCents {
+  const cents = assertMoneyCents(unitAmountCents);
+  const [numerator, denominator] = decimalRatio(quantity);
+
+  if (numerator <= 0n) {
+    throw new RangeError("Quantidade deve ser positiva.");
+  }
+
+  return roundRatioCents(BigInt(cents) * numerator, denominator);
+}
+
+export function applyRateCents(
+  cents: unknown,
+  basisPoints: number
+): MoneyCents {
+  const value = assertMoneyCents(cents);
+
+  if (!Number.isSafeInteger(basisPoints) || basisPoints < 0) {
+    throw new RangeError("Taxa deve usar basis points inteiros não negativos.");
+  }
+
+  return roundRatioCents(BigInt(value) * BigInt(basisPoints), 10000n);
+}
+
+export function distributeMoneyCents(
+  totalCents: unknown,
+  quantity: number
+): MoneyCents[] {
+  const total = assertMoneyCents(totalCents);
+
+  if (!Number.isSafeInteger(quantity) || quantity <= 0) {
+    throw new RangeError("Quantidade de parcelas deve ser um inteiro positivo.");
+  }
+
+  if (total < quantity) {
+    throw new RangeError(
+      "O total não permite parcelas positivas de pelo menos um centavo."
+    );
+  }
+
+  const base = Math.floor(total / quantity);
+  const remainder = total - base * quantity;
+
+  return Array.from({ length: quantity }, (_, index) =>
+    assertMoneyCents(base + (index < remainder ? 1 : 0))
+  );
+}

@@ -173,12 +173,15 @@ export function moneyWriteFromReais(
 export function canonicalCentsOrLegacy(
   canonicalCents: unknown,
   legacyReais: unknown,
+  legacyClassification: LegacyMoneyClassification,
   label = "Valor",
 ) {
-  if (canonicalCents !== null && canonicalCents !== undefined) {
-    return assertPrismaIntCents(canonicalCents);
-  }
-  return reaisInputToCents(legacyReais, `${label} legado`);
+  return resolveOperationalMoney({
+    canonicalCents,
+    legacyReais,
+    legacyClassification,
+    label,
+  }).amountCents;
 }
 
 export function normalizeFinancialPlanMoney(input: {
@@ -211,11 +214,34 @@ export function normalizeFinancialPlanMoney(input: {
   return { totalAmountCents, entryAmountCents, installmentAmountsCents };
 }
 
-export function proposalItemMoney(quantity: number, unitAmountReais: unknown) {
+export function proposalItemMoneyFromLegacyReais(
+  quantity: number,
+  unitAmountReais: unknown,
+) {
   const unitAmountCents = reaisInputToCents(unitAmountReais, "Valor unitário");
   const totalAmountCents = assertPrismaIntCents(
     multiplyCents(unitAmountCents, quantity),
   );
+  return {
+    unitAmountCents,
+    totalAmountCents,
+    unitAmount: legacyReaisFromCents(unitAmountCents, "integer-reais"),
+    totalAmount: legacyReaisFromCents(totalAmountCents, "integer-reais"),
+  };
+}
+
+export function proposalItemMoneyFromCents(
+  quantity: number,
+  unitAmountCentsValue: unknown,
+) {
+  const unitAmountCents = requireCanonicalCents(
+    unitAmountCentsValue,
+    "Valor unitário do item",
+  );
+  const totalAmountCents = assertPrismaIntCents(
+    multiplyCents(unitAmountCents, quantity),
+  );
+
   return {
     unitAmountCents,
     totalAmountCents,

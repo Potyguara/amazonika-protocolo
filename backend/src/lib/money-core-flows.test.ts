@@ -10,7 +10,8 @@ import {
   legacyReaisFromCents,
   moneyWriteFromReais,
   normalizeFinancialPlanMoney,
-  proposalItemMoney,
+  proposalItemMoneyFromCents,
+  proposalItemMoneyFromLegacyReais,
   proposalToContractMoney,
   proposalToProtocolMoney,
   reaisInputToCents,
@@ -144,9 +145,10 @@ test("legacy mirrors are derived from canonical cents and never become authorita
     amount: 123.45,
   });
   assert.equal(legacyReaisFromCents(150, "integer-reais"), 2);
-  assert.equal(canonicalCentsOrLegacy(150, 999), 150);
-  assert.equal(canonicalCentsOrLegacy(null, "1.50"), 150);
-  assert.throws(() => canonicalCentsOrLegacy(1.5, 1.5));
+  assert.equal(canonicalCentsOrLegacy(150, 999, "AMBIGUOUS"), 150);
+  assert.equal(canonicalCentsOrLegacy(null, "1.50", "LEGACY_CONFIRMED"), 150);
+  assert.throws(() => canonicalCentsOrLegacy(null, "1.50", "AMBIGUOUS"));
+  assert.throws(() => canonicalCentsOrLegacy(1.5, 1.5, "LEGACY_CONFIRMED"));
 });
 
 test("financial plans A-D conserve their exact canonical totals", () => {
@@ -173,7 +175,7 @@ test("financial plans A-D conserve their exact canonical totals", () => {
 });
 
 test("proposal items and BB serialization stay in cents internally", () => {
-  assert.deepEqual(proposalItemMoney(2, "123.45"), {
+  assert.deepEqual(proposalItemMoneyFromLegacyReais(2, "123.45"), {
     unitAmountCents: 12345,
     totalAmountCents: 24690,
     unitAmount: 123,
@@ -183,6 +185,16 @@ test("proposal items and BB serialization stay in cents internally", () => {
   assert.equal(centsToBbValue(assertMoneyCents(150)), "1.50");
   assert.equal(centsToBbValue(assertMoneyCents(12345)), "123.45");
   assert.equal(centsToBbValue(assertMoneyCents(123456)), "1234.56");
+});
+
+test("2C2-C2 ProposalItem derives totals directly from canonical cents", () => {
+  assert.deepEqual(proposalItemMoneyFromCents(1, 12345), {
+    unitAmountCents: 12345,
+    totalAmountCents: 12345,
+    unitAmount: 123,
+    totalAmount: 123,
+  });
+  assert.throws(() => proposalItemMoneyFromCents(1, 1.5));
 });
 
 test("Proposal copies canonical cents exactly to Contract and Protocol", () => {

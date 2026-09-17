@@ -11,8 +11,11 @@ import PartnerReferralPanel from "./components/partners/PartnerReferralPanel";
 import PartnersFinanceTab from "./components/finance/PartnersFinanceTab";
 import { api, setAuth, clearAuth } from "./services/api";
 import {
+  applyRateCents,
   centsToReaisFormValue,
+  distributeMoneyCents,
   formatMoneyCents,
+  multiplyMoneyCents,
   reaisFormValueToCents,
 } from "./lib/money";
 import CatalogPage from "./pages/CatalogPage";
@@ -157,6 +160,9 @@ function PublicBillingChargePage() {
 
   const isPaid = charge.status === "PAGA";
   const hasPix = Boolean(charge.pixCopyPaste);
+  const publicChargeDisplayCents = isPaid
+    ? charge.paidAmountCents
+    : charge.amountCents;
 
   return (
     <main className="public-billing-page">
@@ -195,8 +201,8 @@ function PublicBillingChargePage() {
 
             <div className="billing-public-kpis">
               <div>
-                <span>Valor</span>
-                <strong>{money(charge.amount)}</strong>
+                <span>{isPaid ? "Valor pago" : "Valor"}</span>
+                <strong>{formatOptionalMoneyCents(publicChargeDisplayCents)}</strong>
               </div>
 
               <div>
@@ -303,6 +309,9 @@ function PublicBillingChargePage() {
                       <small>
                         {document.number ? `Nº ${document.number} · ` : ""}
                         {formatDateTime(document.createdAt)}
+                        {document.amountCents != null
+                          ? ` · ${formatMoneyCents(document.amountCents)}`
+                          : ""}
                       </small>
                     </div>
 
@@ -360,6 +369,8 @@ type BackendProposalItem = {
   quantity: number;
   unitAmount: number;
   totalAmount: number;
+  unitAmountCents?: number | null;
+  totalAmountCents?: number | null;
   sortOrder: number;
 };
 
@@ -394,6 +405,9 @@ type BackendProposal = {
   entryAmount: number;
   installmentQty?: number | null;
   installmentAmount?: number | null;
+  totalAmountCents?: number | null;
+  entryAmountCents?: number | null;
+  installmentAmountCents?: number | null;
 
   executionDays?: number | null;
   validUntil?: string | null;
@@ -541,6 +555,8 @@ type BackendProtocol = {
   priority?: string | null;
   estimatedValue?: number | null;
   finalValue?: number | null;
+  estimatedValueCents?: number | null;
+  finalValueCents?: number | null;
   deadlineDate?: string | null;
   createdAt: string;
   updatedAt?: string;
@@ -798,6 +814,8 @@ type BackendContract = {
 
   contractValue?: number | null;
   entryAmount?: number | null;
+  contractValueCents?: number | null;
+  entryAmountCents?: number | null;
   paymentMode?: string | null;
 
   title?: string | null;
@@ -947,6 +965,7 @@ type BackendFiscalDocument = {
   number?: string | null;
   issuedAt?: string | null;
   amount?: number | null;
+  amountCents?: number | null;
 
   fileName: string;
   filePath: string;
@@ -1287,22 +1306,6 @@ function formatTime(value?: string | null) {
     timeZone: "America/Belem",
   }).format(new Date(value));
 }
-function money(value: number | string | null | undefined) {
-  const numericValue = Number(value || 0);
-
-  if (!Number.isFinite(numericValue)) {
-    return new Intl.NumberFormat("pt-BR", {
-      style: "currency",
-      currency: "BRL",
-    }).format(0);
-  }
-
-  return new Intl.NumberFormat("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  }).format(numericValue);
-}
-
 function formatOptionalMoneyCents(
   value: number | null | undefined
 ) {
@@ -1982,12 +1985,12 @@ function PublicContractPage() {
               <div className="contract-values-grid">
 <div>
   <span>Valor total</span>
-  <strong>{money(contract.contractValue || 0)}</strong>
+  <strong>{formatOptionalMoneyCents(contract.contractValueCents)}</strong>
 </div>
 
 <div>
   <span>Entrada</span>
-  <strong>{money(contract.entryAmount || 0)}</strong>
+  <strong>{formatOptionalMoneyCents(contract.entryAmountCents)}</strong>
 </div>
 
                 <div>
@@ -2071,9 +2074,6 @@ function PublicContractPage() {
                                       : ""
                                   }`;
 
-                            const amount =
-                              Number(item.amountCents || 0) / 100;
-
                             const dueDate = new Date(item.dueDate);
 
                             return (
@@ -2094,7 +2094,7 @@ function PublicContractPage() {
                                     borderBottom: "1px solid #edf1ee",
                                   }}
                                 >
-                                  {money(amount)}
+                                  {formatMoneyCents(item.amountCents)}
                                 </td>
 
                                 <td
@@ -2133,11 +2133,10 @@ function PublicContractPage() {
                                 fontWeight: 700,
                               }}
                             >
-                              {money(
+                              {formatMoneyCents(
                                 contract.paymentSchedule.reduce(
                                   (sum, item) =>
-                                    sum +
-                                    Number(item.amountCents || 0) / 100,
+                                    sum + item.amountCents,
                                   0
                                 )
                               )}
@@ -4971,7 +4970,12 @@ function ProposalPanel({
       serviceName: protocol.serviceType?.name || "",
       description: protocol.description || "",
       quantity: "1",
-      unitAmount: String(protocol.estimatedValue || protocol.finalValue || ""),
+      unitAmount:
+        protocol.finalValueCents != null
+          ? centsToReaisFormValue(protocol.finalValueCents)
+          : protocol.estimatedValueCents != null
+          ? centsToReaisFormValue(protocol.estimatedValueCents)
+          : "",
     },
   ]);
 
@@ -5015,7 +5019,12 @@ function ProposalPanel({
         serviceName: protocol.serviceType?.name || "",
         description: protocol.description || "",
         quantity: "1",
-        unitAmount: String(protocol.estimatedValue || protocol.finalValue || ""),
+        unitAmount:
+          protocol.finalValueCents != null
+            ? centsToReaisFormValue(protocol.finalValueCents)
+            : protocol.estimatedValueCents != null
+            ? centsToReaisFormValue(protocol.estimatedValueCents)
+            : "",
       },
     ]);
   }
@@ -5026,6 +5035,20 @@ function ProposalPanel({
   }
 
   function startEditProposal(proposal: BackendProposal) {
+    if (
+      proposal.totalAmountCents == null ||
+      proposal.entryAmountCents == null ||
+      proposal.items.some(
+        (item) => item.unitAmountCents == null || item.totalAmountCents == null
+      )
+    ) {
+      setSuccess("");
+      setError(
+        "Esta proposta possui valores monetários sem classificação canônica e não pode ser editada nesta tela."
+      );
+      return;
+    }
+
     setEditingProposal(proposal);
     setShowForm(true);
 
@@ -5033,7 +5056,7 @@ function ProposalPanel({
     setDescription(proposal.description || "");
     setTechnicalScope(proposal.technicalScope || "");
     setPaymentMode(proposal.paymentMode || "ENTRADA_PARCELAS");
-    setEntryAmount(String(proposal.entryAmount || ""));
+    setEntryAmount(centsToReaisFormValue(proposal.entryAmountCents));
     setInstallmentQty(
       proposal.installmentQty !== null && proposal.installmentQty !== undefined
         ? String(proposal.installmentQty)
@@ -5049,7 +5072,7 @@ function ProposalPanel({
           row.totalInstallments !== undefined
             ? Number(row.totalInstallments)
             : null,
-        amount: String(Number(row.amountCents || 0) / 100),
+        amount: centsToReaisFormValue(row.amountCents),
         dueDate: row.dueDate ? row.dueDate.slice(0, 10) : today,
       }))
     );
@@ -5068,7 +5091,7 @@ function ProposalPanel({
         serviceName: item.serviceName,
         description: item.description || "",
         quantity: String(item.quantity || 1),
-        unitAmount: String(item.unitAmount || 0),
+        unitAmount: centsToReaisFormValue(item.unitAmountCents as number),
       }))
     );
   }
@@ -5105,17 +5128,6 @@ function ProposalPanel({
     const base = new Date(`${baseDate}T12:00:00.000Z`);
     base.setUTCDate(base.getUTCDate() + days);
     return base.toISOString().slice(0, 10);
-  }
-
-  function distributeCents(totalCents: number, quantity: number) {
-    if (quantity <= 0) return [];
-
-    const base = Math.floor(totalCents / quantity);
-    const remainder = totalCents - base * quantity;
-
-    return Array.from({ length: quantity }, (_, index) =>
-      base + (index < remainder ? 1 : 0)
-    );
   }
 
   function renumberPaymentSchedule(
@@ -5191,27 +5203,32 @@ function ProposalPanel({
     });
   }
 
-  const proposalTotal = items.reduce((sum, item) => {
-    const quantity = Number(item.quantity || 1);
-    const unitAmount = Number(item.unitAmount || 0);
-
-    if (Number.isNaN(quantity) || Number.isNaN(unitAmount)) {
-      return sum;
+  function proposalFormItemTotalCents(item: ProposalFormItem) {
+    try {
+      return multiplyMoneyCents(
+        reaisFormValueToCents(item.unitAmount),
+        Number(item.quantity)
+      );
+    } catch {
+      return null;
     }
+  }
 
-    return sum + quantity * unitAmount;
-  }, 0);
-
-  const proposalTotalCents =
-    Math.round(proposalTotal * 100);
+  const proposalItemTotalsCents = items.map(proposalFormItemTotalCents);
+  const proposalTotalCents = proposalItemTotalsCents.reduce(
+    (sum, amountCents) => sum + (amountCents ?? 0),
+    0
+  );
 
   const paymentScheduleTotalCents =
     paymentSchedule.reduce(
-      (sum, row) =>
-        sum +
-        Math.round(
-          Number(row.amount || 0) * 100
-        ),
+      (sum, row) => {
+        try {
+          return sum + reaisFormValueToCents(row.amount);
+        } catch {
+          return sum;
+        }
+      },
       0
     );
 
@@ -5223,8 +5240,13 @@ function ProposalPanel({
     paymentSchedule.some(
       (row) =>
         !row.dueDate ||
-        !Number.isFinite(Number(row.amount)) ||
-        Number(row.amount) <= 0
+        (() => {
+          try {
+            return reaisFormValueToCents(row.amount) <= 0;
+          } catch {
+            return true;
+          }
+        })()
     );
 
   const paymentScheduleEntries =
@@ -5258,6 +5280,7 @@ function ProposalPanel({
 
   const hasInvalidProposalValues =
     proposalTotalCents <= 0 ||
+    proposalItemTotalsCents.some((value) => value == null) ||
     paymentSchedule.length === 0 ||
     paymentScheduleHasInvalidRow ||
     paymentScheduleStructureInvalid ||
@@ -5274,7 +5297,7 @@ function ProposalPanel({
     setError("");
 
     if (paymentMode === "A_VISTA") {
-      setEntryAmount(String(proposalTotal));
+      setEntryAmount(centsToReaisFormValue(proposalTotalCents));
       setInstallmentQty("");
 
       setPaymentSchedule([
@@ -5282,7 +5305,7 @@ function ProposalPanel({
           type: "ENTRADA",
           installmentNumber: 0,
           totalInstallments: null,
-          amount: (proposalTotalCents / 100).toFixed(2),
+          amount: centsToReaisFormValue(proposalTotalCents),
           dueDate: today,
         },
       ]);
@@ -5296,8 +5319,15 @@ function ProposalPanel({
     );
 
     if (paymentMode === "PARCELADO") {
+      if (proposalTotalCents < quantity) {
+        setError(
+          "O valor total não permite parcelas positivas de pelo menos um centavo."
+        );
+        return;
+      }
+
       const values =
-        distributeCents(
+        distributeMoneyCents(
           proposalTotalCents,
           quantity
         );
@@ -5309,7 +5339,7 @@ function ProposalPanel({
           type: "PARCELA" as const,
           installmentNumber: index + 1,
           totalInstallments: quantity,
-          amount: (amountCents / 100).toFixed(2),
+          amount: centsToReaisFormValue(amountCents),
           dueDate: addDaysToIsoDate(
             today,
             30 * (index + 1)
@@ -5320,16 +5350,16 @@ function ProposalPanel({
       return;
     }
 
-    const requestedEntry =
-      Number(entryAmount);
+    let entryCents: number;
 
-    let entryCents =
-      Number.isFinite(requestedEntry) &&
-      requestedEntry > 0
-        ? Math.round(requestedEntry * 100)
-        : Math.round(
-            proposalTotalCents * 0.3
-          );
+    try {
+      const requestedEntryCents = reaisFormValueToCents(entryAmount);
+      entryCents = requestedEntryCents > 0
+        ? requestedEntryCents
+        : applyRateCents(proposalTotalCents, 3000);
+    } catch {
+      entryCents = applyRateCents(proposalTotalCents, 3000);
+    }
 
     if (entryCents >= proposalTotalCents) {
       entryCents =
@@ -5343,14 +5373,21 @@ function ProposalPanel({
     const remainingCents =
       proposalTotalCents - entryCents;
 
+    if (remainingCents < quantity) {
+      setError(
+        "O saldo não permite parcelas positivas de pelo menos um centavo."
+      );
+      return;
+    }
+
     const installments =
-      distributeCents(
+      distributeMoneyCents(
         remainingCents,
         quantity
       );
 
     setEntryAmount(
-      (entryCents / 100).toFixed(2)
+      centsToReaisFormValue(entryCents)
     );
 
     setInstallmentQty(
@@ -5362,8 +5399,7 @@ function ProposalPanel({
         type: "ENTRADA",
         installmentNumber: 0,
         totalInstallments: null,
-        amount:
-          (entryCents / 100).toFixed(2),
+        amount: centsToReaisFormValue(entryCents),
         dueDate: today,
       },
       ...installments.map(
@@ -5373,8 +5409,7 @@ function ProposalPanel({
             index + 1,
           totalInstallments:
             quantity,
-          amount:
-            (amountCents / 100).toFixed(2),
+          amount: centsToReaisFormValue(amountCents),
           dueDate:
             addDaysToIsoDate(
               today,
@@ -5397,29 +5432,40 @@ function ProposalPanel({
 
       const validItems = items.filter(
         (item) =>
-          item.serviceName.trim() &&
-          Number(item.quantity || 1) > 0 &&
-          Number(item.unitAmount || 0) > 0
+          item.serviceName.trim()
       );
 
       if (validItems.length === 0) {
         throw new Error("Inclua pelo menos um item com descrição e valor.");
       }
 
-      const totalToValidate = validItems.reduce((sum, item) => {
-        const quantity = Number(item.quantity || 1);
-        const unitAmount = Number(item.unitAmount || 0);
-        return sum + quantity * unitAmount;
-      }, 0);
+      const canonicalItems = validItems.map((item) => {
+        const quantity = Number(item.quantity);
+        const unitAmountCents = reaisFormValueToCents(item.unitAmount);
+        const totalAmountCents = multiplyMoneyCents(unitAmountCents, quantity);
 
-      if (totalToValidate <= 0) {
+        if (unitAmountCents <= 0 || totalAmountCents <= 0) {
+          throw new Error("Todos os itens precisam possuir quantidade e valor positivos.");
+        }
+
+        return {
+          item,
+          quantity,
+          unitAmountCents,
+          totalAmountCents,
+        };
+      });
+
+      const totalToValidateCents = canonicalItems.reduce(
+        (sum, item) => sum + item.totalAmountCents,
+        0
+      );
+
+      if (totalToValidateCents <= 0) {
         throw new Error(
           "O valor total da proposta deve ser maior que zero."
         );
       }
-
-      const totalToValidateCents =
-        Math.round(totalToValidate * 100);
 
       const scheduleToValidate =
         renumberPaymentSchedule(
@@ -5434,11 +5480,7 @@ function ProposalPanel({
 
       const scheduleTotalCents =
         scheduleToValidate.reduce(
-          (sum, row) =>
-            sum +
-            Math.round(
-              Number(row.amount || 0) * 100
-            ),
+          (sum, row) => sum + reaisFormValueToCents(row.amount),
           0
         );
 
@@ -5446,10 +5488,7 @@ function ProposalPanel({
         scheduleToValidate.some(
           (row) =>
             !row.dueDate ||
-            !Number.isFinite(
-              Number(row.amount)
-            ) ||
-            Number(row.amount) <= 0
+            reaisFormValueToCents(row.amount) <= 0
         )
       ) {
         throw new Error(
@@ -5462,8 +5501,8 @@ function ProposalPanel({
         totalToValidateCents
       ) {
         throw new Error(
-          `O cronograma financeiro precisa fechar exatamente em ${money(
-            totalToValidate
+          `O cronograma financeiro precisa fechar exatamente em ${formatMoneyCents(
+            totalToValidateCents
           )}.`
         );
       }
@@ -5487,9 +5526,9 @@ function ProposalPanel({
         technicalScope: technicalScope || null,
         paymentMode,
 
-        entryAmount:
+        entryAmountCents:
           scheduleEntry
-            ? Number(scheduleEntry.amount)
+            ? reaisFormValueToCents(scheduleEntry.amount)
             : 0,
 
         installmentQty:
@@ -5505,8 +5544,7 @@ function ProposalPanel({
                 row.installmentNumber,
               totalInstallments:
                 row.totalInstallments,
-              amount:
-                Number(row.amount),
+              amountCents: reaisFormValueToCents(row.amount),
               dueDate:
                 row.dueDate,
             })
@@ -5516,11 +5554,11 @@ function ProposalPanel({
         validUntil: validUntil || null,
         clientMessage: clientMessage || null,
         internalNotes: internalNotes || null,
-        items: validItems.map((item) => ({
+        items: canonicalItems.map(({ item, quantity, unitAmountCents }) => ({
           serviceName: item.serviceName.trim(),
           description: item.description || null,
-          quantity: Number(item.quantity || 1),
-          unitAmount: Number(item.unitAmount || 0),
+          quantity,
+          unitAmountCents,
         })),
       };
 
@@ -5732,9 +5770,7 @@ return (
               <div className="proposal-item-footer">
                 <strong>
                   Total do item:{" "}
-                  {money(
-                    Number(item.quantity || 1) * Number(item.unitAmount || 0)
-                  )}
+                  {formatOptionalMoneyCents(proposalItemTotalsCents[index])}
                 </strong>
 
                 {items.length > 1 && (
@@ -5807,7 +5843,7 @@ return (
               step="0.01"
               value={
                 paymentMode === "A_VISTA"
-                  ? String(proposalTotal)
+                  ? centsToReaisFormValue(proposalTotalCents)
                   : entryAmount
               }
               onChange={(event) =>
@@ -5847,7 +5883,7 @@ return (
             </span>
 
             <strong>
-              {money(proposalTotal)}
+              {formatMoneyCents(proposalTotalCents)}
             </strong>
 
             <small>
@@ -5982,20 +6018,16 @@ return (
                 </span>
 
                 <strong>
-                  {money(
-                    paymentScheduleTotalCents /
-                      100
-                  )}
+                  {formatMoneyCents(paymentScheduleTotalCents)}
                 </strong>
 
                 <small>
                   Total da proposta:{" "}
-                  {money(proposalTotal)}
+                  {formatMoneyCents(proposalTotalCents)}
                   {" · "}
                   Diferença:{" "}
-                  {money(
-                    paymentScheduleDifferenceCents /
-                      100
+                  {formatMoneyCents(
+                    paymentScheduleDifferenceCents
                   )}
                 </small>
               </div>
@@ -6093,8 +6125,8 @@ return (
                   </span>
                 </td>
 
-                <td>{money(proposal.totalAmount)}</td>
-                <td>{money(proposal.entryAmount)}</td>
+                <td>{formatOptionalMoneyCents(proposal.totalAmountCents)}</td>
+                <td>{formatOptionalMoneyCents(proposal.entryAmountCents)}</td>
                 <td>{paymentModeLabel(proposal.paymentMode)}</td>
                 <td>
                   {proposal.validUntil ? formatDate(proposal.validUntil) : "-"}
@@ -6450,8 +6482,10 @@ const hasAcceptedProposalPendingContract = Boolean(acceptedProposal);
           <strong>{acceptedProposal.proposalNumber}</strong>
           <small>
             {proposalStatusLabel(acceptedProposal.status)} ·{" "}
-            Valor total: {money(acceptedProposal.totalAmount)} · Entrada:{" "}
-            {money(acceptedProposal.entryAmount)}
+            Valor total: {formatOptionalMoneyCents(
+              acceptedProposal.totalAmountCents
+            )} · Entrada:{" "}
+            {formatOptionalMoneyCents(acceptedProposal.entryAmountCents)}
           </small>
         </div>
       )}
@@ -6493,8 +6527,8 @@ const hasAcceptedProposalPendingContract = Boolean(acceptedProposal);
                     </span>
                   </td>
 
-                  <td>{money(contract.contractValue || 0)}</td>
-                  <td>{money(contract.entryAmount || 0)}</td>
+                  <td>{formatOptionalMoneyCents(contract.contractValueCents)}</td>
+                  <td>{formatOptionalMoneyCents(contract.entryAmountCents)}</td>
                   <td>{formatDateTime(contract.sentToClientAt)}</td>
                   <td>{formatDateTime(contract.signedAt)}</td>
 
@@ -6704,9 +6738,12 @@ const installmentCharges = currentContractCharges.filter(
 
 const hasInstallmentCharges = installmentCharges.length > 0;
 
-const contractTotalValue = Number(signedContract?.contractValue || 0);
-const contractEntryValue = Number(signedContract?.entryAmount || 0);
-const contractBalanceValue = Math.max(0, contractTotalValue - contractEntryValue);
+const contractTotalCents = signedContract?.contractValueCents ?? null;
+const contractEntryCents = signedContract?.entryAmountCents ?? null;
+const contractBalanceCents =
+  contractTotalCents == null || contractEntryCents == null
+    ? null
+    : Math.max(0, contractTotalCents - contractEntryCents);
 
 const proposalInstallmentQty =
   signedContract?.proposal?.installmentQty !== null &&
@@ -6868,7 +6905,7 @@ const proposalInstallmentQty =
     return;
   }
 
-  if (!contractBalanceValue || contractBalanceValue <= 0) {
+  if (contractBalanceCents == null || contractBalanceCents <= 0) {
     setError("Não há saldo restante para geração de parcelas.");
     return;
   }
@@ -6940,7 +6977,9 @@ const proposalInstallmentQty =
         moment: documentMoment,
         number: documentNumber || undefined,
         issuedAt: documentIssuedAt || undefined,
-        amount: documentAmount ? Number(documentAmount) : undefined,
+        amountCents: documentAmount
+          ? reaisFormValueToCents(documentAmount)
+          : undefined,
         notes: documentNotes || undefined,
       });
 
@@ -7213,7 +7252,7 @@ const confirmed = window.confirm(
 
               <div>
                 <small>Valor</small>
-                <div>{money(Number(item.amountCents || 0) / 100)}</div>
+                <div>{formatMoneyCents(item.amountCents)}</div>
               </div>
 
               <div>
@@ -7618,7 +7657,7 @@ const confirmed = window.confirm(
                   </div>
 
                   <div>
-                    <strong>{money(charge.amount)}</strong>
+                    <strong>{formatOptionalMoneyCents(charge.amountCents)}</strong>
                     <span
                       className={`badge billing-${billingStatusClass(
                         charge.status
@@ -7825,6 +7864,9 @@ const confirmed = window.confirm(
                               ? "Pré-cobrança"
                               : "Pós-pagamento"}{" "}
                             · {formatDateTime(document.createdAt)}
+                            {document.amountCents != null
+                              ? ` · ${formatMoneyCents(document.amountCents)}`
+                              : ""}
                           </small>
                         </div>
 
@@ -8084,7 +8126,7 @@ function BillingHistoryPanel({
                       </span>
                     </td>
 
-                    <td>{money(charge.amount)}</td>
+                    <td>{formatOptionalMoneyCents(charge.amountCents)}</td>
 
                     <td>{formatDate(charge.dueDate)}</td>
 
@@ -8421,9 +8463,9 @@ function PublicProposalPage() {
                     </td>
                     <td>{item.description || "-"}</td>
                     <td>{item.quantity}</td>
-                    <td>{money(item.unitAmount)}</td>
+                    <td>{formatOptionalMoneyCents(item.unitAmountCents)}</td>
                     <td>
-                      <strong>{money(item.totalAmount)}</strong>
+                      <strong>{formatOptionalMoneyCents(item.totalAmountCents)}</strong>
                     </td>
                   </tr>
                 ))}
@@ -8435,21 +8477,23 @@ function PublicProposalPage() {
         <section className="public-proposal-payment">
           <div>
             <span>Valor total</span>
-            <strong>{money(proposal.totalAmount)}</strong>
+            <strong>{formatOptionalMoneyCents(proposal.totalAmountCents)}</strong>
           </div>
 
           <div>
             <span>Entrada</span>
-            <strong>{money(proposal.entryAmount)}</strong>
+            <strong>{formatOptionalMoneyCents(proposal.entryAmountCents)}</strong>
           </div>
 
           <div>
             <span>Parcelas</span>
             <strong>
               {proposal.installmentQty
-                ? `${proposal.installmentQty}x de ${money(
-                    proposal.installmentAmount || 0
-                  )}`
+                ? proposal.installmentAmountCents == null
+                  ? `${proposal.installmentQty} parcelas conforme cronograma`
+                  : `${proposal.installmentQty}x de ${formatMoneyCents(
+                      proposal.installmentAmountCents
+                    )}`
                 : "-"}
             </strong>
           </div>
@@ -11410,35 +11454,9 @@ function FinancePage() {
 
     setError("");
 
-    const baseCents =
-      Math.floor(
-        totalCents /
-          quantity
-      );
-
-    const remainder =
-      totalCents -
-      baseCents *
-        quantity;
-
-    const amounts =
-      Array.from(
-        {
-          length: quantity,
-        },
-        (_, index) => {
-          const cents =
-            baseCents +
-            (
-              index ===
-              quantity - 1
-                ? remainder
-                : 0
-            );
-
-          return centsToReaisFormValue(cents);
-        }
-      );
+    const amounts = distributeMoneyCents(totalCents, quantity).map(
+      centsToReaisFormValue
+    );
 
     setTransactionInstallmentAmounts(
       amounts
