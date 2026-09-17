@@ -1,3 +1,11 @@
+import {
+  reaisFormValueToCents as currencyInputToCents,
+  centsToReaisFormValue,
+  distributeMoneyCents,
+  multiplyMoneyCents,
+  moneyPreviewText,
+  formatOptionalMoneyCents as money,
+} from "../lib/money";
 import { useEffect, useState } from "react";
 import {
   Link,
@@ -208,14 +216,6 @@ type ProposalItem = {
 
   sortOrder: number;
 };
-
-
-function money(value?: number | null) {
-  return (Number(value || 0) / 100).toLocaleString("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  });
-}
 
 function apiPublicFileUrl(
   filePath?: string | null
@@ -506,7 +506,7 @@ export default function StandaloneProposalEditorPage() {
 
     setCommercialEntryAmount(
       centsToInput(
-        current.entryAmount || 0
+        current.entryAmount
       )
     );
 
@@ -520,13 +520,13 @@ export default function StandaloneProposalEditorPage() {
 
     setCommercialDiscount(
       centsToInput(
-        current.discountAmount || 0
+        current.discountAmount
       )
     );
 
     setCommercialAddition(
       centsToInput(
-        current.additionAmount || 0
+        current.additionAmount
       )
     );
 
@@ -597,7 +597,7 @@ export default function StandaloneProposalEditorPage() {
     return mode ? labels[mode] : "-";
   }
 
-  function numberFromInput(value: string) {
+  function quantityFromInput(value: string) {
     const normalized = value
       .trim()
       .replace(/\./g, "")
@@ -610,22 +610,12 @@ export default function StandaloneProposalEditorPage() {
       : 0;
   }
 
-  function currencyInputToCents(value: string) {
-    if (!value.trim()) {
-      return 0;
-    }
-
-    return Math.round(
-      numberFromInput(value) * 100
-    );
-  }
-
   function centsToInput(value?: number | null) {
     if (value === null || value === undefined) {
       return "";
     }
 
-    return (value / 100).toFixed(2).replace(".", ",");
+    return centsToReaisFormValue(value).replace(".", ",");
   }
 
   function resolvedCatalogUnitAmount(
@@ -661,7 +651,7 @@ export default function StandaloneProposalEditorPage() {
     const quantity =
       Math.max(
         0,
-        numberFromInput(catalogQuantity)
+        quantityFromInput(catalogQuantity)
       );
 
     let unitAmount =
@@ -671,7 +661,7 @@ export default function StandaloneProposalEditorPage() {
         : resolvedCatalogUnitAmount(
             selectedCatalogService,
             quantity
-          ) ?? 0;
+          );
 
     if (
       selectedCatalogService.allowManualPrice &&
@@ -681,8 +671,10 @@ export default function StandaloneProposalEditorPage() {
         currencyInputToCents(catalogUnitAmount);
     }
 
-    let total =
-      Math.round(quantity * unitAmount);
+    if (unitAmount == null) throw new TypeError("Valor do serviço não informado.");
+
+    let total: number =
+      multiplyMoneyCents(unitAmount, quantity);
 
     if (
       selectedCatalogService.minimumAmount &&
@@ -761,63 +753,63 @@ export default function StandaloneProposalEditorPage() {
       return;
     }
 
-    const quantity =
-      numberFromInput(catalogQuantity);
+    try {
+      const quantity =
+        quantityFromInput(catalogQuantity);
 
-    if (quantity <= 0) {
-      setError(
-        "Informe uma quantidade maior que zero."
-      );
-      return;
-    }
-
-    const body: {
-      catalogServiceId: number;
-      quantity: number;
-      unitAmount?: number;
-      description?: string | null;
-    } = {
-      catalogServiceId:
-        selectedCatalogService.id,
-
-      quantity,
-
-      description:
-        catalogDescription.trim() || null,
-    };
-
-    if (
-      selectedCatalogService.pricingMode ===
-      "SOB_CONSULTA"
-    ) {
-      const amount =
-        currencyInputToCents(
-          catalogUnitAmount
-        );
-
-      if (amount <= 0) {
+      if (quantity <= 0) {
         setError(
-          "Informe o valor negociado para este serviço."
+          "Informe uma quantidade maior que zero."
         );
         return;
       }
 
-      body.unitAmount = amount;
-    } else if (
-      selectedCatalogService.allowManualPrice &&
-      catalogUnitAmount.trim() &&
-      currencyInputToCents(
-        catalogUnitAmount
-      ) !==
-        (selectedCatalogService.baseAmount ?? 0)
-    ) {
-      body.unitAmount =
+      const body: {
+        catalogServiceId: number;
+        quantity: number;
+        unitAmount?: number;
+        description?: string | null;
+      } = {
+        catalogServiceId:
+          selectedCatalogService.id,
+
+        quantity,
+
+        description:
+          catalogDescription.trim() || null,
+      };
+
+      if (
+        selectedCatalogService.pricingMode ===
+        "SOB_CONSULTA"
+      ) {
+        const amount =
+          currencyInputToCents(
+            catalogUnitAmount
+          );
+
+        if (amount <= 0) {
+          setError(
+            "Informe o valor negociado para este serviço."
+          );
+          return;
+        }
+
+        body.unitAmount = amount;
+      } else if (
+        selectedCatalogService.allowManualPrice &&
+        catalogUnitAmount.trim() &&
         currencyInputToCents(
           catalogUnitAmount
-        );
-    }
+        ) !==
+          (selectedCatalogService.baseAmount ?? 0)
+      ) {
+        body.unitAmount =
+          currencyInputToCents(
+            catalogUnitAmount
+          );
+      }
 
-    try {
       setAddingCatalogItem(true);
       setError("");
 
@@ -928,46 +920,46 @@ export default function StandaloneProposalEditorPage() {
       return;
     }
 
-    const serviceName =
-      itemEditForm.serviceName.trim();
-
-    const quantity =
-      numberFromInput(
-        itemEditForm.quantity
-      );
-
-    const unitAmount =
-      currencyInputToCents(
-        itemEditForm.unitAmount
-      );
-
-    if (!serviceName) {
-      setError(
-        "Informe o nome do serviço."
-      );
-      return;
-    }
-
-    if (quantity <= 0) {
-      setError(
-        "A quantidade deve ser maior que zero."
-      );
-      return;
-    }
-
-    if (unitAmount < 0) {
-      setError(
-        "Informe um valor unitário válido."
-      );
-      return;
-    }
-
-    const commercialDescription =
-      itemEditForm
-        .commercialDescription
-        .trim() || null;
-
     try {
+      const serviceName =
+        itemEditForm.serviceName.trim();
+
+      const quantity =
+        quantityFromInput(
+          itemEditForm.quantity
+        );
+
+      const unitAmount =
+        currencyInputToCents(
+          itemEditForm.unitAmount
+        );
+
+      if (!serviceName) {
+        setError(
+          "Informe o nome do serviço."
+        );
+        return;
+      }
+
+      if (quantity <= 0) {
+        setError(
+          "A quantidade deve ser maior que zero."
+        );
+        return;
+      }
+
+      if (unitAmount < 0) {
+        setError(
+          "Informe um valor unitário válido."
+        );
+        return;
+      }
+
+      const commercialDescription =
+        itemEditForm
+          .commercialDescription
+          .trim() || null;
+
       setItemEditSaving(true);
       setError("");
 
@@ -1247,6 +1239,8 @@ export default function StandaloneProposalEditorPage() {
         commercialAddition
       );
 
+    if (discount < 0 || addition < 0) throw new RangeError("Desconto e acréscimo não podem ser negativos.");
+
     return Math.max(
       0,
       proposal.subtotalAmount -
@@ -1273,108 +1267,42 @@ export default function StandaloneProposalEditorPage() {
       return 0;
     }
 
-    return Math.min(
-      total,
-      currencyInputToCents(
-        commercialEntryAmount
-      )
-    );
+    const entry = currencyInputToCents(commercialEntryAmount);
+    if (entry < 0 || entry > total) throw new RangeError("O valor da entrada é inválido.");
+    return entry;
+  }
+
+  function commercialInstallmentsPreview() {
+    if (commercialPaymentMode === "A_VISTA" || commercialPaymentMode === "PERSONALIZADO") return [];
+    const total = commercialTotalPreview();
+    const entry = commercialEntryPreview();
+    const qty = Number(commercialInstallmentQty);
+    // Same canonical rule as standalonePaymentTerms: remainder in the last installment.
+    return distributeMoneyCents(total - entry, qty, "last");
   }
 
   function commercialInstallmentPreview() {
-    const total =
-      commercialTotalPreview();
+    if (commercialPaymentMode === "PERSONALIZADO") return proposal?.installmentAmount ?? null;
+    const amounts = commercialInstallmentsPreview();
+    return amounts.length && amounts.every(value => value === amounts[0]) ? amounts[0] : null;
+  }
 
-    const qty =
-      Math.max(
-        1,
-        Number(
-          commercialInstallmentQty ||
-          1
-        )
-      );
-
-    if (
-      commercialPaymentMode ===
-      "A_VISTA"
-    ) {
-      return 0;
-    }
-
-    if (
-      commercialPaymentMode ===
-      "PARCELADO"
-    ) {
-      return Math.round(
-        total / qty
-      );
-    }
-
-    if (
-      commercialPaymentMode ===
-      "ENTRADA_PARCELAS"
-    ) {
-      return Math.round(
-        Math.max(
-          0,
-          total -
-            commercialEntryPreview()
-        ) / qty
-      );
-    }
-
-    return proposal?.installmentAmount || 0;
+  function commercialInstallmentsText() {
+    const amounts = commercialInstallmentsPreview();
+    if (!amounts.length) return "—";
+    const first = amounts[0];
+    const last = amounts[amounts.length - 1];
+    return first === last
+      ? `${amounts.length} parcela(s) de ${money(first)}`
+      : `${amounts.length - 1} parcela(s) de ${money(first)} e última parcela de ${money(last)}`;
   }
 
   function generatedPaymentText() {
-    const total =
-      commercialTotalPreview();
-
-    const entry =
-      commercialEntryPreview();
-
-    const qty =
-      Math.max(
-        1,
-        Number(
-          commercialInstallmentQty ||
-          1
-        )
-      );
-
-    const installment =
-      commercialInstallmentPreview();
-
-    if (
-      commercialPaymentMode ===
-      "A_VISTA"
-    ) {
-      return `Pagamento à vista no valor de ${money(
-        total
-      )}.`;
-    }
-
-    if (
-      commercialPaymentMode ===
-      "PARCELADO"
-    ) {
-      return `Pagamento em ${qty} parcela(s) de aproximadamente ${money(
-        installment
-      )}.`;
-    }
-
-    if (
-      commercialPaymentMode ===
-      "ENTRADA_PARCELAS"
-    ) {
-      return `Entrada de ${money(
-        entry
-      )} e saldo remanescente em ${qty} parcela(s) de aproximadamente ${money(
-        installment
-      )}.`;
-    }
-
-    return commercialPaymentText.trim();
+    if (commercialPaymentMode === "PERSONALIZADO") return commercialPaymentText.trim();
+    const total = commercialTotalPreview();
+    if (commercialPaymentMode === "A_VISTA") return `Pagamento à vista no valor de ${money(total)}.`;
+    const entry = commercialEntryPreview();
+    return `${entry > 0 ? `Entrada de ${money(entry)} e ` : "Pagamento em "}${commercialInstallmentsText()}.`;
   }
 
   async function saveCommercialConditions() {
@@ -2618,9 +2546,7 @@ export default function StandaloneProposalEditorPage() {
                 <div className="sp-commercial-readonly">
                   <span>Valor estimado/parcela</span>
                   <strong>
-                    {money(
-                      commercialInstallmentPreview()
-                    )}
+                    {moneyPreviewText(commercialInstallmentsText)}
                   </strong>
                 </div>
               </div>
@@ -2646,9 +2572,7 @@ export default function StandaloneProposalEditorPage() {
                 <div className="sp-commercial-readonly">
                   <span>Valor estimado/parcela</span>
                   <strong>
-                    {money(
-                      commercialInstallmentPreview()
-                    )}
+                    {moneyPreviewText(commercialInstallmentsText)}
                   </strong>
                 </div>
               </div>
@@ -2701,9 +2625,7 @@ export default function StandaloneProposalEditorPage() {
                   <span>Total final</span>
 
                   <strong>
-                    {money(
-                      commercialTotalPreview()
-                    )}
+                    {moneyPreviewText(() => money(commercialTotalPreview()))}
                   </strong>
                 </div>
               </div>
@@ -2720,7 +2642,7 @@ export default function StandaloneProposalEditorPage() {
               {commercialPaymentMode !==
                 "PERSONALIZADO" && (
                 <div className="sp-generated-payment">
-                  {generatedPaymentText()}
+                  {moneyPreviewText(generatedPaymentText)}
                 </div>
               )}
 
@@ -2776,9 +2698,7 @@ export default function StandaloneProposalEditorPage() {
                 <span>Total da proposta</span>
 
                 <strong>
-                  {money(
-                    commercialTotalPreview()
-                  )}
+                  {moneyPreviewText(() => money(commercialTotalPreview()))}
                 </strong>
               </div>
 
@@ -3611,9 +3531,7 @@ export default function StandaloneProposalEditorPage() {
                     </span>
 
                     <strong>
-                      {money(
-                        catalogPreviewTotal()
-                      )}
+                      {moneyPreviewText(() => money(catalogPreviewTotal()))}
                     </strong>
                   </div>
 
@@ -3907,22 +3825,10 @@ export default function StandaloneProposalEditorPage() {
                     color: "#146047",
                   }}
                 >
-                  {money(
-                    Math.round(
-                      Math.max(
-                        0,
-                        numberFromInput(
-                          itemEditForm.quantity
-                        )
-                      ) *
-                        Math.max(
-                          0,
-                          currencyInputToCents(
-                            itemEditForm.unitAmount
-                          )
-                        )
-                    )
-                  )}
+                  {moneyPreviewText(() => money(multiplyMoneyCents(
+                    currencyInputToCents(itemEditForm.unitAmount),
+                    quantityFromInput(itemEditForm.quantity)
+                  )))}
                 </strong>
               </div>
             </div>

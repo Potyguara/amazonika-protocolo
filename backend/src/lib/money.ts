@@ -154,3 +154,16 @@ export function percentToBasisPoints(percent: number): number {
   if (!Number.isSafeInteger(result)) throw new RangeError("Rate exceeds safe integer range.");
   return result;
 }
+
+/** Optional catalog cents: absence is permitted; malformed supplied data is not. */
+export function optionalPrismaIntCents(value: unknown): MoneyCents | null {
+  return value == null ? null : assertPrismaIntCents(value);
+}
+
+/** Multipart fields arrive as text; do not coerce booleans, exponents or fractions. */
+export function parsePrismaCentsText(value: unknown): MoneyCents {
+  if (typeof value !== "string" || !/^-?\d+$/.test(value)) {
+    throw new TypeError("Valor em centavos deve ser texto inteiro.");
+  }
+  return assertPrismaIntCents(Number(value));
+}

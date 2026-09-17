@@ -125,7 +125,8 @@ export function applyRateCents(
 
 export function distributeMoneyCents(
   totalCents: unknown,
-  quantity: number
+  quantity: number,
+  remainderPlacement: "first" | "last" = "first"
 ): MoneyCents[] {
   const total = assertMoneyCents(totalCents);
 
@@ -143,6 +144,22 @@ export function distributeMoneyCents(
   const remainder = total - base * quantity;
 
   return Array.from({ length: quantity }, (_, index) =>
-    assertMoneyCents(base + (index < remainder ? 1 : 0))
+    assertMoneyCents(base + (remainderPlacement === "last"
+      ? (index === quantity - 1 ? remainder : 0)
+      : (index < remainder ? 1 : 0)))
   );
+}
+
+/** Missing monetary data is distinct from a legitimate zero. */
+export function formatOptionalMoneyCents(value: number | null | undefined): string {
+  return value == null ? "—" : formatMoneyCents(value);
+}
+
+/** Presentation boundary for drafts while the user is typing invalid/incomplete input. */
+export function moneyPreviewText(render: () => string): string {
+  try { return render(); }
+  catch (error) {
+    if (error instanceof TypeError || error instanceof RangeError) return error.message;
+    throw error;
+  }
 }

@@ -1,3 +1,4 @@
+import { formatOptionalMoneyCents as moneyFromCents } from "../../lib/money";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../../services/api";
 import PartnerCommissionsPanel from "./PartnerCommissionsPanel";
@@ -61,12 +62,7 @@ const emptyForm: PartnerForm = {
   notes: "",
 };
 
-function moneyFromCents(value?: number | null) {
-  return new Intl.NumberFormat("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  }).format(Number(value || 0) / 100);
-}
+
 
 function periodLabel(period: string) {
   if (period === "month") return "Este mês";
@@ -708,13 +704,13 @@ export default function PartnersFinanceTab() {
 
                       <td>
                         {moneyFromCents(
-                          rank?.metrics.contractsAmount || 0
+                          rank?.metrics.contractsAmount
                         )}
                       </td>
 
                       <td>
                         {moneyFromCents(
-                          rank?.metrics.commissionAmount || 0
+                          rank?.metrics.commissionAmount
                         )}
                       </td>
 

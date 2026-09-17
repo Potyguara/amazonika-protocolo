@@ -4,6 +4,7 @@ import {
   assertPrismaIntCents,
   divideCents,
   parseReaisInput,
+  parsePrismaCentsText,
   percentToBasisPoints,
   sumCents,
 } from "./lib/money";
@@ -12143,11 +12144,8 @@ app.post(
             )
           : 0;
 
-      const finalEntryAmount =
-        toIntMoney(finalEntryAmountCents / 100);
-
       if (
-        finalEntryAmount < 0 ||
+        finalEntryAmountCents < 0 ||
         finalEntryAmountCents >
           totalAmountCents
       ) {
@@ -12156,6 +12154,10 @@ app.post(
             "O valor da entrada é inválido.",
         });
       }
+
+      // Compatibility mirror only, derived after canonical validation.
+      const finalEntryAmount =
+        toIntMoney(finalEntryAmountCents / 100);
 
       const normalizedInstallments:
         Array<{
@@ -12654,6 +12656,12 @@ app.post(
 
           installmentGroupId,
 
+          totalAmountCents,
+          entryAmountCents: finalEntryAmountCents,
+          balanceAmountCents: totalAmountCents - finalEntryAmountCents,
+          installmentsTotalCents: installmentsTotal,
+
+          // LEGACY RESPONSE: integer reais, retained for compatibility only.
           totalAmount,
 
           entryAmount:
@@ -12663,6 +12671,7 @@ app.post(
             totalAmount -
             finalEntryAmount,
 
+          // LEGACY RESPONSE: this old field is already in cents.
           installmentsTotal,
 
           transactions:
@@ -19749,7 +19758,7 @@ if (
       const documentAmountCents =
         req.body?.amountCents !== undefined && req.body?.amountCents !== ""
           ? requireCanonicalCents(
-              Number(req.body.amountCents),
+              parsePrismaCentsText(req.body.amountCents),
               "Valor do documento fiscal"
             )
           : req.body?.amount !== undefined && req.body?.amount !== ""

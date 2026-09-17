@@ -1,3 +1,4 @@
+import { assertMoneyCents, sumCents } from "../../lib/money";
 import { Express } from "express";
 import { PrismaClient } from "@prisma/client";
 
@@ -447,40 +448,13 @@ export function registerPartnerRoutes({
             const servicesCount =
               valid.length;
 
-            const contractsAmount =
-              valid.reduce(
-                (sum, commission) =>
-                  sum +
-                  Number(
-                    commission.baseAmount || 0
-                  ),
-                0
-              );
-
-            const commissionAmount =
-              valid.reduce(
-                (sum, commission) =>
-                  sum +
-                  Number(
-                    commission.commissionAmount || 0
-                  ),
-                0
-              );
-
-            const paidCommissionAmount =
-              valid
-                .filter(
-                  (commission) =>
-                    commission.status === "PAGA"
-                )
-                .reduce(
-                  (sum, commission) =>
-                    sum +
-                    Number(
-                      commission.commissionAmount || 0
-                    ),
-                  0
-                );
+            const contractsAmount = sumCents(valid.map(commission =>
+              assertMoneyCents(commission.baseAmount)));
+            const commissionAmount = sumCents(valid.map(commission =>
+              assertMoneyCents(commission.commissionAmount)));
+            const paidCommissionAmount = sumCents(valid
+              .filter(commission => commission.status === "PAGA")
+              .map(commission => assertMoneyCents(commission.commissionAmount)));
 
             return {
               id: partner.id,

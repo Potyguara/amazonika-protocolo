@@ -1,3 +1,4 @@
+import { assertMoneyCents, centsToBbValue } from "../lib/money";
 import axios from "axios";
 
 type BbTokenResponse = {
@@ -39,8 +40,8 @@ function normalizeDocument(value?: string | null) {
   return String(value || "").replace(/\D/g, "");
 }
 
-function moneyToBbValue(amountInCents: number) {
-  return (Number(amountInCents || 0) / 100).toFixed(2);
+export function moneyToBbValue(amountInCents: number) {
+  return centsToBbValue(assertMoneyCents(amountInCents));
 }
 
 function sanitizeTxid(value: string) {

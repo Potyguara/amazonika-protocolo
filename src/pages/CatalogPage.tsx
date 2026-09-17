@@ -1,4 +1,9 @@
 import {
+  reaisFormValueToCents as reaisToCents,
+  centsToReaisFormValue,
+  formatOptionalMoneyCents as moneyFromCents,
+} from "../lib/money";
+import {
   BookOpen,
   ChevronDown,
   ChevronUp,
@@ -100,44 +105,12 @@ const unitSuggestions: Partial<Record<PricingMode, string>> = {
   POR_HORA: "hora",
 };
 
-function moneyFromCents(value?: number | null) {
-  return (Number(value ?? 0) / 100).toLocaleString("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  });
-}
-
-function reaisToCents(value: string) {
-  const raw = String(value ?? "").trim();
-
-  if (!raw) {
-    return 0;
-  }
-
-  // Aceita: 8000 | 8000,00 | 8.000 | 8.000,00
-  const normalized = raw
-    .replace(/\s/g, "")
-    .replace(/R\$/gi, "")
-    .replace(/\./g, "")
-    .replace(",", ".");
-
-  const parsed = Number(normalized);
-
-  if (!Number.isFinite(parsed)) {
-    return 0;
-  }
-
-  return Math.round(parsed * 100);
-}
-
 function centsToInput(value?: number | null) {
   if (value === null || value === undefined) {
     return "";
   }
 
-  return (Number(value) / 100)
-    .toFixed(2)
-    .replace(".", ",");
+  return centsToReaisFormValue(value).replace(".", ",");
 }
 
 function blankService() {
@@ -502,6 +475,23 @@ export default function CatalogPage() {
         active: serviceForm.active,
       };
 
+      const normalizedTiers = serviceForm.pricingMode === "POR_FAIXA"
+        ? pricingTiers.map((tier, index) => ({
+            minQuantity: tier.minQuantity
+              ? Number(tier.minQuantity)
+              : null,
+            maxQuantity: tier.maxQuantity
+              ? Number(tier.maxQuantity)
+              : null,
+            unitAmount: reaisToCents(tier.unitAmount),
+            minimumAmount: tier.minimumAmount
+              ? reaisToCents(tier.minimumAmount)
+              : null,
+            sortOrder: index,
+            active: true,
+          }))
+        : [];
+
       let saved: CatalogService;
 
       if (editingService) {
@@ -518,20 +508,7 @@ export default function CatalogPage() {
       if (serviceForm.pricingMode === "POR_FAIXA") {
         await api.updateCatalogPricingTiers(
           saved.id,
-          pricingTiers.map((tier, index) => ({
-            minQuantity: tier.minQuantity
-              ? Number(tier.minQuantity)
-              : null,
-            maxQuantity: tier.maxQuantity
-              ? Number(tier.maxQuantity)
-              : null,
-            unitAmount: reaisToCents(tier.unitAmount),
-            minimumAmount: tier.minimumAmount
-              ? reaisToCents(tier.minimumAmount)
-              : null,
-            sortOrder: index,
-            active: true,
-          }))
+          normalizedTiers
         );
       } else if (
         editingService &&

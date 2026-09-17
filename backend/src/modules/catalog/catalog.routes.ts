@@ -1,3 +1,4 @@
+import { optionalPrismaIntCents } from "../../lib/money";
 import { Express } from "express";
 import { PrismaClient } from "@prisma/client";
 
@@ -612,12 +613,12 @@ export function registerCatalogRoutes({
               pricingMode: pricingMode as any,
 
               baseAmount:
-                integerOrNull(
+                optionalPrismaIntCents(
                   req.body?.baseAmount
                 ) ?? 0,
 
               minimumAmount:
-                integerOrNull(
+                optionalPrismaIntCents(
                   req.body?.minimumAmount
                 ),
 
@@ -656,6 +657,9 @@ export function registerCatalogRoutes({
 
         return res.status(201).json(service);
       } catch (error) {
+        if (error instanceof TypeError || error instanceof RangeError) {
+          return res.status(400).json({ message: error.message });
+        }
         console.error("Erro ao cadastrar serviço:", error);
 
         return res.status(500).json({
@@ -812,7 +816,7 @@ export function registerCatalogRoutes({
 
               baseAmount:
                 req.body?.baseAmount !== undefined
-                  ? integerOrNull(
+                  ? optionalPrismaIntCents(
                       req.body.baseAmount
                     ) ?? 0
                   : existing.baseAmount,
@@ -820,7 +824,7 @@ export function registerCatalogRoutes({
               minimumAmount:
                 req.body?.minimumAmount !==
                 undefined
-                  ? integerOrNull(
+                  ? optionalPrismaIntCents(
                       req.body.minimumAmount
                     )
                   : existing.minimumAmount,
@@ -879,6 +883,9 @@ export function registerCatalogRoutes({
 
         return res.json(service);
       } catch (error) {
+        if (error instanceof TypeError || error instanceof RangeError) {
+          return res.status(400).json({ message: error.message });
+        }
         console.error("Erro ao atualizar serviço:", error);
 
         return res.status(500).json({
@@ -931,7 +938,7 @@ export function registerCatalogRoutes({
         const normalized = tiers.map(
           (tier: any, index: number) => {
             const unitAmount =
-              integerOrNull(tier?.unitAmount);
+              optionalPrismaIntCents(tier?.unitAmount);
 
             if (
               unitAmount === null ||
@@ -960,7 +967,7 @@ export function registerCatalogRoutes({
               unitAmount,
 
               minimumAmount:
-                integerOrNull(
+                optionalPrismaIntCents(
                   tier?.minimumAmount
                 ),
 

@@ -1,3 +1,4 @@
+import { formatOptionalMoneyCents as money } from "../../lib/money";
 import {
   useEffect,
   useMemo,
@@ -44,12 +45,7 @@ type Props = {
   onReload?: () => void | Promise<void>;
 };
 
-function money(value?: number | null) {
-  return new Intl.NumberFormat("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  }).format(Number(value || 0) / 100);
-}
+
 
 export default function PartnerReferralPanel({
   protocol,
@@ -89,8 +85,8 @@ export default function PartnerReferralPanel({
     () =>
       (protocol?.contracts || [])
         .map(
-          (contract: any) =>
-            `${contract.id}:${contract.status}:${contract.contractValue}`
+          (contract: { id: number; status: string; contractValueCents?: number | null }) =>
+            `${contract.id}:${contract.status}:${contract.contractValueCents}`
         )
         .join("|"),
     [protocol?.contracts]

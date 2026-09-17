@@ -1,3 +1,21 @@
+export interface FinancialPaymentPlanResponse {
+  mode: "PAYMENT_PLAN";
+  installmentGroupId: string;
+  totalAmountCents: number;
+  entryAmountCents: number;
+  balanceAmountCents: number;
+  installmentsTotalCents: number;
+  /** @deprecated Integer reais compatibility mirrors. */
+  totalAmount: number;
+  /** @deprecated Integer reais compatibility mirror. */
+  entryAmount: number;
+  /** @deprecated Integer reais compatibility mirror. */
+  balanceAmount: number;
+  /** @deprecated Use installmentsTotalCents; this field is also cents. */
+  installmentsTotal: number;
+  transactions: unknown[];
+}
+
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3333";
 
 export type LoginResponse = {
@@ -710,7 +728,12 @@ createFinanceTransaction(data: {
 
   autoChargeEnabled?: boolean;
 }) {
-  return request(
+  return request<FinancialPaymentPlanResponse | {
+    id: number;
+    amountCents: number;
+    /** @deprecated Integer reais compatibility mirror. */
+    amount: number;
+  }>(
     "/finance/transactions",
     {
       method: "POST",

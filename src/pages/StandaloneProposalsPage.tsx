@@ -1,3 +1,4 @@
+import { formatOptionalMoneyCents as moneyFromCents } from "../lib/money";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -67,12 +68,7 @@ type Client = {
   state?: string | null;
 };
 
-function moneyFromCents(value?: number | null) {
-  return (Number(value || 0) / 100).toLocaleString("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  });
-}
+
 
 function formatDate(value?: string | null) {
   if (!value) return "-";

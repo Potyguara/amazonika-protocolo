@@ -1,3 +1,4 @@
+import { formatOptionalMoneyCents as money } from "../../lib/money";
 import {
   useEffect,
   useState,
@@ -56,17 +57,7 @@ type Props = {
     void | Promise<void>;
 };
 
-function money(value: number) {
-  return new Intl.NumberFormat(
-    "pt-BR",
-    {
-      style: "currency",
-      currency: "BRL",
-    }
-  ).format(
-    Number(value || 0) / 100
-  );
-}
+
 
 function statusLabel(
   status: Commission["status"]
