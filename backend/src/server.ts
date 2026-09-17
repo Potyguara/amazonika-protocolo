@@ -1,6 +1,15 @@
-import { applyRateCents, assertPrismaIntCents, parseReaisInput, sumCents } from "./lib/money";
+import {
+  applyRateCents,
+  assertMoneyCents,
+  assertPrismaIntCents,
+  divideCents,
+  parseReaisInput,
+  percentToBasisPoints,
+  sumCents,
+} from "./lib/money";
 import { copyPaymentSchedule } from "./lib/payment-schedule";
 import {
+  AmbiguousMoneyError,
   canonicalCentsOrLegacy,
   legacyReaisFromCents,
   normalizeFinancialPlanMoney,
@@ -8,6 +17,10 @@ import {
   proposalToContractMoney,
   proposalToProtocolMoney,
   reaisInputToCents,
+  requirePositiveOperationalCents,
+  resolveOperationalMoney,
+  resolvePaidAmountCents,
+  sumOperationalMoney,
 } from "./lib/canonical-money";
 import "dotenv/config";
 import express, { Request, Response, NextFunction } from "express";
@@ -8345,53 +8358,25 @@ function paymentAmountToCents(payment: {
   amount?: number | null;
   amountCents?: number | null;
 }) {
-  if (
-    payment.amountCents !== null &&
-    payment.amountCents !== undefined
-  ) {
-    const cents = assertPrismaIntCents(payment.amountCents);
-
-    if (cents <= 0) {
-      throw new Error("Valor em centavos do pagamento é inválido.");
-    }
-
-    return cents;
-  }
-
-  // Compatibilidade transitória para pagamentos históricos em reais.
-  const cents = assertPrismaIntCents(
-    parseReaisInput(String(payment.amount || 0), "en-US")
-  );
-
-  if (cents <= 0) {
-    throw new Error("Valor legado do pagamento é inválido.");
-  }
-
-  return cents;
+  // Compatibilidade transitória e explícita para pagamentos históricos.
+  return requirePositiveOperationalCents({
+    canonicalCents: payment.amountCents,
+    legacyReais: payment.amount,
+    legacyClassification: "LEGACY_CONFIRMED",
+    label: "Valor do pagamento",
+  });
 }
 
 function billingChargeAmountToCents(charge: {
   amount?: number | null;
   amountCents?: number | null;
 }) {
-  if (
-    charge.amountCents !== null &&
-    charge.amountCents !== undefined
-  ) {
-    const cents = Number(charge.amountCents);
-
-    if (!Number.isInteger(cents) || cents <= 0) {
-      throw new Error(
-        "Valor em centavos da cobrança é inválido."
-      );
-    }
-
-    return cents;
-  }
-
-  const cents = reaisInputToCents(charge.amount, "Valor legado da cobrança");
-  if (cents <= 0) throw new Error("Valor legado da cobrança é inválido.");
-  return cents;
+  return requirePositiveOperationalCents({
+    canonicalCents: charge.amountCents,
+    legacyReais: charge.amount,
+    legacyClassification: "AMBIGUOUS",
+    label: "Valor da cobrança",
+  });
 }
 
 function extractBbPixCopiaECola(result: any) {
@@ -8697,6 +8682,22 @@ app.get(
 // dueDate, paidAt, competenceMonth, clientName, protocol, category
 // ======================================================
 
+function confirmedHistoricalAmountCents(
+  item: { amount?: unknown; amountCents?: unknown },
+  label: string,
+) {
+  return resolveOperationalMoney({
+    canonicalCents: item.amountCents,
+    legacyReais: item.amount,
+    legacyClassification: "LEGACY_CONFIRMED",
+    label,
+  }).amountCents;
+}
+
+function legacyDecimalReais(cents: number) {
+  return legacyReaisFromCents(cents, "decimal-reais");
+}
+
 async function calculateManagementFinance(month: string, currentUserId?: number) {
   const competenceMonth = getCompetenceMonth(month);
   const { start, end } = getMonthRange(competenceMonth);
@@ -8825,34 +8826,44 @@ async function calculateManagementFinance(month: string, currentUserId?: number)
     },
   });
 
-  const entradasRecebidas = receivedTransactions.reduce(
-    (sum, item) => sum + item.amount,
-    0
+  // Compatibilidade histórica explícita: linhas anteriores à 2C1 podem não ter
+  // a coluna canônica preenchida. Novos escritores sempre gravam amountCents.
+  const entradasRecebidasCents = sumOperationalMoney(receivedTransactions, {
+    legacyClassification: "LEGACY_CONFIRMED",
+    label: "Entrada recebida",
+  });
+  const saidasPagasCents = sumOperationalMoney(paidExpenses, {
+    legacyClassification: "LEGACY_CONFIRMED",
+    label: "Saída paga",
+  });
+  const custosFixosCents = sumOperationalMoney(fixedCosts, {
+    legacyClassification: "LEGACY_CONFIRMED",
+    label: "Custo fixo",
+  });
+  const salariosCents = sumOperationalMoney(salaries, {
+    legacyClassification: "LEGACY_CONFIRMED",
+    label: "Salário",
+  });
+  const adiantamentosCents = sumOperationalMoney(advances, {
+    legacyClassification: "LEGACY_CONFIRMED",
+    label: "Adiantamento de pró-labore",
+  });
+
+  const baseLiquidaCents = assertMoneyCents(
+    entradasRecebidasCents - custosFixosCents - salariosCents -
+    saidasPagasCents - adiantamentosCents
   );
-
-  const saidasPagas = paidExpenses.reduce(
-    (sum, item) => sum + item.amount,
-    0
+  const caixaEmpresaCents = baseLiquidaCents > 0
+    ? applyRateCents(baseLiquidaCents, percentToBasisPoints(cashSetting.cashPercent))
+    : assertMoneyCents(0);
+  const proLaboreDistribuivelCents = assertMoneyCents(
+    Math.max(0, baseLiquidaCents - caixaEmpresaCents)
   );
-
-  const custosFixos = fixedCosts.reduce((sum, item) => sum + item.amount, 0);
-  const salarios = salaries.reduce((sum, item) => sum + item.amount, 0);
-  const adiantamentos = advances.reduce((sum, item) => sum + item.amount, 0);
-
-  const baseLiquida =
-    entradasRecebidas - custosFixos - salarios - saidasPagas - adiantamentos;
-
-  const caixaEmpresa = Math.max(
-    0,
-    Math.round(baseLiquida * (cashSetting.cashPercent / 100))
-  );
-
-  const proLaboreDistribuivel = Math.max(0, baseLiquida - caixaEmpresa);
 
   const activeManagersCount = Math.max(1, managers.length);
-
-  const proLaboreIndividual = Math.round(
-    proLaboreDistribuivel / activeManagersCount
+  const proLaboreIndividualCents = divideCents(
+    proLaboreDistribuivelCents,
+    activeManagersCount
   );
 
   const managerAdvanceMap = new Map<number, number>();
@@ -8860,20 +8871,27 @@ async function calculateManagementFinance(month: string, currentUserId?: number)
   advances.forEach((advance) => {
     managerAdvanceMap.set(
       advance.managerUserId,
-      (managerAdvanceMap.get(advance.managerUserId) || 0) + advance.amount
+      (managerAdvanceMap.get(advance.managerUserId) || 0) +
+        confirmedHistoricalAmountCents(advance, "Adiantamento de pró-labore")
     );
   });
 
   const managersProLabore = managers.map((manager) => {
-    const advanceAmount = managerAdvanceMap.get(manager.id) || 0;
+    const advanceAmountCents = managerAdvanceMap.get(manager.id) || 0;
 
     return {
       managerId: manager.id,
       managerName: manager.name,
       managerEmail: manager.email,
-      proLaboreBruto: proLaboreIndividual,
-      adiantamentos: advanceAmount,
-      proLaboreLiquido: Math.max(0, proLaboreIndividual - advanceAmount),
+      proLaboreBrutoCents: proLaboreIndividualCents,
+      adiantamentosCents: advanceAmountCents,
+      proLaboreLiquidoCents: Math.max(0, proLaboreIndividualCents - advanceAmountCents),
+      // LEGACY: propriedades em reais mantidas temporariamente para o frontend atual.
+      proLaboreBruto: legacyDecimalReais(proLaboreIndividualCents),
+      adiantamentos: legacyDecimalReais(advanceAmountCents),
+      proLaboreLiquido: legacyDecimalReais(
+        Math.max(0, proLaboreIndividualCents - advanceAmountCents)
+      ),
     };
   });
 
@@ -8886,16 +8904,26 @@ async function calculateManagementFinance(month: string, currentUserId?: number)
     cashPercent: cashSetting.cashPercent,
     managersCount: managers.length,
 
-    entradasRecebidas,
-    custosFixos,
-    salarios,
-    saidasPagas,
-    adiantamentos,
-    baseLiquida,
+    entradasRecebidasCents,
+    custosFixosCents,
+    salariosCents,
+    saidasPagasCents,
+    adiantamentosCents,
+    baseLiquidaCents,
+    caixaEmpresaCents,
+    proLaboreDistribuivelCents,
+    proLaboreIndividualCents,
 
-    caixaEmpresa,
-    proLaboreDistribuivel,
-    proLaboreIndividual,
+    // LEGACY: reais derivados na fronteira para compatibilidade temporária.
+    entradasRecebidas: legacyDecimalReais(entradasRecebidasCents),
+    custosFixos: legacyDecimalReais(custosFixosCents),
+    salarios: legacyDecimalReais(salariosCents),
+    saidasPagas: legacyDecimalReais(saidasPagasCents),
+    adiantamentos: legacyDecimalReais(adiantamentosCents),
+    baseLiquida: legacyDecimalReais(baseLiquidaCents),
+    caixaEmpresa: legacyDecimalReais(caixaEmpresaCents),
+    proLaboreDistribuivel: legacyDecimalReais(proLaboreDistribuivelCents),
+    proLaboreIndividual: legacyDecimalReais(proLaboreIndividualCents),
 
     currentManager,
     managersProLabore,
@@ -8905,7 +8933,10 @@ async function calculateManagementFinance(month: string, currentUserId?: number)
         ...receivedTransactions.map((item) => ({
           type: "ENTRADA",
           label: item.description,
-          amount: item.amount,
+          amountCents: confirmedHistoricalAmountCents(item, "Entrada recebida"),
+          amount: legacyDecimalReais(
+            confirmedHistoricalAmountCents(item, "Entrada recebida")
+          ),
           date: item.paidAt || item.dueDate,
           category: item.category?.name || "Receita",
           clientName: item.clientName || item.protocol?.client?.name || null,
@@ -8914,7 +8945,10 @@ async function calculateManagementFinance(month: string, currentUserId?: number)
         ...fixedCosts.map((item) => ({
           type: "CUSTO_FIXO",
           label: item.description,
-          amount: -item.amount,
+          amountCents: -confirmedHistoricalAmountCents(item, "Custo fixo"),
+          amount: legacyDecimalReais(
+            -confirmedHistoricalAmountCents(item, "Custo fixo")
+          ),
           date: null,
           category: item.category?.name || "Custo fixo",
           clientName: null,
@@ -8923,7 +8957,10 @@ async function calculateManagementFinance(month: string, currentUserId?: number)
         ...salaries.map((item) => ({
           type: "SALARIO",
           label: item.employeeName,
-          amount: -item.amount,
+          amountCents: -confirmedHistoricalAmountCents(item, "Salário"),
+          amount: legacyDecimalReais(
+            -confirmedHistoricalAmountCents(item, "Salário")
+          ),
           date: null,
           category: item.category?.name || "Salário",
           clientName: null,
@@ -8932,7 +8969,10 @@ async function calculateManagementFinance(month: string, currentUserId?: number)
         ...paidExpenses.map((item) => ({
           type: "SAIDA",
           label: item.description,
-          amount: -item.amount,
+          amountCents: -confirmedHistoricalAmountCents(item, "Saída paga"),
+          amount: legacyDecimalReais(
+            -confirmedHistoricalAmountCents(item, "Saída paga")
+          ),
           date: item.paidAt || item.dueDate,
           category: item.category?.name || "Saída",
           clientName: item.clientName || null,
@@ -8941,7 +8981,13 @@ async function calculateManagementFinance(month: string, currentUserId?: number)
         ...advances.map((item) => ({
           type: "ADIANTAMENTO_PRO_LABORE",
           label: item.description || `Adiantamento - ${item.manager.name}`,
-          amount: -item.amount,
+          amountCents: -confirmedHistoricalAmountCents(
+            item,
+            "Adiantamento de pró-labore"
+          ),
+          amount: legacyDecimalReais(
+            -confirmedHistoricalAmountCents(item, "Adiantamento de pró-labore")
+          ),
           date: item.paidAt,
           category: "Adiantamento de pró-labore",
           clientName: item.manager.name,
@@ -9644,10 +9690,16 @@ async function processFinanceAutoCharges(
         continue;
       }
 
-      if (
-        !transaction.amount ||
-        transaction.amount <= 0
-      ) {
+      let transactionAmountCents: number;
+
+      try {
+        transactionAmountCents = requirePositiveOperationalCents({
+          canonicalCents: transaction.amountCents,
+          legacyReais: transaction.amount,
+          legacyClassification: "AMBIGUOUS",
+          label: "Valor da transação financeira",
+        });
+      } catch (moneyError) {
         errors += 1;
 
         results.push({
@@ -9655,8 +9707,9 @@ async function processFinanceAutoCharges(
             transaction.id,
           status:
             "ERROR",
-          reason:
-            "Valor financeiro inválido.",
+          reason: moneyError instanceof Error
+            ? moneyError.message
+            : "Valor financeiro inválido.",
         });
 
         continue;
@@ -9725,12 +9778,6 @@ async function processFinanceAutoCharges(
 
       let billingCharge =
         transaction.billingCharge;
-
-      const transactionAmountCents = canonicalCentsOrLegacy(
-        transaction.amountCents,
-        transaction.amount,
-        "Valor da transação financeira"
-      );
 
       if (!billingCharge) {
         billingCharge =
@@ -11550,44 +11597,51 @@ app.get(
 
 
 
-    const entradas = transactions
-      .filter((item) => receitaTypes.includes(item.type) && item.status !== "CANCELADO")
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const sumHistorical = (items: typeof transactions, label: string) =>
+      sumOperationalMoney(items, {
+        legacyClassification: "LEGACY_CONFIRMED",
+        label,
+      });
 
-    const saidasLancadas = transactions
-      .filter((item) => item.type === "SAIDA" && item.status !== "CANCELADO")
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
-
-    const entradasRecebidas = transactions
-      .filter((item) => receitaTypes.includes(item.type) && item.status === "PAGO")
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
-
-    const entradasPendentes = transactions
-      .filter((item) => receitaTypes.includes(item.type) && item.status === "PENDENTE")
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
-
-    const saidasPagas = transactions
-      .filter((item) => item.type === "SAIDA" && item.status === "PAGO")
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
-
-    const saidasPendentes = transactions
-      .filter((item) => item.type === "SAIDA" && item.status === "PENDENTE")
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
-
-    const custoFixoMensal = fixedCosts.reduce(
-      (sum, item) => sum + Number(item.amount || 0),
-      0
+    const entradasCents = sumHistorical(
+      transactions.filter((item) => receitaTypes.includes(item.type) && item.status !== "CANCELADO"),
+      "Entrada"
     );
-
-    const salariosMensais = salaries.reduce(
-      (sum, item) => sum + Number(item.amount || 0),
-      0
+    const saidasLancadasCents = sumHistorical(
+      transactions.filter((item) => item.type === "SAIDA" && item.status !== "CANCELADO"),
+      "Saída lançada"
     );
-
-    const saidasProjetadas = saidasLancadas + custoFixoMensal + salariosMensais;
-
-    const resultadoPrevisto = entradas - saidasProjetadas;
-    const resultadoRealizado = entradasRecebidas - saidasPagas;
+    const entradasRecebidasCents = sumHistorical(
+      transactions.filter((item) => receitaTypes.includes(item.type) && item.status === "PAGO"),
+      "Entrada recebida"
+    );
+    const entradasPendentesCents = sumHistorical(
+      transactions.filter((item) => receitaTypes.includes(item.type) && item.status === "PENDENTE"),
+      "Entrada pendente"
+    );
+    const saidasPagasCents = sumHistorical(
+      transactions.filter((item) => item.type === "SAIDA" && item.status === "PAGO"),
+      "Saída paga"
+    );
+    const saidasPendentesCents = sumHistorical(
+      transactions.filter((item) => item.type === "SAIDA" && item.status === "PENDENTE"),
+      "Saída pendente"
+    );
+    const custoFixoMensalCents = sumOperationalMoney(fixedCosts, {
+      legacyClassification: "LEGACY_CONFIRMED",
+      label: "Custo fixo",
+    });
+    const salariosMensaisCents = sumOperationalMoney(salaries, {
+      legacyClassification: "LEGACY_CONFIRMED",
+      label: "Salário",
+    });
+    const saidasProjetadasCents = assertMoneyCents(
+      saidasLancadasCents + custoFixoMensalCents + salariosMensaisCents
+    );
+    const resultadoPrevistoCents = assertMoneyCents(entradasCents - saidasProjetadasCents);
+    const resultadoRealizadoCents = assertMoneyCents(
+      entradasRecebidasCents - saidasPagasCents
+    );
 
     const byCategory = transactions.reduce((acc: any[], item) => {
       const categoryName = item.category?.name || "Sem categoria";
@@ -11596,13 +11650,17 @@ app.get(
       );
 
       if (existing) {
-        existing.amount += Number(item.amount || 0);
+        existing.amountCents += confirmedHistoricalAmountCents(item, "Categoria financeira");
+        existing.amount = legacyDecimalReais(existing.amountCents);
         existing.count += 1;
       } else {
+        const amountCents = confirmedHistoricalAmountCents(item, "Categoria financeira");
         acc.push({
           category: categoryName,
           type: item.type,
-          amount: Number(item.amount || 0),
+          amountCents,
+          // LEGACY: reais derivados somente para o frontend atual.
+          amount: legacyDecimalReais(amountCents),
           count: 1,
           color: item.category?.color || "#64748b",
         });
@@ -11614,20 +11672,30 @@ app.get(
     return res.json({
       month,
 
-      entradas,
-      entradasRecebidas,
-      entradasPendentes,
+      entradasCents,
+      entradasRecebidasCents,
+      entradasPendentesCents,
+      saidasLancadasCents,
+      saidasPagasCents,
+      saidasPendentesCents,
+      custoFixoMensalCents,
+      salariosMensaisCents,
+      saidasProjetadasCents,
+      resultadoPrevistoCents,
+      resultadoRealizadoCents,
 
-      saidasLancadas,
-      saidasPagas,
-      saidasPendentes,
-
-      custoFixoMensal,
-      salariosMensais,
-      saidasProjetadas,
-
-      resultadoPrevisto,
-      resultadoRealizado,
+      // LEGACY: reais derivados na fronteira para compatibilidade temporária.
+      entradas: legacyDecimalReais(entradasCents),
+      entradasRecebidas: legacyDecimalReais(entradasRecebidasCents),
+      entradasPendentes: legacyDecimalReais(entradasPendentesCents),
+      saidasLancadas: legacyDecimalReais(saidasLancadasCents),
+      saidasPagas: legacyDecimalReais(saidasPagasCents),
+      saidasPendentes: legacyDecimalReais(saidasPendentesCents),
+      custoFixoMensal: legacyDecimalReais(custoFixoMensalCents),
+      salariosMensais: legacyDecimalReais(salariosMensaisCents),
+      saidasProjetadas: legacyDecimalReais(saidasProjetadasCents),
+      resultadoPrevisto: legacyDecimalReais(resultadoPrevistoCents),
+      resultadoRealizado: legacyDecimalReais(resultadoRealizadoCents),
 
       transactionCount: transactions.length,
       fixedCostCount: fixedCosts.length,
@@ -13590,6 +13658,8 @@ app.get(
                 status: true,
                 paidAt: true,
                 amount: true,
+                amountCents: true,
+                paidAmountCents: true,
                 dueDate: true,
                 installmentNumber: true,
                 totalInstallments: true,
@@ -13612,6 +13682,16 @@ app.get(
       if (!current.installmentGroupId) {
         return res.json({
           installmentGroupId: null,
+          totalAmountCents: confirmedHistoricalAmountCents(
+            current,
+            "Lançamento financeiro"
+          ),
+          entryAmountCents: current.installmentNumber === 0
+            ? confirmedHistoricalAmountCents(current, "Entrada financeira")
+            : 0,
+          installmentAmountsCents: current.installmentNumber === 0
+            ? []
+            : [confirmedHistoricalAmountCents(current, "Parcela financeira")],
           transactions: [current],
         });
       }
@@ -13650,6 +13730,8 @@ app.get(
                 status: true,
                 paidAt: true,
                 amount: true,
+                amountCents: true,
+                paidAmountCents: true,
                 dueDate: true,
                 installmentNumber: true,
                 totalInstallments: true,
@@ -13667,10 +13749,25 @@ app.get(
           ],
         });
 
+      const entry = transactions.find((item) => item.installmentNumber === 0);
+      const installments = transactions.filter(
+        (item) => item.installmentNumber !== null && item.installmentNumber > 0
+      );
+      const totalAmountCents = sumOperationalMoney(transactions, {
+        legacyClassification: "LEGACY_CONFIRMED",
+        label: "Componente do plano financeiro",
+      });
+
       return res.json({
         installmentGroupId:
           current.installmentGroupId,
-
+        totalAmountCents,
+        entryAmountCents: entry
+          ? confirmedHistoricalAmountCents(entry, "Entrada financeira")
+          : 0,
+        installmentAmountsCents: installments.map((item) =>
+          confirmedHistoricalAmountCents(item, "Parcela financeira")
+        ),
         transactions,
       });
     } catch (error) {
@@ -14908,28 +15005,22 @@ function getManagementMonth(req: any) {
   return new Date().toISOString().slice(0, 7);
 }
 
-function sumMoney(
-  items: Array<{ amount?: number | null; amountCents?: number | null }>
+function sumConfirmedHistoricalMoney(
+  items: Array<{ amount?: number | null; amountCents?: number | null }>,
+  label: string,
 ) {
-  return items.reduce((sum, item) => {
-    if (item.amountCents !== null && item.amountCents !== undefined) {
-      return sum + assertPrismaIntCents(item.amountCents);
-    }
-
-    // Fronteira legada: amount ainda representa reais nestes modelos.
-    return sum + assertPrismaIntCents(
-      parseReaisInput(String(item.amount || 0), "en-US")
-    );
-  }, 0);
+  return sumOperationalMoney(items, {
+    legacyClassification: "LEGACY_CONFIRMED",
+    label,
+  });
 }
 
-function percentOf(value: number, percent: number) {
-  if (!Number.isFinite(value) || !Number.isFinite(percent)) return 0;
-  return Math.round((value * percent) / 100);
+function percentOfCents(value: number, percent: number) {
+  return applyRateCents(assertMoneyCents(value), percentToBasisPoints(percent));
 }
 
-function safePositive(value: number) {
-  return Number.isFinite(value) ? Math.max(value, 0) : 0;
+function safePositiveCents(value: number) {
+  return assertMoneyCents(Math.max(assertMoneyCents(value), 0));
 }
 
 app.get(
@@ -15045,34 +15136,51 @@ app.get(
       );
 
       // Todos os agregados abaixo passam a operar em centavos.
-      const faturamentoMensal = sumMoney(entradasRecebidas);
-      const custosFixos = sumMoney(fixedCosts);
-      const salariosFuncionarios = sumMoney(salaries);
-      const saidasProjetadas = sumMoney(saidasLancadas);
-      const adiantamentosTotais = sumMoney(advances);
+      const faturamentoMensalCents = sumConfirmedHistoricalMoney(
+        entradasRecebidas,
+        "Faturamento recebido"
+      );
+      const custosFixosCents = sumConfirmedHistoricalMoney(fixedCosts, "Custo fixo");
+      const salariosFuncionariosCents = sumConfirmedHistoricalMoney(salaries, "Salário");
+      const saidasProjetadasCents = sumConfirmedHistoricalMoney(
+        saidasLancadas,
+        "Saída projetada"
+      );
+      const adiantamentosTotaisCents = sumConfirmedHistoricalMoney(
+        advances,
+        "Adiantamento de pró-labore"
+      );
 
-      const liquidoAntesCaixa =
-        faturamentoMensal -
-        custosFixos -
-        salariosFuncionarios -
-        saidasProjetadas -
-        adiantamentosTotais;
+      const liquidoAntesCaixaCents = assertMoneyCents(
+        faturamentoMensalCents - custosFixosCents - salariosFuncionariosCents -
+        saidasProjetadasCents - adiantamentosTotaisCents
+      );
 
       const cashPercent = cashSetting?.cashPercent ?? 10;
-      const caixaEmpresa = percentOf(safePositive(liquidoAntesCaixa), cashPercent);
+      const caixaEmpresaCents = percentOfCents(
+        safePositiveCents(liquidoAntesCaixaCents),
+        cashPercent
+      );
 
-      const liquidoDistribuivel = safePositive(liquidoAntesCaixa - caixaEmpresa);
+      const liquidoDistribuivelCents = safePositiveCents(
+        liquidoAntesCaixaCents - caixaEmpresaCents
+      );
 
       const managersCount = managers.length;
-      const proLaboreIndividual =
-        managersCount > 0 ? Math.round(liquidoDistribuivel / managersCount) : 0;
+      const proLaboreIndividualCents = managersCount > 0
+        ? divideCents(liquidoDistribuivelCents, managersCount)
+        : assertMoneyCents(0);
 
       const formattedAdvances = advances.map((advance) => ({
         id: advance.id,
         managerUserId: advance.managerUserId,
         managerName: advance.manager?.name || "-",
         managerEmail: advance.manager?.email || "-",
-        amount: advance.amount,
+        amountCents: confirmedHistoricalAmountCents(advance, "Adiantamento de pró-labore"),
+        // LEGACY: reais derivados para o frontend atual.
+        amount: legacyDecimalReais(
+          confirmedHistoricalAmountCents(advance, "Adiantamento de pró-labore")
+        ),
         paidAt: advance.paidAt,
         description: advance.description,
         notes: advance.notes,
@@ -15084,19 +15192,31 @@ app.get(
           (advance) => advance.managerUserId === manager.id
         );
 
-        const totalAdvances = sumMoney(managerAdvances);
-        const saldoReceber = safePositive(proLaboreIndividual - totalAdvances);
+        const totalAdvancesCents = sumConfirmedHistoricalMoney(
+          managerAdvances,
+          "Adiantamento do gestor"
+        );
+        const saldoReceberCents = safePositiveCents(
+          proLaboreIndividualCents - totalAdvancesCents
+        );
 
         return {
           id: manager.id,
           name: manager.name,
           email: manager.email,
-          proLabore: proLaboreIndividual,
-          proLaboreBruto: proLaboreIndividual,
-          advances: totalAdvances,
-          adiantamentos: totalAdvances,
-          saldoReceber,
-          proLaboreLiquido: saldoReceber,
+          proLaboreCents: proLaboreIndividualCents,
+          proLaboreBrutoCents: proLaboreIndividualCents,
+          advancesCents: totalAdvancesCents,
+          adiantamentosCents: totalAdvancesCents,
+          saldoReceberCents,
+          proLaboreLiquidoCents: saldoReceberCents,
+          // LEGACY: reais derivados para o frontend atual.
+          proLabore: legacyDecimalReais(proLaboreIndividualCents),
+          proLaboreBruto: legacyDecimalReais(proLaboreIndividualCents),
+          advances: legacyDecimalReais(totalAdvancesCents),
+          adiantamentos: legacyDecimalReais(totalAdvancesCents),
+          saldoReceber: legacyDecimalReais(saldoReceberCents),
+          proLaboreLiquido: legacyDecimalReais(saldoReceberCents),
         };
       });
 
@@ -15112,7 +15232,10 @@ const currentManager =
           id: advance.id,
           managerUserId: advance.managerUserId,
           competenceMonth: advance.competenceMonth,
-          amount: advance.amount,
+          amountCents: confirmedHistoricalAmountCents(advance, "Meu adiantamento"),
+          amount: legacyDecimalReais(
+            confirmedHistoricalAmountCents(advance, "Meu adiantamento")
+          ),
           paidAt: advance.paidAt,
           description: advance.description || "Adiantamento de pró-labore",
           notes: advance.notes,
@@ -15120,64 +15243,80 @@ const currentManager =
           createdBy: advance.createdBy,
         }));
 
-      const meuAdiantamento = currentManager?.advances || 0;
-      const meuProLaboreLiquido = currentManager?.saldoReceber || 0;
+      const meuAdiantamentoCents = currentManager?.advancesCents || 0;
+      const meuProLaboreLiquidoCents = currentManager?.saldoReceberCents || 0;
 
       const cashExtract = [
         {
           label: "Faturamento mensal recebido",
           type: "ENTRADA",
-          amount: faturamentoMensal,
-          value: faturamentoMensal,
+          amountCents: faturamentoMensalCents,
+          valueCents: faturamentoMensalCents,
+          amount: legacyDecimalReais(faturamentoMensalCents),
+          value: legacyDecimalReais(faturamentoMensalCents),
           description: "Entradas pagas registradas no mês.",
         },
         {
           label: "Custos fixos ativos",
           type: "SAIDA",
-          amount: custosFixos,
-          value: custosFixos,
+          amountCents: custosFixosCents,
+          valueCents: custosFixosCents,
+          amount: legacyDecimalReais(custosFixosCents),
+          value: legacyDecimalReais(custosFixosCents),
           description: "Custos fixos mensais ativos.",
         },
         {
           label: "Salários de funcionários",
           type: "SAIDA",
-          amount: salariosFuncionarios,
-          value: salariosFuncionarios,
+          amountCents: salariosFuncionariosCents,
+          valueCents: salariosFuncionariosCents,
+          amount: legacyDecimalReais(salariosFuncionariosCents),
+          value: legacyDecimalReais(salariosFuncionariosCents),
           description: "Folha salarial ativa cadastrada.",
         },
         {
           label: "Saídas projetadas/lançadas",
           type: "SAIDA",
-          amount: saidasProjetadas,
-          value: saidasProjetadas,
+          amountCents: saidasProjetadasCents,
+          valueCents: saidasProjetadasCents,
+          amount: legacyDecimalReais(saidasProjetadasCents),
+          value: legacyDecimalReais(saidasProjetadasCents),
           description: "Saídas financeiras cadastradas no mês.",
         },
         {
           label: "Adiantamentos de pró-labore",
           type: "SAIDA",
-          amount: adiantamentosTotais,
-          value: adiantamentosTotais,
+          amountCents: adiantamentosTotaisCents,
+          valueCents: adiantamentosTotaisCents,
+          amount: legacyDecimalReais(adiantamentosTotaisCents),
+          value: legacyDecimalReais(adiantamentosTotaisCents),
           description: "Adiantamentos pagos aos gestores no mês.",
         },
         {
           label: "Líquido antes do caixa",
           type: "RESULTADO",
-          amount: liquidoAntesCaixa,
-          value: liquidoAntesCaixa,
+          amountCents: liquidoAntesCaixaCents,
+          valueCents: liquidoAntesCaixaCents,
+          amount: legacyDecimalReais(liquidoAntesCaixaCents),
+          value: legacyDecimalReais(liquidoAntesCaixaCents),
           description: "Resultado antes da reserva de caixa da empresa.",
         },
         {
           label: `Reserva de caixa da empresa (${cashPercent}%)`,
           type: "RESULTADO",
-          amount: caixaEmpresa,
-          value: caixaEmpresa,
+          amountCents: caixaEmpresaCents,
+          valueCents: caixaEmpresaCents,
+          amount: legacyDecimalReais(caixaEmpresaCents),
+          value: legacyDecimalReais(caixaEmpresaCents),
           description: "Percentual reservado sobre o líquido mensal.",
         },
         {
           label: "Líquido distribuível aos gestores",
           type: "RESULTADO",
-          amount: liquidoDistribuivel,
-          value: liquidoDistribuivel,
+          amountCents: liquidoDistribuivelCents,
+          valueCents: liquidoDistribuivelCents,
+          amount: legacyDecimalReais(liquidoDistribuivelCents),
+          value: legacyDecimalReais(liquidoDistribuivelCents),
           description: "Valor final disponível para divisão entre gestores.",
         },
       ];
@@ -15186,8 +15325,10 @@ const currentManager =
         {
           label: "Líquido distribuível aos gestores",
           type: "RESULTADO",
-          amount: liquidoDistribuivel,
-          value: liquidoDistribuivel,
+          amountCents: liquidoDistribuivelCents,
+          valueCents: liquidoDistribuivelCents,
+          amount: legacyDecimalReais(liquidoDistribuivelCents),
+          value: legacyDecimalReais(liquidoDistribuivelCents),
           description: "Valor após reserva de caixa da empresa.",
         },
         {
@@ -15200,22 +15341,28 @@ const currentManager =
         {
           label: "Pró-labore individual bruto",
           type: "PRO_LABORE",
-          amount: proLaboreIndividual,
-          value: proLaboreIndividual,
+          amountCents: proLaboreIndividualCents,
+          valueCents: proLaboreIndividualCents,
+          amount: legacyDecimalReais(proLaboreIndividualCents),
+          value: legacyDecimalReais(proLaboreIndividualCents),
           description: "Valor bruto previsto para cada gestor.",
         },
         {
           label: "Meus adiantamentos",
           type: "SAIDA",
-          amount: meuAdiantamento,
-          value: meuAdiantamento,
+          amountCents: meuAdiantamentoCents,
+          valueCents: meuAdiantamentoCents,
+          amount: legacyDecimalReais(meuAdiantamentoCents),
+          value: legacyDecimalReais(meuAdiantamentoCents),
           description: "Valores antecipados ao gestor logado.",
         },
         {
           label: "Meu pró-labore líquido",
           type: "RESULTADO",
-          amount: meuProLaboreLiquido,
-          value: meuProLaboreLiquido,
+          amountCents: meuProLaboreLiquidoCents,
+          valueCents: meuProLaboreLiquidoCents,
+          amount: legacyDecimalReais(meuProLaboreLiquidoCents),
+          value: legacyDecimalReais(meuProLaboreLiquidoCents),
           description: "Saldo previsto após desconto dos adiantamentos.",
         },
       ];
@@ -15228,23 +15375,36 @@ const currentManager =
         managersCount,
         gestoresAtivos: managersCount,
 
-        faturamentoMensal,
-        custosFixos,
-        salariosFuncionarios,
-        saidasProjetadas,
-        saidasLancadas: saidasProjetadas,
-        adiantamentosTotais,
-        adiantamentosProLabore: adiantamentosTotais,
+        faturamentoMensalCents,
+        custosFixosCents,
+        salariosFuncionariosCents,
+        saidasProjetadasCents,
+        saidasLancadasCents: saidasProjetadasCents,
+        adiantamentosTotaisCents,
+        adiantamentosProLaboreCents: adiantamentosTotaisCents,
+        liquidoAntesCaixaCents,
+        caixaEmpresaCents,
+        liquidoDistribuivelCents,
+        proLaboreIndividualCents,
+        proLaboreBrutoPorGestorCents: proLaboreIndividualCents,
+        meuAdiantamentoCents,
+        meuProLaboreLiquidoCents,
 
-        liquidoAntesCaixa,
-        caixaEmpresa,
-        liquidoDistribuivel,
-
-        proLaboreIndividual,
-        proLaboreBrutoPorGestor: proLaboreIndividual,
-
-        meuAdiantamento,
-        meuProLaboreLiquido,
+        // LEGACY: reais derivados na fronteira para compatibilidade temporária.
+        faturamentoMensal: legacyDecimalReais(faturamentoMensalCents),
+        custosFixos: legacyDecimalReais(custosFixosCents),
+        salariosFuncionarios: legacyDecimalReais(salariosFuncionariosCents),
+        saidasProjetadas: legacyDecimalReais(saidasProjetadasCents),
+        saidasLancadas: legacyDecimalReais(saidasProjetadasCents),
+        adiantamentosTotais: legacyDecimalReais(adiantamentosTotaisCents),
+        adiantamentosProLabore: legacyDecimalReais(adiantamentosTotaisCents),
+        liquidoAntesCaixa: legacyDecimalReais(liquidoAntesCaixaCents),
+        caixaEmpresa: legacyDecimalReais(caixaEmpresaCents),
+        liquidoDistribuivel: legacyDecimalReais(liquidoDistribuivelCents),
+        proLaboreIndividual: legacyDecimalReais(proLaboreIndividualCents),
+        proLaboreBrutoPorGestor: legacyDecimalReais(proLaboreIndividualCents),
+        meuAdiantamento: legacyDecimalReais(meuAdiantamentoCents),
+        meuProLaboreLiquido: legacyDecimalReais(meuProLaboreLiquidoCents),
 
         currentManager,
         managers: managersSummary,
@@ -19673,9 +19833,19 @@ app.post(
         }
       }
 
-      if (!charge.amount || Number(charge.amount) <= 0) {
-        return res.status(400).json({
-          message: "O valor da cobrança deve ser maior que zero.",
+      let amountInCents: number;
+
+      try {
+        amountInCents = billingChargeAmountToCents(charge);
+      } catch (moneyError) {
+        const status = moneyError instanceof AmbiguousMoneyError ? 409 : 400;
+        return res.status(status).json({
+          code: moneyError instanceof AmbiguousMoneyError
+            ? moneyError.code
+            : "INVALID_MONEY_VALUE",
+          message: moneyError instanceof Error
+            ? moneyError.message
+            : "O valor da cobrança é inválido.",
         });
       }
 
@@ -19685,9 +19855,6 @@ const description =
   charge.chargeType === "PARCELA"
     ? `Parcela ${charge.installmentNumber || ""} ${charge.contract?.contractNumber || ""} ${charge.protocol.protocolNumber}`.trim()
     : `Entrada ${charge.contract?.contractNumber || ""} ${charge.protocol.protocolNumber}`.trim();
-
-const amountInCents =
-  billingChargeAmountToCents(charge);
 
 /*
  * Toda BillingCharge vinculada a contrato possui vencimento
@@ -19965,9 +20132,19 @@ app.post(
         });
       }
 
-      if (!charge.amount || Number(charge.amount) <= 0) {
-        return res.status(400).json({
-          message: "O valor da cobrança deve ser maior que zero.",
+      let amountInCents: number;
+
+      try {
+        amountInCents = billingChargeAmountToCents(charge);
+      } catch (moneyError) {
+        const status = moneyError instanceof AmbiguousMoneyError ? 409 : 400;
+        return res.status(status).json({
+          code: moneyError instanceof AmbiguousMoneyError
+            ? moneyError.code
+            : "INVALID_MONEY_VALUE",
+          message: moneyError instanceof Error
+            ? moneyError.message
+            : "O valor da cobrança é inválido.",
         });
       }
 
@@ -19985,9 +20162,6 @@ app.post(
           : `Entrada ${charge.contract?.contractNumber || ""} ${
               charge.protocol.protocolNumber
             }`.trim();
-
-      const amountInCents =
-  billingChargeAmountToCents(charge);
 
       const isContractDueCharge =
         Boolean(charge.contractId) &&
@@ -20670,18 +20844,24 @@ app.post(
 
       const paidAt = normalizeNullableDate(req.body?.paidAt) || new Date();
 
-      const paidAmountCents =
-        req.body?.paidAmount !== undefined && req.body?.paidAmount !== ""
-          ? reaisInputToCents(req.body.paidAmount, "Valor pago")
-          : canonicalCentsOrLegacy(
-              charge.amountCents,
-              charge.amount,
-              "Valor da cobrança"
-            );
+      let paidAmountCents: number;
 
-      if (paidAmountCents <= 0) {
-        return res.status(400).json({
-          message: "O valor pago deve ser maior que zero.",
+      try {
+        paidAmountCents = resolvePaidAmountCents({
+          obligationAmountCents: charge.amountCents,
+          paidAmountCents: req.body?.paidAmountCents,
+          paidAmountReais: req.body?.paidAmount,
+          legacyObligationReais: charge.amount,
+        });
+      } catch (moneyError) {
+        const status = moneyError instanceof AmbiguousMoneyError ? 409 : 400;
+        return res.status(status).json({
+          code: moneyError instanceof AmbiguousMoneyError
+            ? moneyError.code
+            : "INVALID_MONEY_VALUE",
+          message: moneyError instanceof Error
+            ? moneyError.message
+            : "O valor pago é inválido.",
         });
       }
 

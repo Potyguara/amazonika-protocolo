@@ -4,6 +4,7 @@ import path from "node:path";
 import { test } from "node:test";
 import ts from "typescript";
 import {
+  AmbiguousMoneyError,
   canonicalCentsOrLegacy,
   legacyReaisFromCents,
   moneyWriteFromReais,
@@ -12,12 +13,18 @@ import {
   proposalToContractMoney,
   proposalToProtocolMoney,
   reaisInputToCents,
+  requirePositiveOperationalCents,
+  resolveOperationalMoney,
+  resolvePaidAmountCents,
+  sumOperationalMoney,
 } from "./canonical-money";
 import {
   assertMoneyCents,
   centsToBbValue,
+  divideCents,
   formatBRL,
   parseReaisInput,
+  sumCents,
 } from "./money";
 
 test("2C1 canonical real inputs map exactly to integer cents", () => {
@@ -188,4 +195,89 @@ test("Proposal copies canonical cents exactly to Contract and Protocol", () => {
   });
   assert.throws(() => proposalToContractMoney(100, 101));
   assert.throws(() => proposalToProtocolMoney(0));
+});
+
+test("2C2-A operational reads distinguish canonical, confirmed legacy and ambiguous values", () => {
+  assert.deepEqual(resolveOperationalMoney({
+    canonicalCents: 1,
+    legacyReais: 0,
+    legacyClassification: "AMBIGUOUS",
+    label: "Transação",
+  }), { amountCents: 1, source: "CANONICAL" });
+
+  assert.deepEqual(resolveOperationalMoney({
+    canonicalCents: 0,
+    legacyReais: 999,
+    legacyClassification: "LEGACY_CONFIRMED",
+  }), { amountCents: 0, source: "CANONICAL" });
+
+  assert.deepEqual(resolveOperationalMoney({
+    canonicalCents: null,
+    legacyReais: "1.50",
+    legacyClassification: "LEGACY_CONFIRMED",
+  }), { amountCents: 150, source: "LEGACY_CONFIRMED" });
+
+  assert.throws(() => resolveOperationalMoney({
+    canonicalCents: null,
+    legacyReais: "1.50",
+    legacyClassification: "AMBIGUOUS",
+  }), AmbiguousMoneyError);
+  assert.throws(() => resolveOperationalMoney({ canonicalCents: null, legacyReais: null }), AmbiguousMoneyError);
+});
+
+test("2C2-A operational eligibility and mark-paid preserve cents", () => {
+  assert.equal(requirePositiveOperationalCents({
+    canonicalCents: 1,
+    legacyReais: 0,
+    legacyClassification: "AMBIGUOUS",
+    label: "Transação",
+  }), 1);
+  assert.throws(() => requirePositiveOperationalCents({
+    canonicalCents: 0,
+    legacyReais: 999,
+    legacyClassification: "LEGACY_CONFIRMED",
+  }), RangeError);
+  assert.equal(resolvePaidAmountCents({ obligationAmountCents: 12345 }), 12345);
+  assert.equal(resolvePaidAmountCents({
+    obligationAmountCents: 12345,
+    paidAmountReais: 123,
+    legacyObligationReais: 123,
+  }), 12345);
+  assert.equal(resolvePaidAmountCents({
+    obligationAmountCents: 99999,
+    paidAmountReais: "123.45",
+  }), 12345);
+  assert.equal(resolvePaidAmountCents({
+    obligationAmountCents: 99999,
+    paidAmountCents: 12345,
+    paidAmountReais: "1.00",
+  }), 12345);
+  assert.throws(() => resolvePaidAmountCents({ obligationAmountCents: null }), AmbiguousMoneyError);
+});
+
+test("2C2-A BB, payment-plan and summaries remain exact integer cents", () => {
+  assert.equal(centsToBbValue(assertMoneyCents(1)), "0.01");
+  assert.equal(centsToBbValue(assertMoneyCents(12345)), "123.45");
+
+  const paymentPlan = [20000, 26667, 26667, 26667].map(assertMoneyCents);
+  assert.equal(sumCents(paymentPlan), 100001);
+  assert.equal(sumOperationalMoney(
+    [{ amountCents: 1 }, { amountCents: 150 }, { amountCents: 12345 }],
+    { legacyClassification: "AMBIGUOUS", label: "Resumo" },
+  ), 12496);
+  assert.equal(divideCents(assertMoneyCents(100), 3), 33);
+});
+
+test("2C2-A server exposes canonical payment-plan fields and avoids legacy real aggregations", () => {
+  const sourceText = fs.readFileSync(path.resolve(process.cwd(), "src/server.ts"), "utf8");
+  const paymentPlanStart = sourceText.indexOf('"/finance/transactions/:id/payment-plan"');
+  const paymentPlanEnd = sourceText.indexOf("// Proteções emergenciais compartilhadas", paymentPlanStart);
+  const paymentPlanRoute = sourceText.slice(paymentPlanStart, paymentPlanEnd);
+
+  assert.ok(paymentPlanRoute.includes("amountCents: true"));
+  assert.ok(paymentPlanRoute.includes("paidAmountCents: true"));
+  assert.ok(paymentPlanRoute.includes("totalAmountCents"));
+  assert.ok(paymentPlanRoute.includes("installmentAmountsCents"));
+  assert.ok(!sourceText.includes("Math.round(baseLiquida *"));
+  assert.ok(!sourceText.includes("sum + Number(item.amount || 0)"));
 });

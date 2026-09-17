@@ -1,4 +1,5 @@
 import {
+  MoneyCents,
   assertPrismaIntCents,
   multiplyCents,
   parseReaisInput,
@@ -6,6 +7,103 @@ import {
 } from "./money";
 
 export type LegacyMoneyStorage = "integer-reais" | "decimal-reais";
+export type LegacyMoneyClassification = "LEGACY_CONFIRMED" | "AMBIGUOUS";
+export type OperationalMoneySource = "CANONICAL" | "LEGACY_CONFIRMED";
+
+export class AmbiguousMoneyError extends Error {
+  readonly code = "AMBIGUOUS_MONEY_VALUE";
+
+  constructor(label: string) {
+    super(`${label} não possui valor canônico em centavos nem classificação histórica confirmada.`);
+    this.name = "AmbiguousMoneyError";
+  }
+}
+
+export function resolveOperationalMoney(input: {
+  canonicalCents: unknown;
+  legacyReais?: unknown;
+  legacyClassification?: LegacyMoneyClassification;
+  label?: string;
+}): { amountCents: MoneyCents; source: OperationalMoneySource } {
+  const label = input.label ?? "Valor";
+
+  if (input.canonicalCents !== null && input.canonicalCents !== undefined) {
+    return {
+      amountCents: assertPrismaIntCents(input.canonicalCents),
+      source: "CANONICAL",
+    };
+  }
+
+  if (input.legacyClassification !== "LEGACY_CONFIRMED") {
+    throw new AmbiguousMoneyError(label);
+  }
+
+  return {
+    amountCents: reaisInputToCents(input.legacyReais, `${label} legado`),
+    source: "LEGACY_CONFIRMED",
+  };
+}
+
+export function requirePositiveOperationalCents(input: Parameters<typeof resolveOperationalMoney>[0]) {
+  const resolved = resolveOperationalMoney(input);
+  if (resolved.amountCents <= 0) {
+    throw new RangeError(`${input.label ?? "Valor"} deve ser maior que zero.`);
+  }
+  return resolved.amountCents;
+}
+
+export function sumOperationalMoney(
+  items: ReadonlyArray<{ amountCents?: unknown; amount?: unknown }>,
+  options: { legacyClassification: LegacyMoneyClassification; label: string },
+) {
+  return sumCents(items.map((item, index) => resolveOperationalMoney({
+    canonicalCents: item.amountCents,
+    legacyReais: item.amount,
+    legacyClassification: options.legacyClassification,
+    label: `${options.label} ${index + 1}`,
+  }).amountCents));
+}
+
+export function resolvePaidAmountCents(input: {
+  obligationAmountCents: unknown;
+  paidAmountCents?: unknown;
+  paidAmountReais?: unknown;
+  legacyObligationReais?: unknown;
+}) {
+  const obligationAmountCents = requirePositiveOperationalCents({
+    canonicalCents: input.obligationAmountCents,
+    legacyClassification: "AMBIGUOUS",
+    label: "Valor da cobrança",
+  });
+  const hasCanonicalPaidAmount =
+    input.paidAmountCents !== null &&
+    input.paidAmountCents !== undefined &&
+    input.paidAmountCents !== "";
+  const hasLegacyPaidAmount =
+    input.paidAmountReais !== null &&
+    input.paidAmountReais !== undefined &&
+    input.paidAmountReais !== "";
+
+  let amountCents = obligationAmountCents;
+  if (hasCanonicalPaidAmount) {
+    amountCents = assertPrismaIntCents(input.paidAmountCents);
+  } else if (hasLegacyPaidAmount) {
+    const requestedCents = reaisInputToCents(input.paidAmountReais, "Valor pago");
+    const isLegacyUiDefault = input.legacyObligationReais !== null &&
+      input.legacyObligationReais !== undefined &&
+      requestedCents === reaisInputToCents(
+        input.legacyObligationReais,
+        "Espelho legado da cobrança",
+      );
+
+    // Compatibilidade temporária: a UI anterior envia charge.amount sem edição.
+    // Esse espelho inteiro não pode substituir a obrigação canônica com centavos.
+    amountCents = isLegacyUiDefault ? obligationAmountCents : requestedCents;
+  }
+
+  if (amountCents <= 0) throw new RangeError("O valor pago deve ser maior que zero.");
+  return amountCents;
+}
 
 export function reaisInputToCents(value: unknown, label = "Valor") {
   if (value === null || value === undefined || value === "") {

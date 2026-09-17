@@ -107,6 +107,15 @@ export function sumCents(values: readonly MoneyCents[]): MoneyCents {
   return fromBigInt(values.reduce((sum, value) => sum + BigInt(assertMoneyCents(value)), 0n));
 }
 
+/** Divide a cent amount by an integer count; half cents round away from zero. */
+export function divideCents(cents: MoneyCents, divisor: number): MoneyCents {
+  assertMoneyCents(cents);
+  if (!Number.isSafeInteger(divisor) || divisor <= 0) {
+    throw new RangeError("Money divisor must be a positive safe integer.");
+  }
+  return roundRatioCents(BigInt(cents), BigInt(divisor));
+}
+
 function decimalRatio(value: number): [bigint, bigint] {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new TypeError("Quantity/rate must be a finite number.");
