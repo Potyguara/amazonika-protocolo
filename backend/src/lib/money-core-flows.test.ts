@@ -6,6 +6,7 @@ import ts from "typescript";
 import {
   AmbiguousMoneyError,
   canonicalCentsOrLegacy,
+  formatCanonicalCents,
   legacyReaisFromCents,
   moneyWriteFromReais,
   normalizeFinancialPlanMoney,
@@ -13,10 +14,12 @@ import {
   proposalToContractMoney,
   proposalToProtocolMoney,
   reaisInputToCents,
+  requireCanonicalCents,
   requirePositiveOperationalCents,
   resolveOperationalMoney,
   resolvePaidAmountCents,
   sumOperationalMoney,
+  validateProposalItemCents,
 } from "./canonical-money";
 import {
   assertMoneyCents,
@@ -193,8 +196,55 @@ test("Proposal copies canonical cents exactly to Contract and Protocol", () => {
     finalValueCents: 100001,
     finalValue: 1000.01,
   });
+  assert.equal(proposalToContractMoney(123456, 0).contractValueCents, 123456);
   assert.throws(() => proposalToContractMoney(100, 101));
   assert.throws(() => proposalToProtocolMoney(0));
+});
+
+test("2C2-B canonical proposal and contract presentation formats cents only at the boundary", () => {
+  assert.equal(formatCanonicalCents(12345, "Proposta"), "R$ 123,45");
+  assert.equal(formatCanonicalCents(100001, "Proposta"), "R$ 1.000,01");
+  assert.equal(formatCanonicalCents(1, "Contrato"), "R$ 0,01");
+  assert.equal(formatCanonicalCents(150, "Contrato"), "R$ 1,50");
+  assert.equal(formatCanonicalCents(123456, "Contrato"), "R$ 1.234,56");
+  assert.equal(requireCanonicalCents(0), 0);
+  assert.throws(() => requireCanonicalCents(null, "Contrato"), AmbiguousMoneyError);
+});
+
+test("2C2-B ProposalItem validates canonical unit and total without reais", () => {
+  assert.deepEqual(validateProposalItemCents({
+    unitAmountCents: 3333,
+    quantity: 3,
+    totalAmountCents: 9999,
+  }), { unitAmountCents: 3333, totalAmountCents: 9999 });
+  assert.throws(() => validateProposalItemCents({
+    unitAmountCents: 3333,
+    quantity: 3,
+    totalAmountCents: 10000,
+  }), /diverge/);
+});
+
+test("2C2-B new backend documents use canonical formatters and preserve stored snapshots", () => {
+  const sourceText = fs.readFileSync(path.resolve(process.cwd(), "src/server.ts"), "utf8");
+  const snapshotStart = sourceText.indexOf("function buildContractHtmlSnapshot");
+  const snapshotEnd = sourceText.indexOf("app.post(\n  \"/proposals/:id/generate-contract\"", snapshotStart);
+  const snapshotBuilder = sourceText.slice(snapshotStart, snapshotEnd);
+
+  assert.match(snapshotBuilder, /totalAmountCents: number/);
+  assert.match(snapshotBuilder, /entryAmountCents: number/);
+  assert.doesNotMatch(snapshotBuilder, /formatCurrencyBRFromFloat/);
+  assert.doesNotMatch(snapshotBuilder, /params\.totalAmount(?!Cents)/);
+  assert.doesNotMatch(snapshotBuilder, /params\.entryAmount(?!Cents)/);
+  assert.ok(!sourceText.includes("formatCurrencyBRFromFloat(contract.contractValue)"));
+  assert.ok(!sourceText.includes("formatMoneyBR(item.unitAmount)"));
+  assert.ok(!sourceText.includes("formatMoneyBR(item.totalAmount)"));
+  assert.equal(sourceText.match(/\n\s*htmlSnapshot,\n/g)?.length, 1);
+
+  const acceptStart = sourceText.indexOf('app.post("/public/proposals/:token/accept"');
+  const acceptEnd = sourceText.indexOf('app.post("/public/proposals/:token/request-adjustment"', acceptStart);
+  const acceptRoute = sourceText.slice(acceptStart, acceptEnd);
+  assert.match(acceptRoute, /proposalToProtocolMoney\(acceptedTotalAmountCents\)/);
+  assert.doesNotMatch(acceptRoute, /canonicalCentsOrLegacy/);
 });
 
 test("2C2-A operational reads distinguish canonical, confirmed legacy and ambiguous values", () => {

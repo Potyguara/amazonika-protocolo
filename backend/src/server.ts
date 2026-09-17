@@ -11,16 +11,19 @@ import { copyPaymentSchedule } from "./lib/payment-schedule";
 import {
   AmbiguousMoneyError,
   canonicalCentsOrLegacy,
+  formatCanonicalCents,
   legacyReaisFromCents,
   normalizeFinancialPlanMoney,
   proposalItemMoney,
   proposalToContractMoney,
   proposalToProtocolMoney,
   reaisInputToCents,
+  requireCanonicalCents,
   requirePositiveOperationalCents,
   resolveOperationalMoney,
   resolvePaidAmountCents,
   sumOperationalMoney,
+  validateProposalItemCents,
 } from "./lib/canonical-money";
 import "dotenv/config";
 import express, { Request, Response, NextFunction } from "express";
@@ -1952,6 +1955,15 @@ async function generateSignedContractPdf(
     );
   }
 
+  const contractValueCents = requireCanonicalCents(
+    contract.contractValueCents,
+    "Valor total do contrato assinado"
+  );
+  const contractEntryAmountCents = requireCanonicalCents(
+    contract.entryAmountCents,
+    "Entrada do contrato assinado"
+  );
+
   const contractorSignature =
     contract.signatures.find(
       (signature) =>
@@ -2716,21 +2728,17 @@ async function generateSignedContractPdf(
 
   labelValue(
     "Valor total",
-    formatCurrencyBRFromFloat(
-      Number(
-        contract.contractValue ||
-          0
-      )
+    formatCurrencyBRFromCents(
+      contractValueCents,
+      "Valor total do contrato assinado"
     )
   );
 
   labelValue(
     "Entrada",
-    formatCurrencyBRFromFloat(
-      Number(
-        contract.entryAmount ||
-          0
-      )
+    formatCurrencyBRFromCents(
+      contractEntryAmountCents,
+      "Entrada do contrato assinado"
     )
   );
 
@@ -3086,13 +3094,8 @@ async function generateContractNumber() {
   return `CONT-${year}-${String(count + 1).padStart(6, "0")}`;
 }
 
-function formatCurrencyBRFromCents(value: number | null | undefined) {
-  const amount = Number(value || 0) / 100;
-
-  return amount.toLocaleString("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  });
+function formatCurrencyBRFromCents(value: unknown, label = "Valor") {
+  return formatCanonicalCents(value, label);
 }
 
 function formatCurrencyBRFromFloat(value: number | null | undefined) {
@@ -3178,11 +3181,11 @@ function buildContractHtmlSnapshot(params: {
   clientEmail?: string | null;
   clientAddress?: string | null;
   serviceName: string;
-  totalAmount: number;
-  entryAmount: number;
+  totalAmountCents: number;
+  entryAmountCents: number;
   paymentMode: string;
   installmentQty?: number | null;
-  installmentAmount?: number | null;
+  installmentAmountCents?: number | null;
   paymentSchedule: Array<{
     type: "ENTRADA" | "PARCELA";
     installmentNumber: number;
@@ -3197,9 +3200,12 @@ function buildContractHtmlSnapshot(params: {
   legalText: string;
 }) {
   const installments =
-    params.installmentQty && params.installmentAmount
-      ? `${params.installmentQty} parcela(s) de ${formatCurrencyBRFromFloat(
-          params.installmentAmount
+    params.installmentQty &&
+    params.installmentAmountCents !== null &&
+    params.installmentAmountCents !== undefined
+      ? `${params.installmentQty} parcela(s) de ${formatCurrencyBRFromCents(
+          params.installmentAmountCents,
+          "Valor da parcela do contrato"
         )}`
       : "Não aplicável";
 
@@ -3268,11 +3274,13 @@ function buildContractHtmlSnapshot(params: {
 
       <h2>Condições comerciais</h2>
       <p><strong>Serviço principal:</strong> ${params.serviceName}</p>
-      <p><strong>Valor total:</strong> ${formatCurrencyBRFromFloat(
-        params.totalAmount
+      <p><strong>Valor total:</strong> ${formatCurrencyBRFromCents(
+        params.totalAmountCents,
+        "Valor total do contrato"
       )}</p>
-      <p><strong>Entrada:</strong> ${formatCurrencyBRFromFloat(
-        params.entryAmount
+      <p><strong>Entrada:</strong> ${formatCurrencyBRFromCents(
+        params.entryAmountCents,
+        "Entrada do contrato"
       )}</p>
       <p><strong>Forma de pagamento:</strong> ${params.paymentMode}</p>
       <p><strong>Parcelamento:</strong> ${installments}</p>
@@ -3370,16 +3378,10 @@ app.post(
         )
       );
 
-      // A partir da 2C.1, o cabeçalho canônico da proposta é a fonte
-      // para o valor aprovado; o campo legado só serve de fallback
-      // para propostas históricas ainda não convertidas.
-      const proposalTotalCents =
-        proposal.totalAmountCents !== null &&
-        proposal.totalAmountCents !== undefined
-          ? assertPrismaIntCents(proposal.totalAmountCents)
-          : assertPrismaIntCents(
-              parseReaisInput(String(proposal.totalAmount || 0), "en-US")
-            );
+      const proposalTotalCents = requireCanonicalCents(
+        proposal.totalAmountCents,
+        "Valor total da proposta"
+      );
 
       if (scheduleTotalCents !== proposalTotalCents) {
         return res.status(400).json({
@@ -3434,25 +3436,25 @@ app.post(
       /*
        * CONTRACT_SNAPSHOT_FINANCIAL_VALIDATION
        *
-       * Proposal.totalAmount / entryAmount / installmentAmount
-       * utilizam REAIS.
-       *
-       * ProposalPaymentSchedule.amountCents utiliza CENTAVOS.
-       *
-       * O cronograma é a fonte canônica para validar a
-       * composição financeira antes de congelar o contrato.
+       * Todos os valores usados no novo snapshot estão em centavos.
+       * O cronograma valida a composição antes de congelar o contrato.
        */
       const entryScheduleItem =
         proposal.paymentSchedule.find(
           (item) => item.type === "ENTRADA"
         );
 
-      const proposalEntryAmountCents =
-        proposal.entryAmountCents !== null &&
-        proposal.entryAmountCents !== undefined
-          ? assertPrismaIntCents(proposal.entryAmountCents)
-          : assertPrismaIntCents(
-              parseReaisInput(String(proposal.entryAmount || 0), "en-US")
+      const proposalEntryAmountCents = requireCanonicalCents(
+        proposal.entryAmountCents,
+        "Entrada da proposta"
+      );
+      const proposalInstallmentAmountCents =
+        proposal.installmentAmountCents === null ||
+        proposal.installmentAmountCents === undefined
+          ? null
+          : requireCanonicalCents(
+              proposal.installmentAmountCents,
+              "Valor uniforme das parcelas da proposta"
             );
 
       if (
@@ -3477,11 +3479,11 @@ app.post(
         clientEmail: proposal.client.email,
         clientAddress: proposal.client.address,
         serviceName: proposal.protocol.serviceType.name,
-        totalAmount: proposal.totalAmount,
-        entryAmount: proposal.entryAmount,
+        totalAmountCents: proposalTotalCents,
+        entryAmountCents: proposalEntryAmountCents,
         paymentMode: proposal.paymentMode,
         installmentQty: proposal.installmentQty,
-        installmentAmount: proposal.installmentAmount,
+        installmentAmountCents: proposalInstallmentAmountCents,
         paymentSchedule: proposal.paymentSchedule.map((item) => ({
           type: item.type,
           installmentNumber: item.installmentNumber,
@@ -3613,7 +3615,9 @@ app.post(
           contractNumber: contract.contractNumber,
           proposalNumber: proposal.proposalNumber,
           contractValue: contract.contractValue,
+          contractValueCents: contract.contractValueCents,
           entryAmount: contract.entryAmount,
+          entryAmountCents: contract.entryAmountCents,
         },
       });
 
@@ -3639,6 +3643,10 @@ app.post(
       });
     } catch (error) {
       console.error("Erro ao gerar contrato:", error);
+
+      if (error instanceof AmbiguousMoneyError) {
+        return res.status(409).json({ code: error.code, message: error.message });
+      }
 
       return res.status(500).json({
         message: "Erro ao gerar contrato.",
@@ -4344,6 +4352,13 @@ app.post(
       const publicUrl = `${process.env.FRONTEND_URL || ""}/contrato/${
         contract.publicToken
       }`;
+      const contractValueText = formatCurrencyBRFromCents(
+        requireCanonicalCents(
+          contract.contractValueCents,
+          "Valor total do contrato"
+        ),
+        "Valor total do contrato"
+      );
 
       const html = `
         <div style="font-family:Arial,sans-serif;background:#f4f7f5;padding:24px;">
@@ -4364,7 +4379,7 @@ app.post(
               <div style="background:#f8fbf9;border:1px solid #dfe7e2;border-radius:14px;padding:16px;margin:18px 0;">
                 <p><strong>Contrato:</strong> ${contract.contractNumber}</p>
                 <p><strong>Serviço:</strong> ${contract.protocol.serviceType.name}</p>
-                <p><strong>Valor:</strong> ${formatCurrencyBRFromFloat(contract.contractValue)}</p>
+                <p><strong>Valor:</strong> ${contractValueText}</p>
                 <p><strong>Status:</strong> Aguardando assinatura</p>
               </div>
 
@@ -4461,6 +4476,10 @@ app.post(
       });
     } catch (error) {
       console.error("Erro ao enviar contrato:", error);
+
+      if (error instanceof AmbiguousMoneyError) {
+        return res.status(409).json({ code: error.code, message: error.message });
+      }
 
       return res.status(500).json({
         message: "Erro ao enviar contrato por e-mail.",
@@ -6096,12 +6115,29 @@ app.post(
 
       const proposalUrl = `${publicBaseUrl}/proposta/${proposal.publicToken}`;
 
-      const totalAmount = Number(proposal.totalAmount || 0);
-      const entryAmount = Number(proposal.entryAmount || 0);
+      const totalAmountText = formatCurrencyBRFromCents(
+        requireCanonicalCents(
+          proposal.totalAmountCents,
+          "Valor total da proposta"
+        ),
+        "Valor total da proposta"
+      );
+      const entryAmountText = formatCurrencyBRFromCents(
+        requireCanonicalCents(
+          proposal.entryAmountCents,
+          "Entrada da proposta"
+        ),
+        "Entrada da proposta"
+      );
 
       const itemsHtml = (proposal.items || [])
-        .map(
-          (item) => `
+        .map((item) => {
+          const itemMoney = validateProposalItemCents({
+            unitAmountCents: item.unitAmountCents,
+            totalAmountCents: item.totalAmountCents,
+            quantity: item.quantity,
+          });
+          return `
             <tr>
               <td style="padding:10px 12px; border-bottom:1px solid #e5ebe7;">
                 <strong>${item.serviceName}</strong>
@@ -6115,14 +6151,20 @@ app.post(
                 ${item.quantity}
               </td>
               <td style="padding:10px 12px; border-bottom:1px solid #e5ebe7; text-align:right;">
-                ${formatMoneyBR(item.unitAmount)}
+                ${formatCurrencyBRFromCents(
+                  itemMoney.unitAmountCents,
+                  "Valor unitário do item da proposta"
+                )}
               </td>
               <td style="padding:10px 12px; border-bottom:1px solid #e5ebe7; text-align:right;">
-                <strong>${formatMoneyBR(item.totalAmount)}</strong>
+                <strong>${formatCurrencyBRFromCents(
+                  itemMoney.totalAmountCents,
+                  "Valor total do item da proposta"
+                )}</strong>
               </td>
             </tr>
-          `
-        )
+          `;
+        })
         .join("");
 
       const paymentLabel =
@@ -6177,12 +6219,12 @@ app.post(
               <div style="margin-top:22px; display:grid; gap:10px;">
                 <div style="display:flex; justify-content:space-between; padding:12px; background:#f8fbf9; border-radius:12px;">
                   <span>Valor total</span>
-                  <strong>${formatMoneyBR(totalAmount)}</strong>
+                  <strong>${totalAmountText}</strong>
                 </div>
 
                 <div style="display:flex; justify-content:space-between; padding:12px; background:#f8fbf9; border-radius:12px;">
                   <span>Entrada</span>
-                  <strong>${formatMoneyBR(entryAmount)}</strong>
+                  <strong>${entryAmountText}</strong>
                 </div>
 
                 <div style="display:flex; justify-content:space-between; padding:12px; background:#f8fbf9; border-radius:12px;">
@@ -6279,7 +6321,9 @@ app.post(
             messageId: info.messageId,
             publicUrl: proposalUrl,
             totalAmount: proposal.totalAmount,
+            totalAmountCents: proposal.totalAmountCents,
             entryAmount: proposal.entryAmount,
+            entryAmountCents: proposal.entryAmountCents,
             paymentMode: proposal.paymentMode,
           },
         });
@@ -6313,6 +6357,10 @@ app.post(
       });
     } catch (error) {
       console.error("Erro ao enviar proposta por e-mail:", error);
+
+      if (error instanceof AmbiguousMoneyError) {
+        return res.status(409).json({ code: error.code, message: error.message });
+      }
 
       return res.status(500).json({
         message:
@@ -16034,7 +16082,13 @@ function normalizeProposalPaymentSchedule(
     proposalTotalCents
   ) {
     throw new Error(
-      `O cronograma financeiro soma R$ ${(totalScheduleCents / 100).toFixed(2)}, mas o valor total da proposta é R$ ${(proposalTotalCents / 100).toFixed(2)}.`
+      `O cronograma financeiro soma ${formatCurrencyBRFromCents(
+        totalScheduleCents,
+        "Total do cronograma"
+      )}, mas o valor total da proposta é ${formatCurrencyBRFromCents(
+        proposalTotalCents,
+        "Valor total da proposta"
+      )}.`
     );
   }
 
@@ -16393,8 +16447,14 @@ app.put(
               totalAmount:
                 proposal.totalAmount,
 
+              totalAmountCents:
+                proposal.totalAmountCents,
+
               entryAmount:
                 proposal.entryAmount,
+
+              entryAmountCents:
+                proposal.entryAmountCents,
 
               installmentQty:
                 proposal.installmentQty,
@@ -16458,14 +16518,26 @@ app.put(
             previousTotalAmount:
               existing.totalAmount,
 
+            previousTotalAmountCents:
+              existing.totalAmountCents,
+
             newTotalAmount:
               proposal.totalAmount,
+
+            newTotalAmountCents:
+              proposal.totalAmountCents,
 
             previousEntryAmount:
               existing.entryAmount,
 
+            previousEntryAmountCents:
+              existing.entryAmountCents,
+
             newEntryAmount:
               proposal.entryAmount,
+
+            newEntryAmountCents:
+              proposal.entryAmountCents,
 
             previousClientMessage:
               existing.clientMessage ||
@@ -16738,7 +16810,9 @@ if (
   metadata: {
     proposalNumber: proposal.proposalNumber,
     totalAmount: proposal.totalAmount,
+    totalAmountCents: proposal.totalAmountCents,
     entryAmount: proposal.entryAmount,
+    entryAmountCents: proposal.entryAmountCents,
     paymentMode: proposal.paymentMode,
   },
 });
@@ -16912,6 +16986,11 @@ app.post("/public/proposals/:token/accept", async (req, res) => {
       });
     }
 
+    const acceptedTotalAmountCents = requireCanonicalCents(
+      proposal.totalAmountCents,
+      "Valor total da proposta aceita"
+    );
+
     const updated = await prisma.proposal.update({
       where: {
         id: proposal.id,
@@ -16941,7 +17020,9 @@ app.post("/public/proposals/:token/accept", async (req, res) => {
       metadata: {
         proposalNumber: proposal.proposalNumber,
         totalAmount: proposal.totalAmount,
+        totalAmountCents: acceptedTotalAmountCents,
         entryAmount: proposal.entryAmount,
+        entryAmountCents: proposal.entryAmountCents,
         paymentMode: proposal.paymentMode,
         clientMessage: proposal.clientMessage || null,
         acceptedAt: new Date().toISOString(),
@@ -16954,13 +17035,7 @@ app.post("/public/proposals/:token/accept", async (req, res) => {
       },
       data: {
         status: "ACORDO_FECHADO",
-        ...proposalToProtocolMoney(
-          canonicalCentsOrLegacy(
-            proposal.totalAmountCents,
-            proposal.totalAmount,
-            "Valor total da proposta"
-          )
-        ),
+        ...proposalToProtocolMoney(acceptedTotalAmountCents),
       },
     });
 
@@ -16981,6 +17056,10 @@ app.post("/public/proposals/:token/accept", async (req, res) => {
     return res.json(updated);
   } catch (error) {
     console.error("Erro ao aceitar proposta:", error);
+
+    if (error instanceof AmbiguousMoneyError) {
+      return res.status(409).json({ code: error.code, message: error.message });
+    }
 
     return res.status(500).json({
       message: "Erro ao aceitar proposta.",

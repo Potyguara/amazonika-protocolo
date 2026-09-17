@@ -1,12 +1,17 @@
 import {
-  applyRateCents, assertPrismaIntCents, parseReaisInput, percentToBasisPoints, sumCents,
+  applyRateCents, assertPrismaIntCents, percentToBasisPoints, sumCents,
 } from "../../lib/money";
+import {
+  resolveOperationalMoney,
+} from "../../lib/canonical-money";
+import type { LegacyMoneyClassification } from "../../lib/canonical-money";
 
 type CommissionContract = {
   paymentSchedule?: readonly { amountCents: number }[];
   proposal?: { totalAmount: number; totalAmountCents?: number | null } | null;
   contractValue?: number | null;
   contractValueCents?: number | null;
+  legacyClassification?: LegacyMoneyClassification;
 };
 
 export function getContractBaseAmount(contract: CommissionContract | null) {
@@ -28,10 +33,14 @@ export function getContractBaseAmount(contract: CommissionContract | null) {
     return cents;
   }
 
-  // Fronteira legada explícita apenas para contratos ainda não reconciliados.
+  // Fronteira legada disponível somente para contrato histórico classificado.
   const legacyReais = contract.proposal?.totalAmount ?? contract.contractValue;
-  if (legacyReais == null) return assertPrismaIntCents(0);
-  const cents = assertPrismaIntCents(parseReaisInput(String(legacyReais), "en-US"));
+  const cents = resolveOperationalMoney({
+    canonicalCents: null,
+    legacyReais,
+    legacyClassification: contract.legacyClassification,
+    label: "Base histórica da comissão",
+  }).amountCents;
   if (cents < 0) throw new RangeError("Base contratual negativa.");
   return cents;
 }
@@ -41,4 +50,3 @@ export function calculateCommission(baseAmount: number, percent: number) {
   if (base < 0 || percent > 100) throw new RangeError("Base/percentual de comissão inválido.");
   return assertPrismaIntCents(applyRateCents(base, percentToBasisPoints(percent)));
 }
-

@@ -76,9 +76,19 @@ test("commission canonical path never reads legacy reais; base 123456 at 12.34% 
 });
 
 test("explicit legacy commission bases do not reinterpret canonical cents", () => {
-  assert.equal(getContractBaseAmount({ proposal: { totalAmount: 1234 } }), 123400);
-  assert.equal(getContractBaseAmount({ contractValue: 1234.56 }), 123456);
-  assert.throws(() => getContractBaseAmount({ contractValue: 1.234 }));
+  assert.equal(getContractBaseAmount({
+    proposal: { totalAmount: 1234 },
+    legacyClassification: "LEGACY_CONFIRMED",
+  }), 123400);
+  assert.equal(getContractBaseAmount({
+    contractValue: 1234.56,
+    legacyClassification: "LEGACY_CONFIRMED",
+  }), 123456);
+  assert.throws(() => getContractBaseAmount({
+    contractValue: 1.234,
+    legacyClassification: "LEGACY_CONFIRMED",
+  }));
+  assert.throws(() => getContractBaseAmount({ contractValue: 1234.56 }), /classificação histórica/);
 });
 
 test("commission release uses existing schedule columns and writes cents, with an in-memory repository", async () => {

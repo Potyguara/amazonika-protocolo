@@ -1,6 +1,7 @@
 import {
   MoneyCents,
   assertPrismaIntCents,
+  formatBRL,
   multiplyCents,
   parseReaisInput,
   sumCents,
@@ -50,6 +51,41 @@ export function requirePositiveOperationalCents(input: Parameters<typeof resolve
     throw new RangeError(`${input.label ?? "Valor"} deve ser maior que zero.`);
   }
   return resolved.amountCents;
+}
+
+export function requireCanonicalCents(value: unknown, label = "Valor") {
+  return resolveOperationalMoney({
+    canonicalCents: value,
+    legacyClassification: "AMBIGUOUS",
+    label,
+  }).amountCents;
+}
+
+export function formatCanonicalCents(value: unknown, label = "Valor") {
+  return formatBRL(requireCanonicalCents(value, label));
+}
+
+export function validateProposalItemCents(input: {
+  unitAmountCents: unknown;
+  totalAmountCents: unknown;
+  quantity: number;
+}) {
+  const unitAmountCents = requireCanonicalCents(
+    input.unitAmountCents,
+    "Valor unitário do item",
+  );
+  const totalAmountCents = requireCanonicalCents(
+    input.totalAmountCents,
+    "Valor total do item",
+  );
+  const expectedTotalCents = assertPrismaIntCents(
+    multiplyCents(unitAmountCents, input.quantity),
+  );
+
+  if (totalAmountCents !== expectedTotalCents) {
+    throw new RangeError("O total canônico do item diverge da quantidade e do valor unitário.");
+  }
+  return { unitAmountCents, totalAmountCents };
 }
 
 export function sumOperationalMoney(
