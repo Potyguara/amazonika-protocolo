@@ -100,45 +100,45 @@ export function sumOperationalMoney(
   }).amountCents));
 }
 
+/** Current mark-paid request: supplied cents or explicitly named reais input.
+ * No supplied payment means full settlement, preserving the existing route policy.
+ * Historical records must use resolveReceiptPaidAmountCents with classification.
+ */
 export function resolvePaidAmountCents(input: {
   obligationAmountCents: unknown;
   paidAmountCents?: unknown;
   paidAmountReais?: unknown;
-  legacyObligationReais?: unknown;
 }) {
   const obligationAmountCents = requirePositiveOperationalCents({
     canonicalCents: input.obligationAmountCents,
     legacyClassification: "AMBIGUOUS",
     label: "Valor da cobrança",
   });
-  const hasCanonicalPaidAmount =
-    input.paidAmountCents !== null &&
-    input.paidAmountCents !== undefined &&
-    input.paidAmountCents !== "";
-  const hasLegacyPaidAmount =
-    input.paidAmountReais !== null &&
-    input.paidAmountReais !== undefined &&
-    input.paidAmountReais !== "";
+  const amountCents = input.paidAmountCents != null
+    ? assertPrismaIntCents(input.paidAmountCents)
+    : input.paidAmountReais != null
+    ? reaisInputToCents(input.paidAmountReais, "Valor pago informado em reais")
+    : obligationAmountCents;
 
-  let amountCents = obligationAmountCents;
-  if (hasCanonicalPaidAmount) {
-    amountCents = assertPrismaIntCents(input.paidAmountCents);
-  } else if (hasLegacyPaidAmount) {
-    const requestedCents = reaisInputToCents(input.paidAmountReais, "Valor pago");
-    const isLegacyUiDefault = input.legacyObligationReais !== null &&
-      input.legacyObligationReais !== undefined &&
-      requestedCents === reaisInputToCents(
-        input.legacyObligationReais,
-        "Espelho legado da cobrança",
-      );
-
-    // Compatibilidade temporária: a UI anterior envia charge.amount sem edição.
-    // Esse espelho inteiro não pode substituir a obrigação canônica com centavos.
-    amountCents = isLegacyUiDefault ? obligationAmountCents : requestedCents;
-  }
-
+  // A canonical zero is selected, then rejected by the positive-payment policy.
   if (amountCents <= 0) throw new RangeError("O valor pago deve ser maior que zero.");
   return amountCents;
+}
+
+/** Receipt amount is the payment fact, never the amount of the obligation. */
+export function resolveReceiptPaidAmountCents(input: {
+  paidAmountCents?: unknown;
+  paidAmountReais?: unknown;
+  legacyClassification?: LegacyMoneyClassification;
+}) {
+  const cents = resolveOperationalMoney({
+    canonicalCents: input.paidAmountCents,
+    legacyReais: input.paidAmountReais,
+    legacyClassification: input.legacyClassification,
+    label: "Valor pago no recibo",
+  }).amountCents;
+  if (cents < 0) throw new RangeError("O valor pago no recibo não pode ser negativo.");
+  return cents;
 }
 
 export function reaisInputToCents(value: unknown, label = "Valor") {

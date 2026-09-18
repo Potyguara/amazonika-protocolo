@@ -163,3 +163,58 @@ export function moneyPreviewText(render: () => string): string {
     throw error;
   }
 }
+
+/** Draft state wraps the strict parser; absence and invalid input are not zero. */
+export type MoneyInputState =
+  | { status: "ABSENT" }
+  | { status: "VALID"; cents: MoneyCents }
+  | { status: "INVALID"; message: string };
+
+export function moneyInputState(value: string): MoneyInputState {
+  if (!value.trim()) return { status: "ABSENT" };
+  try {
+    return { status: "VALID", cents: reaisFormValueToCents(value) };
+  } catch (error) {
+    if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
+    return { status: "INVALID", message: error.message };
+  }
+}
+
+/** The financial planner already permits no entry. Only ABSENT means no entry;
+ * supplied invalid input is rejected. Display state remains distinct from zero.
+ */
+export function optionalEntryInputCents(value: string): MoneyCents {
+  const input = moneyInputState(value);
+  if (input.status === "INVALID") throw new TypeError(input.message);
+  return input.status === "ABSENT" ? assertMoneyCents(0) : input.cents;
+}
+
+export function financeMoneyPreview(totalText: string, entryText: string, installmentTexts: string[]) {
+  const total = moneyInputState(totalText);
+  const entry = moneyInputState(entryText);
+  const installments = installmentTexts.map(moneyInputState);
+  const totalCents = total.status === "VALID" ? total.cents : null;
+  const entryCents = entry.status === "VALID" ? entry.cents : null;
+  const effectiveEntry = entry.status === "ABSENT" ? 0 : entryCents;
+  const balanceCents = totalCents != null && totalCents > 0 && effectiveEntry != null &&
+    effectiveEntry >= 0 && effectiveEntry <= totalCents
+    ? assertMoneyCents(totalCents - effectiveEntry) : null;
+  let futureCents: number | null = 0;
+  for (const value of installments) {
+    if (value.status !== "VALID" || value.cents <= 0) {
+      futureCents = null;
+      break;
+    }
+    futureCents = assertMoneyCents(futureCents + value.cents);
+  }
+  const distributedCents = balanceCents != null && futureCents != null && effectiveEntry != null
+    ? assertMoneyCents(effectiveEntry + futureCents) : null;
+  const differenceCents = totalCents != null && distributedCents != null
+    ? assertMoneyCents(totalCents - distributedCents) : null;
+  return {
+    total, entry, installments, totalCents, entryCents, balanceCents, futureCents,
+    distributedCents, differenceCents,
+    canDistribute: balanceCents != null && !installments.some(value =>
+      value.status === "INVALID" || (value.status === "VALID" && value.cents < 0)),
+  };
+}

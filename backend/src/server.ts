@@ -24,6 +24,7 @@ import {
   requirePositiveOperationalCents,
   resolveOperationalMoney,
   resolvePaidAmountCents,
+  resolveReceiptPaidAmountCents,
   sumOperationalMoney,
   validateProposalItemCents,
 } from "./lib/canonical-money";
@@ -6437,7 +6438,7 @@ function calculateProposalTotals(items: any[]) {
       ? proposalItemMoneyFromCents(quantity, item.unitAmountCents)
       : proposalItemMoneyFromLegacyReais(
           quantity,
-          item.unitAmount ?? item.amount ?? 0
+          item.unitAmount ?? item.amount
         );
 
     return {
@@ -7485,14 +7486,15 @@ app.post(
         req.body.amount,
         "Valor do adiantamento"
       );
-      const amount = legacyReaisFromCents(amountCents, "integer-reais");
       const paidAt = req.body.paidAt ? new Date(req.body.paidAt) : new Date();
 
-      if (!managerUserId || amount <= 0) {
+      if (!managerUserId || amountCents <= 0) {
         return res.status(400).json({
           message: "Gestor e valor do adiantamento são obrigatórios.",
         });
       }
+
+      const amount = legacyReaisFromCents(amountCents, "integer-reais");
 
       const manager = await prisma.user.findFirst({
         where: {
@@ -20690,11 +20692,21 @@ ${
   }
 );
 
-async function generateReceiptPdfForBillingCharge(charge: any): Promise<{
+async function generateReceiptPdfForBillingCharge(
+  charge: any,
+  legacyClassification: "LEGACY_CONFIRMED" | "AMBIGUOUS" = "AMBIGUOUS"
+): Promise<{
   fileName: string;
   filePath: string;
   publicPath: string;
 }> {
+  // Validate payment provenance before creating any file or loading dependencies.
+  const paidAmountCents = resolveReceiptPaidAmountCents({
+    paidAmountCents: charge.paidAmountCents,
+    paidAmountReais: charge.paidAmount,
+    legacyClassification,
+  });
+
   const company = await getCompanySettings();
 
   const outputDir = path.join(process.cwd(), "uploads", "documents");
@@ -20719,12 +20731,6 @@ async function generateReceiptPdfForBillingCharge(charge: any): Promise<{
   doc.pipe(stream);
 
   const paidAt = charge.paidAt || new Date();
-  const paidAmountCents = canonicalCentsOrLegacy(
-    charge.paidAmountCents ?? charge.amountCents,
-    charge.paidAmount ?? charge.amount,
-    "LEGACY_CONFIRMED",
-    "Valor do recibo"
-  );
 
   const formatDateBR = (value: Date | string | null | undefined) => {
     if (!value) return "-";
@@ -20963,7 +20969,6 @@ app.post(
           obligationAmountCents: charge.amountCents,
           paidAmountCents: req.body?.paidAmountCents,
           paidAmountReais: req.body?.paidAmount,
-          legacyObligationReais: charge.amount,
         });
       } catch (moneyError) {
         const status = moneyError instanceof AmbiguousMoneyError ? 409 : 400;

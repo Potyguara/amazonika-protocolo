@@ -303,8 +303,7 @@ test("2C2-A operational eligibility and mark-paid preserve cents", () => {
   assert.equal(resolvePaidAmountCents({
     obligationAmountCents: 12345,
     paidAmountReais: 123,
-    legacyObligationReais: 123,
-  }), 12345);
+  }), 12300);
   assert.equal(resolvePaidAmountCents({
     obligationAmountCents: 99999,
     paidAmountReais: "123.45",

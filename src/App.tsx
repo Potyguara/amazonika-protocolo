@@ -12,6 +12,9 @@ import PartnersFinanceTab from "./components/finance/PartnersFinanceTab";
 import { api, setAuth, clearAuth } from "./services/api";
 import {
   applyRateCents,
+  moneyInputState,
+  optionalEntryInputCents,
+  financeMoneyPreview,
   centsToReaisFormValue,
   distributeMoneyCents,
   formatMoneyCents,
@@ -1321,16 +1324,6 @@ function optionalReaisFormValue(
   }
 
   return centsToReaisFormValue(value);
-}
-
-function formValueToCentsOrZero(value: string) {
-  if (value.trim() === "") return 0;
-
-  try {
-    return reaisFormValueToCents(value);
-  } catch {
-    return 0;
-  }
 }
 
 function normalizedReaisFormNumber(value: string) {
@@ -2803,10 +2796,10 @@ function ManagementMoneyCards({ month }: { month: string }) {
     0
   );
 
-  const myProLaboreCents = data.currentManager?.saldoReceberCents ?? 0;
+  const myProLaboreCents = data.currentManager?.saldoReceberCents;
 
   const managerGrossProLaboreCents =
-    data.currentManager?.proLaboreCents ?? data.proLaboreIndividualCents;
+    data.currentManager?.proLaboreCents;
 
   const cardProLaboreValueCents = isProgrammer
     ? totalManagersProLaboreCents
@@ -2820,7 +2813,7 @@ function ManagementMoneyCards({ month }: { month: string }) {
     ? `Gestores ativos: ${
         data.managersCount || data.managers?.length || 0
       } · Adiantamentos: ${formatMoneyCents(totalManagersAdvancesCents)}`
-    : `Pró-labore atual = ${formatMoneyCents(managerGrossProLaboreCents)}`;
+    : `Pró-labore atual = ${formatOptionalMoneyCents(managerGrossProLaboreCents)}`;
 
   const cardProLaboreHint = isProgrammer
     ? "Clique para ver o extrato consolidado dos gestores"
@@ -2831,7 +2824,7 @@ function ManagementMoneyCards({ month }: { month: string }) {
     : "R$ •••••";
 
   const proLaboreValue = showProLabore
-    ? formatMoneyCents(cardProLaboreValueCents)
+    ? formatOptionalMoneyCents(cardProLaboreValueCents)
     : "R$ •••••";
 
   const proLaboreSubtitleValue = showProLabore
@@ -3097,15 +3090,14 @@ function ManagementMoneyCards({ month }: { month: string }) {
                     <div className="management-extract-highlight">
                       <span>Meu pró-labore líquido previsto</span>
                       <strong>
-                        {formatMoneyCents(data.currentManager?.saldoReceberCents ?? 0)}
+                        {formatOptionalMoneyCents(data.currentManager?.saldoReceberCents)}
                       </strong>
 
                       <p>
                         Pró-labore individual bruto:{" "}
                         <b>
-                          {formatMoneyCents(
-                            data.currentManager?.proLaboreCents ??
-                              data.proLaboreIndividualCents
+                          {formatOptionalMoneyCents(
+                            data.currentManager?.proLaboreCents
                           )}
                         </b>
                       </p>
@@ -3120,9 +3112,8 @@ function ManagementMoneyCards({ month }: { month: string }) {
                       <div>
                         <span>Pró-labore bruto individual</span>
                         <strong>
-                          {formatMoneyCents(
-                            data.currentManager?.proLaboreCents ??
-                              data.proLaboreIndividualCents
+                          {formatOptionalMoneyCents(
+                            data.currentManager?.proLaboreCents
                           )}
                         </strong>
                       </div>
@@ -3130,14 +3121,14 @@ function ManagementMoneyCards({ month }: { month: string }) {
                       <div>
                         <span>Adiantamentos recebidos</span>
                         <strong>
-                          {formatMoneyCents(data.currentManager?.advancesCents ?? 0)}
+                          {formatOptionalMoneyCents(data.currentManager?.advancesCents)}
                         </strong>
                       </div>
 
                       <div>
                         <span>Saldo a receber</span>
                         <strong>
-                          {formatMoneyCents(data.currentManager?.saldoReceberCents ?? 0)}
+                          {formatOptionalMoneyCents(data.currentManager?.saldoReceberCents)}
                         </strong>
                       </div>
 
@@ -5350,24 +5341,20 @@ function ProposalPanel({
       return;
     }
 
-    let entryCents: number;
-
-    try {
-      const requestedEntryCents = reaisFormValueToCents(entryAmount);
-      entryCents = requestedEntryCents > 0
-        ? requestedEntryCents
-        : applyRateCents(proposalTotalCents, 3000);
-    } catch {
-      entryCents = applyRateCents(proposalTotalCents, 3000);
+    const entryInput = moneyInputState(entryAmount);
+    if (entryInput.status === "INVALID" ||
+        (entryInput.status === "VALID" && entryInput.cents <= 0)) {
+      setError(entryInput.status === "INVALID"
+        ? entryInput.message : "Informe uma entrada positiva ou deixe o campo vazio para a sugestão.");
+      return;
     }
+    // Existing 30% suggestion applies only to an absent entry, never invalid input.
+    const entryCents = entryInput.status === "ABSENT"
+      ? applyRateCents(proposalTotalCents, 3000) : entryInput.cents;
 
     if (entryCents >= proposalTotalCents) {
-      entryCents =
-        Math.max(
-          1,
-          proposalTotalCents -
-            quantity
-        );
+      setError("A entrada deve ser menor que o valor total quando houver parcelas.");
+      return;
     }
 
     const remainingCents =
@@ -11304,38 +11291,15 @@ function FinancePage() {
    * ======================================================
    */
 
-  const financeTotalServiceCents =
-    formValueToCentsOrZero(transactionAmount);
-
-  const financeEntryCents =
-    formValueToCentsOrZero(transactionEntryAmount);
-
-  const financeFutureInstallmentsCents =
-    transactionInstallmentAmounts.reduce(
-      (total, rawValue) => {
-        try {
-          return total + formValueToCentsOrZero(rawValue);
-        } catch {
-          return total;
-        }
-      },
-      0
-    );
-
-  const financeDistributedCents =
-    financeEntryCents +
-    financeFutureInstallmentsCents;
-
-  const financeBalanceCents =
-    Math.max(
-      0,
-      financeTotalServiceCents -
-        financeEntryCents
-    );
-
-  const financeDifferenceCents =
-    financeTotalServiceCents -
-    financeDistributedCents;
+  const financePreview = financeMoneyPreview(
+    transactionAmount, transactionEntryAmount, transactionInstallmentAmounts
+  );
+  const financeTotalServiceCents = financePreview.totalCents;
+  const financeEntryCents = financePreview.entryCents;
+  const financeFutureInstallmentsCents = financePreview.futureCents;
+  const financeDistributedCents = financePreview.distributedCents;
+  const financeBalanceCents = financePreview.balanceCents;
+  const financeDifferenceCents = financePreview.differenceCents;
 
   function resizeFinanceInstallmentPlan(
     rawQty: string
@@ -11445,9 +11409,10 @@ function FinancePage() {
 
     const totalCents = financeBalanceCents;
 
-    if (!Number.isInteger(quantity) || totalCents < quantity) {
+    if (!financePreview.canDistribute || totalCents == null ||
+        !Number.isInteger(quantity) || totalCents < quantity) {
       setError(
-        "O saldo não permite gerar parcelas positivas de pelo menos um centavo."
+        "Informe valores válidos e saldo suficiente para parcelas de pelo menos um centavo."
       );
       return;
     }
@@ -11680,7 +11645,7 @@ async function handleSaveTransaction() {
           transactionInstallmentEnabled
             ? Number(
                 centsToReaisFormValue(
-                  formValueToCentsOrZero(transactionEntryAmount)
+                  optionalEntryInputCents(transactionEntryAmount)
                 )
               )
             : undefined,
@@ -11784,7 +11749,7 @@ async function handleSaveTransaction() {
              */
             entryAmount: Number(
               centsToReaisFormValue(
-                formValueToCentsOrZero(transactionEntryAmount)
+                optionalEntryInputCents(transactionEntryAmount)
               )
             ),
 
@@ -13331,7 +13296,7 @@ async function handleDeleteSalary(id: number) {
                           </span>
 
                           <strong>
-                            {formatMoneyCents(
+                            {formatOptionalMoneyCents(
                               financeTotalServiceCents
                             )}
                           </strong>
@@ -13448,7 +13413,7 @@ async function handleDeleteSalary(id: number) {
                             </span>
 
                             <strong>
-                            {formatMoneyCents(
+                            {formatOptionalMoneyCents(
                                 financeBalanceCents
                               )}
                             </strong>
@@ -13672,7 +13637,7 @@ async function handleDeleteSalary(id: number) {
                               </span>
 
                               <strong>
-                                {formatMoneyCents(
+                                {formatOptionalMoneyCents(
                                   financeTotalServiceCents
                                 )}
                               </strong>
@@ -13684,7 +13649,7 @@ async function handleDeleteSalary(id: number) {
                               </span>
 
                               <strong>
-                                {formatMoneyCents(
+                                {formatOptionalMoneyCents(
                                   financeEntryCents
                                 )}
                               </strong>
@@ -13696,7 +13661,7 @@ async function handleDeleteSalary(id: number) {
                               </span>
 
                               <strong>
-                                {formatMoneyCents(
+                                {formatOptionalMoneyCents(
                                   financeFutureInstallmentsCents
                                 )}
                               </strong>
@@ -13708,7 +13673,7 @@ async function handleDeleteSalary(id: number) {
                               </span>
 
                               <strong>
-                                {formatMoneyCents(
+                                {formatOptionalMoneyCents(
                                   financeDistributedCents
                                 )}
                               </strong>
@@ -13726,10 +13691,8 @@ async function handleDeleteSalary(id: number) {
                               </span>
 
                               <strong>
-                                {formatMoneyCents(
-                                  Math.abs(
-                                    financeDifferenceCents
-                                  )
+                                {formatOptionalMoneyCents(
+                                  financeDifferenceCents == null ? null : Math.abs(financeDifferenceCents)
                                 )}
                               </strong>
                             </div>
