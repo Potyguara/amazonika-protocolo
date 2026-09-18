@@ -20,6 +20,8 @@ import {
   formatMoneyCents,
   multiplyMoneyCents,
   reaisFormValueToCents,
+  proposalScheduleSource,
+  sumValidMoneyCents,
 } from "./lib/money";
 import CatalogPage from "./pages/CatalogPage";
 import {
@@ -736,7 +738,7 @@ type BackendManagementSummary = {
   liquidoAntesCaixaCents: number;
   caixaEmpresaCents: number;
   liquidoDistribuivelCents: number;
-  proLaboreIndividualCents: number;
+  proLaboreIndividualCents: number | null;
 
   faturamentoMensal: number;
   custosFixos: number;
@@ -3024,7 +3026,7 @@ function ManagementMoneyCards({ month }: { month: string }) {
 
                       <div>
                         <span>Pró-labore bruto individual</span>
-                        <strong>{formatMoneyCents(data.proLaboreIndividualCents)}</strong>
+                        <strong>{formatOptionalMoneyCents(data.proLaboreIndividualCents)}</strong>
                       </div>
 
                       <div>
@@ -4950,6 +4952,7 @@ function ProposalPanel({
   const [paymentSchedule, setPaymentSchedule] = useState<
     ProposalPaymentScheduleFormRow[]
   >([]);
+  const [paymentScheduleSource, setPaymentScheduleSource] = useState<string | null>(null);
 
   const [executionDays, setExecutionDays] = useState("30");
   const [validUntil, setValidUntil] = useState("");
@@ -4999,6 +5002,7 @@ function ProposalPanel({
     setEntryAmount("");
     setInstallmentQty("3");
     setPaymentSchedule([]);
+    setPaymentScheduleSource(null);
     setExecutionDays("30");
     setValidUntil(today);
     setClientMessage(
@@ -5077,14 +5081,19 @@ function ProposalPanel({
     setClientMessage(proposal.clientMessage || "");
     setInternalNotes(proposal.internalNotes || "");
 
-    setItems(
-      proposal.items.map((item) => ({
-        serviceName: item.serviceName,
-        description: item.description || "",
-        quantity: String(item.quantity || 1),
-        unitAmount: centsToReaisFormValue(item.unitAmountCents as number),
-      }))
-    );
+    const loadedItems = proposal.items.map((item) => ({
+      serviceName: item.serviceName,
+      description: item.description || "",
+      quantity: String(item.quantity || 1),
+      unitAmount: centsToReaisFormValue(item.unitAmountCents as number),
+    }));
+    setItems(loadedItems);
+    setPaymentScheduleSource(proposalScheduleSource(
+      loadedItems,
+      proposal.paymentMode || "ENTRADA_PARCELAS",
+      centsToReaisFormValue(proposal.entryAmountCents),
+      proposal.installmentQty != null ? String(proposal.installmentQty) : "",
+    ));
   }
 
   function addItem() {
@@ -5206,10 +5215,7 @@ function ProposalPanel({
   }
 
   const proposalItemTotalsCents = items.map(proposalFormItemTotalCents);
-  const proposalTotalCents = proposalItemTotalsCents.reduce(
-    (sum, amountCents) => sum + (amountCents ?? 0),
-    0
-  );
+  const proposalTotalCents = sumValidMoneyCents(proposalItemTotalsCents);
 
   const paymentScheduleTotalCents =
     paymentSchedule.reduce(
@@ -5224,8 +5230,7 @@ function ProposalPanel({
     );
 
   const paymentScheduleDifferenceCents =
-    proposalTotalCents -
-    paymentScheduleTotalCents;
+    proposalTotalCents == null ? null : proposalTotalCents - paymentScheduleTotalCents;
 
   const paymentScheduleHasInvalidRow =
     paymentSchedule.some(
@@ -5270,6 +5275,7 @@ function ProposalPanel({
       paymentSchedule.length < 1);
 
   const hasInvalidProposalValues =
+    proposalTotalCents == null ||
     proposalTotalCents <= 0 ||
     proposalItemTotalsCents.some((value) => value == null) ||
     paymentSchedule.length === 0 ||
@@ -5278,7 +5284,7 @@ function ProposalPanel({
     paymentScheduleDifferenceCents !== 0;
 
   function rebuildPaymentSchedule() {
-    if (proposalTotalCents <= 0) {
+    if (proposalTotalCents == null || proposalTotalCents <= 0) {
       setError(
         "Informe primeiro os itens e valores da proposta."
       );
@@ -5300,6 +5306,7 @@ function ProposalPanel({
           dueDate: today,
         },
       ]);
+      setPaymentScheduleSource(proposalScheduleSource(items, paymentMode, centsToReaisFormValue(proposalTotalCents), ""));
 
       return;
     }
@@ -5337,6 +5344,7 @@ function ProposalPanel({
           ),
         }))
       );
+      setPaymentScheduleSource(proposalScheduleSource(items, paymentMode, "", installmentQty));
 
       return;
     }
@@ -5405,6 +5413,7 @@ function ProposalPanel({
         })
       ),
     ]);
+    setPaymentScheduleSource(proposalScheduleSource(items, paymentMode, centsToReaisFormValue(entryCents), String(quantity)));
   }
 
   async function handleSaveProposal() {
@@ -5452,6 +5461,13 @@ function ProposalPanel({
         throw new Error(
           "O valor total da proposta deve ser maior que zero."
         );
+      }
+
+      if (paymentMode !== "PERSONALIZADO") {
+        const currentScheduleSource = proposalScheduleSource(items, paymentMode, entryAmount, installmentQty);
+        if (paymentScheduleSource !== currentScheduleSource) {
+          throw new Error("O cronograma financeiro está desatualizado. Reconstrua o cronograma antes de salvar.");
+        }
       }
 
       const scheduleToValidate =
@@ -5830,7 +5846,7 @@ return (
               step="0.01"
               value={
                 paymentMode === "A_VISTA"
-                  ? centsToReaisFormValue(proposalTotalCents)
+                  ? proposalTotalCents == null ? "" : centsToReaisFormValue(proposalTotalCents)
                   : entryAmount
               }
               onChange={(event) =>
@@ -5870,7 +5886,7 @@ return (
             </span>
 
             <strong>
-              {formatMoneyCents(proposalTotalCents)}
+              {proposalTotalCents == null ? "Valor inválido" : formatMoneyCents(proposalTotalCents)}
             </strong>
 
             <small>
@@ -6010,7 +6026,7 @@ return (
 
                 <small>
                   Total da proposta:{" "}
-                  {formatMoneyCents(proposalTotalCents)}
+                  {proposalTotalCents == null ? "Valor inválido" : formatMoneyCents(proposalTotalCents)}
                   {" · "}
                   Diferença:{" "}
                   {formatMoneyCents(

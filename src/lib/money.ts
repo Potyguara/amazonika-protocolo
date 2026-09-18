@@ -189,6 +189,20 @@ export function optionalEntryInputCents(value: string): MoneyCents {
   return input.status === "ABSENT" ? assertMoneyCents(0) : input.cents;
 }
 
+/** A missing/invalid item makes the whole draft total unavailable. */
+export function sumValidMoneyCents(values: readonly (number | null)[]): MoneyCents | null {
+  if (values.some(value => value == null)) return null;
+  return assertMoneyCents(values.reduce<number>((sum, value) => sum + assertMoneyCents(value), 0));
+}
+
+/** Snapshot of the monetary inputs used to build/load a proposal schedule. */
+export function proposalScheduleSource(
+  items: readonly { quantity: string; unitAmount: string }[],
+  mode: string, entry: string, quantity: string,
+): string {
+  return JSON.stringify([items.map(item => [item.quantity, item.unitAmount]), mode, entry, quantity]);
+}
+
 export function financeMoneyPreview(totalText: string, entryText: string, installmentTexts: string[]) {
   const total = moneyInputState(totalText);
   const entry = moneyInputState(entryText);

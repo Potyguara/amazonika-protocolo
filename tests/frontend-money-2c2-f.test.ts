@@ -15,7 +15,7 @@ function actualFunction(name: string, dependencies: object = {}) {
   visit(source);
   assert.ok(result);
   const js = ts.transpileModule(`(${result.getText(source)})`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  return vm.runInNewContext(js, { ...money, ...dependencies });
+  return vm.runInNewContext(js, { ...money, items: [], setPaymentScheduleSource: () => {}, ...dependencies });
 }
 
 test("2C2-F money draft distinguishes absent, zero, valid and invalid", () => {

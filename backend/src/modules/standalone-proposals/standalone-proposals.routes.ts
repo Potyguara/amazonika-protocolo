@@ -1114,8 +1114,10 @@ export function registerStandaloneProposalRoutes({
             });
           }
 
-          unitAmount = nonnegativeCents(tier.unitAmount);
-          manualPrice = false;
+          if (!(service.allowManualPrice && manualPrice)) {
+            unitAmount = nonnegativeCents(tier.unitAmount);
+            manualPrice = false;
+          }
         }
 
         if (

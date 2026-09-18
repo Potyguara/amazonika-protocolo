@@ -734,14 +734,13 @@ export default function StandaloneProposalEditorPage() {
       ""
     );
 
-    if (
-      service.pricingMode === "SOB_CONSULTA"
-    ) {
+    if (service.pricingMode === "SOB_CONSULTA") {
       setCatalogUnitAmount("");
     } else {
-      setCatalogUnitAmount(
-        centsToInput(service.baseAmount)
-      );
+      const initialAmount = service.pricingMode === "POR_FAIXA"
+        ? resolvedCatalogUnitAmount(service, 1)
+        : service.baseAmount;
+      setCatalogUnitAmount(initialAmount == null ? "" : centsToInput(initialAmount));
     }
   }
 
@@ -799,10 +798,8 @@ export default function StandaloneProposalEditorPage() {
       } else if (
         selectedCatalogService.allowManualPrice &&
         catalogUnitAmount.trim() &&
-        currencyInputToCents(
-          catalogUnitAmount
-        ) !==
-          (selectedCatalogService.baseAmount ?? 0)
+        currencyInputToCents(catalogUnitAmount) !==
+          (resolvedCatalogUnitAmount(selectedCatalogService, quantity) ?? 0)
       ) {
         body.unitAmount =
           currencyInputToCents(
@@ -3516,8 +3513,6 @@ export default function StandaloneProposalEditorPage() {
                         )
                       }
                       disabled={
-                        selectedCatalogService.pricingMode ===
-                          "POR_FAIXA" ||
                         (!selectedCatalogService.allowManualPrice &&
                           selectedCatalogService.pricingMode !==
                             "SOB_CONSULTA")

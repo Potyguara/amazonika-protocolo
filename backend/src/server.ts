@@ -2,13 +2,13 @@ import {
   applyRateCents,
   assertMoneyCents,
   assertPrismaIntCents,
-  divideCents,
   parseReaisInput,
   parsePrismaCentsText,
   percentToBasisPoints,
   sumCents,
 } from "./lib/money";
 import { copyPaymentSchedule } from "./lib/payment-schedule";
+import { allocateProLabore } from "./lib/pro-labore-money";
 import {
   AmbiguousMoneyError,
   canonicalCentsOrLegacy,
@@ -8899,11 +8899,8 @@ async function calculateManagementFinance(month: string, currentUserId?: number)
     Math.max(0, baseLiquidaCents - caixaEmpresaCents)
   );
 
-  const activeManagersCount = Math.max(1, managers.length);
-  const proLaboreIndividualCents = divideCents(
-    proLaboreDistribuivelCents,
-    activeManagersCount
-  );
+  const proLaboreAllocation = allocateProLabore(proLaboreDistribuivelCents, managers);
+  const proLaboreIndividualCents = proLaboreAllocation.uniformShareCents;
 
   const managerAdvanceMap = new Map<number, number>();
 
@@ -8917,19 +8914,20 @@ async function calculateManagementFinance(month: string, currentUserId?: number)
 
   const managersProLabore = managers.map((manager) => {
     const advanceAmountCents = managerAdvanceMap.get(manager.id) || 0;
+    const managerProLaboreCents = proLaboreAllocation.shares.get(manager.id) ?? 0;
 
     return {
       managerId: manager.id,
       managerName: manager.name,
       managerEmail: manager.email,
-      proLaboreBrutoCents: proLaboreIndividualCents,
+      proLaboreBrutoCents: managerProLaboreCents,
       adiantamentosCents: advanceAmountCents,
-      proLaboreLiquidoCents: Math.max(0, proLaboreIndividualCents - advanceAmountCents),
+      proLaboreLiquidoCents: Math.max(0, managerProLaboreCents - advanceAmountCents),
       // LEGACY: propriedades em reais mantidas temporariamente para o frontend atual.
-      proLaboreBruto: legacyDecimalReais(proLaboreIndividualCents),
+      proLaboreBruto: legacyDecimalReais(managerProLaboreCents),
       adiantamentos: legacyDecimalReais(advanceAmountCents),
       proLaboreLiquido: legacyDecimalReais(
-        Math.max(0, proLaboreIndividualCents - advanceAmountCents)
+        Math.max(0, managerProLaboreCents - advanceAmountCents)
       ),
     };
   });
@@ -8962,7 +8960,7 @@ async function calculateManagementFinance(month: string, currentUserId?: number)
     baseLiquida: legacyDecimalReais(baseLiquidaCents),
     caixaEmpresa: legacyDecimalReais(caixaEmpresaCents),
     proLaboreDistribuivel: legacyDecimalReais(proLaboreDistribuivelCents),
-    proLaboreIndividual: legacyDecimalReais(proLaboreIndividualCents),
+    proLaboreIndividual: proLaboreIndividualCents == null ? null : legacyDecimalReais(proLaboreIndividualCents),
 
     currentManager,
     managersProLabore,
@@ -15223,9 +15221,8 @@ app.get(
       );
 
       const managersCount = managers.length;
-      const proLaboreIndividualCents = managersCount > 0
-        ? divideCents(liquidoDistribuivelCents, managersCount)
-        : assertMoneyCents(0);
+      const proLaboreAllocation = allocateProLabore(liquidoDistribuivelCents, managers);
+      const proLaboreIndividualCents = proLaboreAllocation.uniformShareCents;
 
       const formattedAdvances = advances.map((advance) => ({
         id: advance.id,
@@ -15244,6 +15241,7 @@ app.get(
       }));
 
       const managersSummary = managers.map((manager) => {
+        const managerProLaboreCents = proLaboreAllocation.shares.get(manager.id) ?? 0;
         const managerAdvances = advances.filter(
           (advance) => advance.managerUserId === manager.id
         );
@@ -15253,22 +15251,22 @@ app.get(
           "Adiantamento do gestor"
         );
         const saldoReceberCents = safePositiveCents(
-          proLaboreIndividualCents - totalAdvancesCents
+          managerProLaboreCents - totalAdvancesCents
         );
 
         return {
           id: manager.id,
           name: manager.name,
           email: manager.email,
-          proLaboreCents: proLaboreIndividualCents,
-          proLaboreBrutoCents: proLaboreIndividualCents,
+          proLaboreCents: managerProLaboreCents,
+          proLaboreBrutoCents: managerProLaboreCents,
           advancesCents: totalAdvancesCents,
           adiantamentosCents: totalAdvancesCents,
           saldoReceberCents,
           proLaboreLiquidoCents: saldoReceberCents,
           // LEGACY: reais derivados para o frontend atual.
-          proLabore: legacyDecimalReais(proLaboreIndividualCents),
-          proLaboreBruto: legacyDecimalReais(proLaboreIndividualCents),
+          proLabore: legacyDecimalReais(managerProLaboreCents),
+          proLaboreBruto: legacyDecimalReais(managerProLaboreCents),
           advances: legacyDecimalReais(totalAdvancesCents),
           adiantamentos: legacyDecimalReais(totalAdvancesCents),
           saldoReceber: legacyDecimalReais(saldoReceberCents),
@@ -15399,9 +15397,11 @@ const currentManager =
           type: "PRO_LABORE",
           amountCents: proLaboreIndividualCents,
           valueCents: proLaboreIndividualCents,
-          amount: legacyDecimalReais(proLaboreIndividualCents),
-          value: legacyDecimalReais(proLaboreIndividualCents),
-          description: "Valor bruto previsto para cada gestor.",
+          amount: proLaboreIndividualCents == null ? null : legacyDecimalReais(proLaboreIndividualCents),
+          value: proLaboreIndividualCents == null ? null : legacyDecimalReais(proLaboreIndividualCents),
+          description: proLaboreIndividualCents == null
+            ? "As cotas individuais diferem por centavos; consulte o extrato por gestor."
+            : "Valor bruto previsto para cada gestor.",
         },
         {
           label: "Meus adiantamentos",
@@ -15457,8 +15457,8 @@ const currentManager =
         liquidoAntesCaixa: legacyDecimalReais(liquidoAntesCaixaCents),
         caixaEmpresa: legacyDecimalReais(caixaEmpresaCents),
         liquidoDistribuivel: legacyDecimalReais(liquidoDistribuivelCents),
-        proLaboreIndividual: legacyDecimalReais(proLaboreIndividualCents),
-        proLaboreBrutoPorGestor: legacyDecimalReais(proLaboreIndividualCents),
+        proLaboreIndividual: proLaboreIndividualCents == null ? null : legacyDecimalReais(proLaboreIndividualCents),
+        proLaboreBrutoPorGestor: proLaboreIndividualCents == null ? null : legacyDecimalReais(proLaboreIndividualCents),
         meuAdiantamento: legacyDecimalReais(meuAdiantamentoCents),
         meuProLaboreLiquido: legacyDecimalReais(meuProLaboreLiquidoCents),
 
