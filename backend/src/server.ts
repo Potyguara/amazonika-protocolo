@@ -7895,6 +7895,167 @@ app.patch(
 );
 
 app.patch(
+  "/finance/transactions/:id/charge-client-data",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  async (req, res) => {
+    const transactionId = Number(req.params.id);
+
+    if (
+      !Number.isInteger(transactionId) ||
+      transactionId <= 0
+    ) {
+      return res.status(400).json({
+        message: "Lançamento financeiro inválido.",
+      });
+    }
+
+    const transaction =
+      await prisma.financialTransaction.findUnique({
+        where: {
+          id: transactionId,
+        },
+        include: {
+          client: true,
+          protocol: {
+            include: {
+              client: true,
+            },
+          },
+        },
+      });
+
+    if (!transaction) {
+      return res.status(404).json({
+        message: "Lançamento financeiro não encontrado.",
+      });
+    }
+
+    const client =
+      transaction.client ||
+      transaction.protocol?.client ||
+      null;
+
+    if (!client) {
+      return res.status(400).json({
+        message:
+          "O lançamento não possui cliente vinculado.",
+      });
+    }
+
+    const {
+      name,
+      personType,
+      cpfCnpj,
+      email,
+      phone,
+      whatsapp,
+    } = req.body || {};
+
+    const normalizedName =
+      String(name || "").trim();
+
+    const normalizedPersonType =
+      personType === "PJ" ? "PJ" : "PF";
+
+    const normalizedDocument =
+      String(cpfCnpj || "").trim();
+
+    const normalizedEmail =
+      String(email || "").trim();
+
+    const normalizedPhone =
+      String(phone || "").trim();
+
+    const normalizedWhatsapp =
+      String(whatsapp || "").trim();
+
+    if (!normalizedName) {
+      return res.status(400).json({
+        message:
+          "Nome ou razão social do cliente é obrigatório.",
+      });
+    }
+
+    if (
+      !isValidFinancePixDocument(
+        normalizedDocument
+      )
+    ) {
+      return res.status(400).json({
+        message:
+          "CPF/CNPJ inválido para emissão da cobrança.",
+      });
+    }
+
+    const documentDigits =
+      normalizeFinanceDocument(
+        normalizedDocument
+      );
+
+    if (
+      normalizedPersonType === "PF" &&
+      documentDigits.length !== 11
+    ) {
+      return res.status(400).json({
+        message:
+          "Para Pessoa Física, informe um CPF válido.",
+      });
+    }
+
+    if (
+      normalizedPersonType === "PJ" &&
+      documentDigits.length !== 14
+    ) {
+      return res.status(400).json({
+        message:
+          "Para Pessoa Jurídica, informe um CNPJ válido.",
+      });
+    }
+
+    if (
+      transaction.emailNotificationEnabled !== false &&
+      !normalizedEmail
+    ) {
+      return res.status(400).json({
+        message:
+          "O e-mail é obrigatório porque o envio de e-mail está ativado para esta cobrança.",
+      });
+    }
+
+    const updatedClient =
+      await prisma.client.update({
+        where: {
+          id: client.id,
+        },
+        data: {
+          name: normalizedName,
+          personType: normalizedPersonType,
+          cpfCnpj: normalizedDocument,
+          email: normalizedEmail,
+          phone: normalizedPhone,
+          whatsapp: normalizedWhatsapp,
+        },
+        select: {
+          id: true,
+          name: true,
+          personType: true,
+          cpfCnpj: true,
+          email: true,
+          phone: true,
+          whatsapp: true,
+          address: true,
+          city: true,
+          state: true,
+          notes: true,
+        },
+      });
+
+    return res.json(updatedClient);
+  }
+);
+
+app.patch(
   "/clients/:id",
   authMiddleware,
   requireRoles(["ATENDENTE", "GERENTE", "PROGRAMADOR"]),
@@ -9318,10 +9479,75 @@ function isValidFinancePixDocument(
   const document =
     normalizeFinanceDocument(value);
 
-  return (
-    document.length === 11 ||
-    document.length === 14
-  );
+  /*
+   * CPF/CNPJ utilizado como devedor no Pix.
+   *
+   * Não basta possuir 11 ou 14 dígitos:
+   * validamos também os dígitos verificadores para impedir
+   * que um documento estruturalmente inválido chegue ao BB.
+   */
+  if (/^(\d)\1+$/.test(document)) {
+    return false;
+  }
+
+  const calculateDigit = (
+    digits: string,
+    weights: number[]
+  ) => {
+    const sum = digits
+      .split("")
+      .reduce(
+        (total, digit, index) =>
+          total +
+          Number(digit) *
+            weights[index],
+        0
+      );
+
+    const remainder = sum % 11;
+
+    return remainder < 2
+      ? 0
+      : 11 - remainder;
+  };
+
+  if (document.length === 11) {
+    const first = calculateDigit(
+      document.slice(0, 9),
+      [10, 9, 8, 7, 6, 5, 4, 3, 2]
+    );
+
+    if (first !== Number(document[9])) {
+      return false;
+    }
+
+    const second = calculateDigit(
+      document.slice(0, 10),
+      [11, 10, 9, 8, 7, 6, 5, 4, 3, 2]
+    );
+
+    return second === Number(document[10]);
+  }
+
+  if (document.length === 14) {
+    const first = calculateDigit(
+      document.slice(0, 12),
+      [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+    );
+
+    if (first !== Number(document[12])) {
+      return false;
+    }
+
+    const second = calculateDigit(
+      document.slice(0, 13),
+      [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+    );
+
+    return second === Number(document[13]);
+  }
+
+  return false;
 }
 
 /*
@@ -9437,10 +9663,31 @@ async function processFinanceAutoCharges(
     daysAhead?: number;
     transactionId?: number;
     dryRun?: boolean;
+
+    /*
+     * Ação manual explícita de GERENTE/PROGRAMADOR.
+     * Ignora somente regras de agendamento automático.
+     */
+    manual?: boolean;
   }
 ) {
   const settings =
     await getFinanceAutoChargeSettings();
+
+  const manual =
+    options?.manual === true;
+
+  if (
+    manual &&
+    (
+      !Number.isInteger(options?.transactionId) ||
+      Number(options?.transactionId) <= 0
+    )
+  ) {
+    throw new Error(
+      "O processamento manual exige uma transação financeira específica."
+    );
+  }
 
   const daysAhead =
     Math.max(
@@ -9458,7 +9705,11 @@ async function processFinanceAutoCharges(
   const today =
     financeTodayDateOnly();
 
-  if (!settings.enabled && !options?.dryRun) {
+  if (
+    !settings.enabled &&
+    !options?.dryRun &&
+    !manual
+  ) {
     return {
       today,
 
@@ -9519,8 +9770,12 @@ async function processFinanceAutoCharges(
           status:
             "PENDENTE",
 
-          autoChargeEnabled:
-            true,
+          ...(!manual
+            ? {
+                autoChargeEnabled:
+                  true,
+              }
+            : {}),
 
           dueDate: {
             not:
@@ -9640,8 +9895,9 @@ async function processFinanceAutoCharges(
        * Não abre cobrança antecipadamente demais.
        */
       if (
+        !manual &&
         daysUntilDue >
-        daysAhead
+          daysAhead
       ) {
         skipped += 1;
 
@@ -9658,8 +9914,18 @@ async function processFinanceAutoCharges(
       }
 
       /*
-       * Nesta primeira versão não emitimos CobV
-       * retroativamente.
+       * Nunca emitimos uma NOVA CobV com vencimento passado.
+       *
+       * Automático:
+       *   simplesmente ignora a obrigação vencida.
+       *
+       * Manual:
+       *   também não envia vencimento retroativo ao Banco
+       *   do Brasil. O usuário deve primeiro reprogramar
+       *   o vencimento e depois processar a cobrança.
+       *
+       * A política futura de inadimplência/reemissão será
+       * tratada separadamente.
        */
       if (
         daysUntilDue < 0
@@ -9672,7 +9938,9 @@ async function processFinanceAutoCharges(
           status:
             "SKIPPED",
           reason:
-            "Parcela vencida. Cobrança automática não emitida retroativamente.",
+            manual
+              ? "Obrigação vencida. Reprograme o vencimento antes de processar a cobrança."
+              : "Parcela vencida. Cobrança automática não emitida retroativamente.",
         });
 
         continue;
@@ -10921,6 +11189,29 @@ async function processFinanceAutoChargeEmailNotices() {
       const charge =
         transaction.billingCharge;
 
+      /*
+       * Controle individual de comunicação.
+       *
+       * false significa que este lançamento não deve gerar
+       * e-mail automático, mesmo que a rotina global de
+       * avisos esteja habilitada.
+       */
+      if (transaction.emailNotificationEnabled === false) {
+        skipped += 1;
+        results.push({
+          transactionId:
+            transaction.id,
+          billingChargeId:
+            charge?.id ||
+            null,
+          status:
+            "SKIPPED",
+          reason:
+            "Envio de e-mail desativado para este lançamento.",
+        });
+        continue;
+      }
+
       const client =
         transaction.client ||
         charge?.client ||
@@ -11390,6 +11681,209 @@ app.post(
  * Depois de validada, esta mesma função será executada
  * pelo agendador automático.
  */
+app.get(
+  "/finance/transactions/:id/charge-readiness",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  async (req: AuthRequest, res) => {
+    try {
+      const id =
+        Number(req.params.id);
+
+      if (
+        !Number.isInteger(id) ||
+        id <= 0
+      ) {
+        return res.status(400).json({
+          message:
+            "Lançamento financeiro inválido.",
+        });
+      }
+
+      const transaction =
+        await prisma.financialTransaction.findUnique({
+          where: {
+            id,
+          },
+
+          include: {
+            client: true,
+
+            protocol: {
+              include: {
+                client: true,
+              },
+            },
+
+            billingCharge: true,
+          },
+        });
+
+      if (!transaction) {
+        return res.status(404).json({
+          message:
+            "Lançamento financeiro não encontrado.",
+        });
+      }
+
+      const client =
+        transaction.client ||
+        transaction.protocol?.client ||
+        null;
+
+      const missing: string[] = [];
+
+      if (!client) {
+        missing.push("client");
+      } else {
+        if (!String(client.name || "").trim()) {
+          missing.push("name");
+        }
+
+        if (
+          !isValidFinancePixDocument(
+            client.cpfCnpj
+          )
+        ) {
+          missing.push("cpfCnpj");
+        }
+
+        if (
+          transaction.emailNotificationEnabled !==
+            false &&
+          !String(client.email || "").trim()
+        ) {
+          missing.push("email");
+        }
+      }
+
+      const blockers: string[] = [];
+
+      if (transaction.status !== "PENDENTE") {
+        blockers.push(
+          "A obrigação não está pendente."
+        );
+      }
+
+      if (
+        transaction.type !== "ENTRADA" &&
+        transaction.type !== "PARCELA"
+      ) {
+        blockers.push(
+          "O tipo do lançamento não permite cobrança."
+        );
+      }
+
+      if (
+        transaction.billingCharge ||
+        transaction.providerTxId
+      ) {
+        blockers.push(
+          "A obrigação já possui evidência de cobrança bancária."
+        );
+      }
+
+      const dueDate =
+        transaction.dueDate
+          ? new Date(transaction.dueDate)
+          : null;
+
+      if (
+        !dueDate ||
+        Number.isNaN(dueDate.getTime())
+      ) {
+        blockers.push(
+          "A obrigação não possui vencimento válido."
+        );
+      } else {
+        /*
+         * Datas de vencimento são datas civis.
+         * A comparação deve usar o dia operacional de Macapá,
+         * sem deixar o timezone do servidor deslocar a data.
+         */
+        const todayKey =
+          new Intl.DateTimeFormat(
+            "en-CA",
+            {
+              timeZone:
+                "America/Belem",
+              year:
+                "numeric",
+              month:
+                "2-digit",
+              day:
+                "2-digit",
+            }
+          ).format(
+            new Date()
+          );
+
+        const dueDateKey =
+          dueDate
+            .toISOString()
+            .slice(0, 10);
+
+        if (dueDateKey < todayKey) {
+          blockers.push(
+            "A obrigação está vencida. Reprograme o vencimento antes de emitir a cobrança."
+          );
+        }
+      }
+
+      return res.json({
+        ready:
+          missing.length === 0 &&
+          blockers.length === 0,
+
+        transactionId:
+          transaction.id,
+
+        emailNotificationEnabled:
+          transaction.emailNotificationEnabled !==
+          false,
+
+        missing,
+        blockers,
+
+        client: client
+          ? {
+              id:
+                client.id,
+
+              name:
+                client.name,
+
+              personType:
+                client.personType,
+
+              cpfCnpj:
+                client.cpfCnpj,
+
+              email:
+                client.email,
+
+              phone:
+                client.phone,
+
+              whatsapp:
+                client.whatsapp,
+            }
+          : null,
+      });
+    } catch (error) {
+      console.error(
+        "Erro ao validar dados para cobrança financeira:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Erro ao validar os dados necessários para cobrança.",
+      });
+    }
+  }
+);
+
 app.post(
   "/finance/auto-charges/process",
   authMiddleware,
@@ -11459,12 +11953,33 @@ app.post(
         String(dryRunRaw).toLowerCase() === "true" ||
         String(dryRunRaw) === "1";
 
+      const manualRaw =
+        req.body?.manual ??
+        req.query?.manual ??
+        false;
+
+      const manual =
+        manualRaw === true ||
+        String(manualRaw).toLowerCase() === "true" ||
+        String(manualRaw) === "1";
+
+      if (
+        manual &&
+        transactionId === null
+      ) {
+        return res.status(400).json({
+          message:
+            "O processamento manual exige transactionId.",
+        });
+      }
+
       const result =
         await processFinanceAutoCharges({
           daysAhead,
           transactionId:
             transactionId || undefined,
           dryRun,
+          manual,
         });
 
       await prisma.auditLog.create({
@@ -11486,13 +12001,17 @@ app.post(
             null,
 
           action:
-            "PROCESS_FINANCE_AUTO_CHARGES",
+            manual
+              ? "PROCESS_FINANCE_CHARGE_NOW"
+              : "PROCESS_FINANCE_AUTO_CHARGES",
 
           entity:
             "FinancialTransaction",
 
           entityId:
-            null,
+            transactionId !== null
+              ? String(transactionId)
+              : null,
 
           description:
             `Processamento manual das cobranças automáticas financeiras. Criadas: ${result.created}; ignoradas: ${result.skipped}; erros: ${result.errors}.`,
@@ -11836,11 +12355,13 @@ app.post(
         entryDueDate,
         entryPaidAt,
         entryAutoChargeEnabled,
+        entryEmailNotificationEnabled,
 
         installments,
 
         // Lançamento simples também pode solicitar cobrança.
         autoChargeEnabled,
+        emailNotificationEnabled,
       } = req.body;
 
       if (
@@ -12045,6 +12566,9 @@ app.post(
                 status !== "PAGO" &&
                 Boolean(autoChargeEnabled),
 
+              emailNotificationEnabled:
+                emailNotificationEnabled !== false,
+
               paymentProvider:
                 (type === "ENTRADA" || type === "PARCELA") &&
                 status !== "PAGO" &&
@@ -12165,6 +12689,7 @@ app.post(
           amountCents: number;
           dueDate: Date;
           autoChargeEnabled: boolean;
+          emailNotificationEnabled: boolean;
         }> = [];
 
       if (
@@ -12227,6 +12752,9 @@ app.post(
               Boolean(
                 raw.autoChargeEnabled
               ),
+
+            emailNotificationEnabled:
+              raw.emailNotificationEnabled !== false,
           });
         }
       }
@@ -12445,6 +12973,9 @@ app.post(
                         entryAutoChargeEnabled
                       ),
 
+                    emailNotificationEnabled:
+                      entryEmailNotificationEnabled !== false,
+
                     paymentProvider:
                       finalEntryStatus !==
                         "PAGO" &&
@@ -12484,7 +13015,10 @@ app.post(
               const installment =
                 await tx.financialTransaction.create({
                   data: {
-                    type,
+                    // Uma obrigação futura do plano é semanticamente
+                    // uma PARCELA, independentemente do tipo usado
+                    // para iniciar o lançamento financeiro.
+                    type: "PARCELA",
                     source,
 
                     status:
@@ -12564,6 +13098,9 @@ app.post(
 
                     autoChargeEnabled:
                       plan.autoChargeEnabled,
+
+                    emailNotificationEnabled:
+                      plan.emailNotificationEnabled,
 
                     paymentProvider:
                       plan.autoChargeEnabled
@@ -13870,6 +14407,27 @@ function financeMutationHandler(operation: "UPDATE" | "PAY" | "DELETE") {
           return conflict("FINANCIAL_TRANSACTION_CANCELLED",
             "Um lançamento cancelado não pode receber baixa administrativa.");
         }
+
+        /*
+         * Baixa administrativa nunca pode liquidar uma obrigação
+         * que já entrou no fluxo bancário.
+         *
+         * Cobranças Banco do Brasil devem ser liquidadas somente
+         * pela conciliação/webhook correspondente, preservando a
+         * origem bancária do pagamento.
+         */
+        if (
+          operation === "PAY" &&
+          (
+            current.billingCharge ||
+            hasFinanceBankEvidence(current)
+          )
+        ) {
+          return conflict(
+            "FINANCIAL_TRANSACTION_BANK_PAYMENT_REQUIRED",
+            "Este lançamento possui cobrança bancária. A confirmação do pagamento deve ocorrer pela conciliação bancária."
+          );
+        }
         if (consolidated && operation !== "PAY" &&
             (operation === "DELETE" || !notesOnly)) {
           return conflict("FINANCIAL_TRANSACTION_CONSOLIDATED",
@@ -13970,6 +14528,753 @@ function financeMutationHandler(operation: "UPDATE" | "PAY" | "DELETE") {
     }
   };
 }
+
+
+/*
+ * ==========================================================
+ * FINANCEIRO — PREFERÊNCIA INDIVIDUAL DE COMUNICAÇÃO
+ * ==========================================================
+ *
+ * Esta rota não altera valor, vencimento, status, pagamento
+ * ou composição do plano financeiro.
+ *
+ * Pode ser utilizada em lançamento simples, entrada ou
+ * parcela futura, inclusive quando pertence a um plano.
+ */
+
+/*
+ * ==========================================================
+ * FINANCEIRO — REPROGRAMAÇÃO INDIVIDUAL DE VENCIMENTO
+ * ==========================================================
+ *
+ * Não recompõe o plano e não altera valor.
+ * Atua somente sobre a obrigação financeira selecionada.
+ */
+app.patch(
+  "/finance/transactions/:id/reprogram-due-date",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  async (req: any, res: any) => {
+    const id =
+      Number(req.params.id);
+
+    if (
+      !Number.isInteger(id) ||
+      id <= 0
+    ) {
+      return res.status(400).json({
+        message:
+          "ID do lançamento inválido.",
+      });
+    }
+
+    const newDueDateRaw =
+      String(
+        req.body?.newDueDate ||
+        ""
+      ).trim();
+
+    const justification =
+      String(
+        req.body?.justification ||
+        ""
+      ).trim();
+
+    if (!newDueDateRaw) {
+      return res.status(400).json({
+        message:
+          "Informe o novo vencimento.",
+      });
+    }
+
+    if (!justification) {
+      return res.status(400).json({
+        message:
+          "Informe a justificativa da reprogramação.",
+      });
+    }
+
+    let newDueDate: Date;
+
+    try {
+      const parsed =
+        normalizeNullableDate(
+          newDueDateRaw
+        );
+
+      if (!parsed) {
+        throw new Error(
+          "Data inválida."
+        );
+      }
+
+      newDueDate = parsed;
+    } catch {
+      return res.status(400).json({
+        message:
+          "Novo vencimento inválido.",
+      });
+    }
+
+    /*
+     * Vencimento é data civil.
+     *
+     * Para correção administrativa permitimos tanto
+     * postergação quanto antecipação, desde que a nova
+     * data não esteja vencida no momento da alteração.
+     */
+    const todayKey =
+      new Intl.DateTimeFormat(
+        "en-CA",
+        {
+          timeZone: "America/Belem",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }
+      ).format(new Date());
+
+    const newDateOnly =
+      financeDateOnly(
+        newDueDate
+      );
+
+    if (
+      !newDateOnly ||
+      newDateOnly < todayKey
+    ) {
+      return res.status(400).json({
+        message:
+          "O novo vencimento não pode estar no passado.",
+      });
+    }
+
+    const current =
+      await prisma.financialTransaction.findUnique({
+        where: {
+          id,
+        },
+
+        include: {
+          billingCharge:
+            true,
+
+          partnerCommission:
+            true,
+        },
+      });
+
+    if (!current) {
+      return res.status(404).json({
+        message:
+          "Lançamento financeiro não encontrado.",
+      });
+    }
+
+    if (
+      current.status !==
+      "PENDENTE"
+    ) {
+      return res.status(409).json({
+        message:
+          "Esta obrigação já possui pagamento consolidado. Utilize o fluxo de edição do pagamento.",
+      });
+    }
+
+    if (
+      isFinancialTransactionConsolidated(
+        current
+      )
+    ) {
+      return res.status(409).json({
+        message:
+          "Esta obrigação possui pagamento consolidado. Utilize o fluxo de edição do pagamento.",
+      });
+    }
+
+    if (
+      current.partnerCommission
+    ) {
+      return res.status(409).json({
+        message:
+          "Lançamentos vinculados a comissão devem seguir o fluxo de origem.",
+      });
+    }
+
+    const previousDueDate =
+      current.dueDate;
+
+    const previousDateOnly =
+      previousDueDate
+        ? financeDateOnly(
+            previousDueDate
+          )
+        : null;
+
+    /*
+     * Idempotência:
+     * mesma data não gera PATCH bancário,
+     * alteração local ou auditoria duplicada.
+     */
+    if (
+      previousDateOnly ===
+      newDateOnly
+    ) {
+      return res.json(
+        current
+      );
+    }
+
+    const charge =
+      current.billingCharge ||
+      null;
+
+    const hasBankEmission =
+      Boolean(
+        charge &&
+        (
+          charge.status === "EMITIDA" ||
+          charge.status === "ENVIADA" ||
+          charge.status === "VENCIDA" ||
+          charge.txid ||
+          charge.externalId
+        )
+      ) ||
+      hasFinanceBankEvidence(
+        current
+      );
+
+    if (
+      hasBankEmission &&
+      !charge
+    ) {
+      return res.status(409).json({
+        message:
+          "O lançamento possui evidência bancária, mas a cobrança vinculada não foi localizada. A alteração foi bloqueada para evitar divergência.",
+        code:
+          "FINANCE_BILLING_CHARGE_REQUIRED",
+      });
+    }
+
+    if (
+      hasBankEmission &&
+      charge?.provider !==
+        "BANCO_DO_BRASIL"
+    ) {
+      return res.status(409).json({
+        message:
+          "A cobrança pertence a um provedor que não suporta reprogramação automática neste fluxo.",
+        code:
+          "FINANCE_BILLING_PROVIDER_UNSUPPORTED",
+        billingChargeId:
+          charge?.id || null,
+        provider:
+          charge?.provider || null,
+      });
+    }
+
+    if (
+      hasBankEmission &&
+      !charge?.txid
+    ) {
+      return res.status(409).json({
+        message:
+          "A cobrança possui evidência bancária, mas não possui TXID registrado. A alteração foi bloqueada para evitar divergência com o banco.",
+        code:
+          "FINANCE_BILLING_TXID_REQUIRED",
+        billingChargeId:
+          charge?.id || null,
+      });
+    }
+
+    if (
+      charge?.status === "PAGA" ||
+      charge?.paidAt
+    ) {
+      return res.status(409).json({
+        message:
+          "A cobrança já está paga. Utilize o fluxo de edição do pagamento.",
+        code:
+          "FINANCE_PAYMENT_ALREADY_PAID",
+        billingChargeId:
+          charge.id,
+      });
+    }
+
+    /*
+     * =====================================================
+     * BANCO DO BRASIL
+     * =====================================================
+     *
+     * Cobrança já emitida:
+     * 1. altera a mesma /cobv/{txid};
+     * 2. preserva TXID;
+     * 3. consulta novamente;
+     * 4. somente depois altera o banco local.
+     */
+    let bbDueDateUpdateResult: any =
+      null;
+
+    let bbDueDateConfirmation: any =
+      null;
+
+    if (
+      hasBankEmission &&
+      charge?.txid
+    ) {
+      try {
+        bbDueDateUpdateResult =
+          await updateBbPixDueChargeDueDate({
+            txid:
+              charge.txid,
+
+            dueDate:
+              newDueDate,
+          });
+
+        bbDueDateConfirmation =
+          await getBbPixDueCharge(
+            charge.txid
+          );
+
+        const confirmedDueDate =
+          String(
+            bbDueDateConfirmation
+              ?.calendario
+              ?.dataDeVencimento ||
+            ""
+          ).slice(0, 10);
+
+        if (
+          confirmedDueDate !==
+          newDateOnly
+        ) {
+          throw new Error(
+            `O Banco do Brasil não confirmou o novo vencimento. Esperado: ${newDateOnly}; retornado: ${confirmedDueDate || "não informado"}.`
+          );
+        }
+      } catch (bbError: any) {
+        console.error(
+          "Erro ao reprogramar cobrança financeira /cobv no Banco do Brasil:",
+          {
+            financialTransactionId:
+              id,
+
+            billingChargeId:
+              charge?.id || null,
+
+            txid:
+              charge?.txid || null,
+
+            previousDueDate:
+              previousDateOnly,
+
+            newDueDate:
+              newDateOnly,
+
+            message:
+              bbError?.message,
+
+            status:
+              bbError?.response?.status,
+
+            data:
+              bbError?.response?.data,
+          }
+        );
+
+        return res.status(502).json({
+          message:
+            "O Banco do Brasil não confirmou a alteração do vencimento. Nenhuma alteração local foi realizada.",
+
+          code:
+            "BB_FINANCE_DUE_DATE_REPROGRAM_FAILED",
+
+          billingChargeId:
+            charge?.id || null,
+
+          bbStatus:
+            bbError?.response?.status ||
+            null,
+        });
+      }
+    }
+
+    /*
+     * =====================================================
+     * BANCO LOCAL
+     * =====================================================
+     */
+    try {
+      const transaction =
+        await prisma.$transaction(
+          async (tx) => {
+            if (charge) {
+              await tx.billingCharge.update({
+                where: {
+                  id:
+                    charge.id,
+                },
+
+                data: {
+                  dueDate:
+                    newDueDate,
+
+                  ...(charge.status ===
+                  "VENCIDA"
+                    ? {
+                        status:
+                          charge.sentToClientAt
+                            ? "ENVIADA"
+                            : "EMITIDA",
+                      }
+                    : {}),
+                },
+              });
+            }
+
+            const updated =
+              await tx.financialTransaction.update({
+                where: {
+                  id,
+                },
+
+                data: {
+                  dueDate:
+                    newDueDate,
+
+                  competenceMonth:
+                    financeCompetenceFromDate(
+                      newDueDate
+                    ),
+                },
+
+                include: {
+                  billingCharge:
+                    true,
+                },
+              });
+
+            await tx.auditLog.create({
+              data: {
+                userId:
+                  req.user?.id ||
+                  null,
+
+                userName:
+                  req.user?.name ||
+                  null,
+
+                userEmail:
+                  req.user?.email ||
+                  null,
+
+                userRole:
+                  req.user?.role ||
+                  null,
+
+                action:
+                  "REPROGRAM_FINANCIAL_TRANSACTION_DUE_DATE",
+
+                entity:
+                  "FinancialTransaction",
+
+                entityId:
+                  String(id),
+
+                description:
+                  `Vencimento do lançamento financeiro ${id} reprogramado de ${previousDateOnly || "sem vencimento"} para ${newDateOnly}.`,
+
+                metadata:
+                  JSON.stringify({
+                    previousDueDate:
+                      previousDateOnly,
+
+                    newDueDate:
+                      newDateOnly,
+
+                    justification,
+
+                    installmentGroupId:
+                      current.installmentGroupId,
+
+                    installmentNumber:
+                      current.installmentNumber,
+
+                    billingChargeId:
+                      charge?.id ||
+                      null,
+
+                    provider:
+                      charge?.provider ||
+                      null,
+
+                    txid:
+                      charge?.txid ||
+                      null,
+
+                    bankSynchronized:
+                      Boolean(
+                        hasBankEmission &&
+                        charge?.txid
+                      ),
+
+                    bbUpdateConfirmed:
+                      Boolean(
+                        bbDueDateConfirmation
+                      ),
+                  }),
+
+                ipAddress:
+                  req.ip,
+              },
+            });
+
+            return updated;
+          }
+        );
+
+      return res.json(
+        transaction
+      );
+    } catch (localError: any) {
+      /*
+       * O BB já pode ter sido alterado.
+       * Se o commit local falhar, tentamos restaurar
+       * o vencimento anterior na mesma /cobv.
+       */
+      if (
+        hasBankEmission &&
+        charge?.txid &&
+        previousDueDate
+      ) {
+        try {
+          await updateBbPixDueChargeDueDate({
+            txid:
+              charge.txid,
+
+            dueDate:
+              previousDueDate,
+          });
+
+          console.warn(
+            "Reprogramação financeira local falhou; vencimento restaurado no Banco do Brasil.",
+            {
+              financialTransactionId:
+                id,
+
+              billingChargeId:
+                charge.id,
+
+              txid:
+                charge.txid,
+
+              restoredDueDate:
+                previousDateOnly,
+            }
+          );
+        } catch (rollbackError: any) {
+          console.error(
+            "ERRO CRÍTICO: falha local e também falha ao restaurar o vencimento financeiro no Banco do Brasil.",
+            {
+              financialTransactionId:
+                id,
+
+              billingChargeId:
+                charge.id,
+
+              txid:
+                charge.txid,
+
+              intendedRollbackDueDate:
+                previousDateOnly,
+
+              rollbackMessage:
+                rollbackError?.message,
+
+              rollbackStatus:
+                rollbackError
+                  ?.response
+                  ?.status,
+            }
+          );
+        }
+      }
+
+      console.error(
+        "Erro ao persistir reprogramação financeira:",
+        localError
+      );
+
+      return res.status(500).json({
+        message:
+          "Não foi possível concluir a reprogramação no banco local.",
+        code:
+          "FINANCE_DUE_DATE_LOCAL_UPDATE_FAILED",
+      });
+    }
+  }
+);
+
+
+app.patch(
+  "/finance/transactions/:id/notification-preferences",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  async (req: any, res: any) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        message:
+          "ID do lançamento inválido.",
+      });
+    }
+
+    const body =
+      req.body || {};
+
+    if (
+      typeof body.emailNotificationEnabled !==
+      "boolean"
+    ) {
+      return res.status(400).json({
+        message:
+          "Informe se o envio de e-mail deve estar habilitado.",
+      });
+    }
+
+    try {
+      const outcome =
+        await prisma.$transaction(
+          async (tx) => {
+            const current =
+              await tx.financialTransaction.findUnique({
+                where: {
+                  id,
+                },
+              });
+
+            if (!current) {
+              return {
+                status: 404,
+                body: {
+                  message:
+                    "Lançamento financeiro não encontrado.",
+                },
+              };
+            }
+
+            const previousEmailNotificationEnabled =
+              current.emailNotificationEnabled;
+
+            /*
+             * Operação idempotente.
+             * Repetir a mesma preferência não cria
+             * eventos de auditoria duplicados.
+             */
+            if (
+              previousEmailNotificationEnabled ===
+              body.emailNotificationEnabled
+            ) {
+              return {
+                status: 200,
+                body: current,
+              };
+            }
+
+            const transaction =
+              await tx.financialTransaction.update({
+                where: {
+                  id,
+                },
+
+                data: {
+                  emailNotificationEnabled:
+                    body.emailNotificationEnabled,
+                },
+              });
+
+            await tx.auditLog.create({
+              data: {
+                userId:
+                  req.user?.id ||
+                  null,
+
+                userName:
+                  req.user?.name ||
+                  null,
+
+                userEmail:
+                  req.user?.email ||
+                  null,
+
+                userRole:
+                  req.user?.role ||
+                  null,
+
+                action:
+                  "UPDATE_FINANCIAL_NOTIFICATION_PREFERENCES",
+
+                entity:
+                  "FinancialTransaction",
+
+                entityId:
+                  String(id),
+
+                description:
+                  body.emailNotificationEnabled
+                    ? `Envio automático de e-mail ativado para o lançamento financeiro ${id}.`
+                    : `Envio automático de e-mail desativado para o lançamento financeiro ${id}.`,
+
+                metadata:
+                  JSON.stringify({
+                    previous: {
+                      emailNotificationEnabled:
+                        previousEmailNotificationEnabled,
+                    },
+
+                    current: {
+                      emailNotificationEnabled:
+                        body.emailNotificationEnabled,
+                    },
+
+                    installmentGroupId:
+                      current.installmentGroupId,
+
+                    installmentNumber:
+                      current.installmentNumber,
+                  }),
+
+                ipAddress:
+                  req.ip,
+              },
+            });
+
+            return {
+              status: 200,
+              body: transaction,
+            };
+          }
+        );
+
+      return res
+        .status(outcome.status)
+        .json(outcome.body);
+    } catch (error) {
+      console.error(
+        "Erro ao atualizar preferência de comunicação financeira:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Não foi possível atualizar a preferência de comunicação.",
+      });
+    }
+  }
+);
+
 
 app.put(
   "/finance/transactions/:id",

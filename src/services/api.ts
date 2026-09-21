@@ -619,10 +619,39 @@ financeTransactions(params?: {
       body: JSON.stringify(data),
     });
   },
+  updateFinanceChargeClientData(
+    transactionId: number,
+    data: {
+      name: string;
+      personType: "PF" | "PJ";
+      cpfCnpj: string;
+      email?: string;
+      phone?: string;
+      whatsapp?: string;
+    }
+  ) {
+    return request(
+      `/finance/transactions/${transactionId}/charge-client-data`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }
+    );
+  },
+
+  getFinanceTransactionChargeReadiness(
+    id: number
+  ) {
+    return request(
+      `/finance/transactions/${id}/charge-readiness`
+    );
+  },
+
   processFinanceAutoCharges(data?: {
     daysAhead?: number;
     transactionId?: number;
     dryRun?: boolean;
+    manual?: boolean;
   }) {
     return request("/finance/auto-charges/process", {
       method: "POST",
@@ -697,6 +726,7 @@ createFinanceTransaction(data: {
   entryPaidAt?: string | null;
 
   entryAutoChargeEnabled?: boolean;
+  entryEmailNotificationEnabled?: boolean;
 
   installments?: Array<{
     /*
@@ -714,6 +744,7 @@ createFinanceTransaction(data: {
      * Preparação Pix/webhook.
      */
     autoChargeEnabled?: boolean;
+    emailNotificationEnabled?: boolean;
   }>;
 
   /*
@@ -727,6 +758,7 @@ createFinanceTransaction(data: {
   }>;
 
   autoChargeEnabled?: boolean;
+  emailNotificationEnabled?: boolean;
 }) {
   return request<FinancialPaymentPlanResponse | {
     id: number;
@@ -749,6 +781,38 @@ financeTransactionPaymentPlan(
     `/finance/transactions/${id}/payment-plan`
   );
 },
+
+reprogramFinanceTransactionDueDate(
+  id: number,
+  data: {
+    newDueDate: string;
+    justification: string;
+  }
+) {
+  return request(
+    `/finance/transactions/${id}/reprogram-due-date`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }
+  );
+},
+
+updateFinanceTransactionNotificationPreferences(
+  id: number,
+  data: {
+    emailNotificationEnabled: boolean;
+  }
+) {
+  return request(
+    `/finance/transactions/${id}/notification-preferences`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }
+  );
+},
+
 
 convertFinanceTransactionToPaymentPlan(
   id: number,

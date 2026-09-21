@@ -212,7 +212,7 @@ function PublicBillingChargePage() {
 
               <div>
                 <span>Vencimento</span>
-                <strong>{formatDate(charge.dueDate)}</strong>
+                <strong>{formatCivilDate(charge.dueDate)}</strong>
               </div>
 
               <div>
@@ -247,8 +247,12 @@ function PublicBillingChargePage() {
                       />
 
                       <p>
-                        Escaneie o QR Code com o aplicativo do seu banco para
-                        pagar a entrada.
+                        Escaneie o QR Code com o aplicativo do seu banco para{" "}
+                        {charge.chargeType === "PARCELA"
+                          ? "pagar a parcela."
+                          : charge.chargeType === "ENTRADA"
+                            ? "pagar a entrada."
+                            : "realizar o pagamento."}
                       </p>
                     </div>
 
@@ -1289,6 +1293,24 @@ function formatDate(value?: string | null) {
   return new Intl.DateTimeFormat("pt-BR", {
     timeZone: "America/Belem",
   }).format(new Date(value));
+}
+
+function formatCivilDate(value?: string | null) {
+  if (!value) return "-";
+
+  const dateOnly = String(value).slice(0, 10);
+  const parts = dateOnly.split("-");
+
+  if (
+    parts.length !== 3 ||
+    parts[0].length !== 4
+  ) {
+    return formatDate(value);
+  }
+
+  const [year, month, day] = parts;
+
+  return `${day}/${month}/${year}`;
 }
 
 function formatDateTime(value?: string | null) {
@@ -7654,7 +7676,7 @@ const confirmed = window.confirm(
                     <span>Cobrança #{charge.id}</span>
                     <h3>{charge.description}</h3>
                     <p>
-                      Vencimento: {formatDate(charge.dueDate)} · Modo fiscal:{" "}
+                      Vencimento: {formatCivilDate(charge.dueDate)} · Modo fiscal:{" "}
                       {fiscalModeLabel(charge.fiscalMode)}
                     </p>
                   </div>
@@ -8131,7 +8153,7 @@ function BillingHistoryPanel({
 
                     <td>{formatOptionalMoneyCents(charge.amountCents)}</td>
 
-                    <td>{formatDate(charge.dueDate)}</td>
+                    <td>{formatCivilDate(charge.dueDate)}</td>
 
                     <td>
                       {charge.paidAt
@@ -10616,6 +10638,91 @@ function FinancePage() {
     transactionAutoChargeEnabled,
     setTransactionAutoChargeEnabled,
   ] = useState(false);
+  const [
+    transactionEmailNotificationEnabled,
+    setTransactionEmailNotificationEnabled,
+  ] = useState(true);
+
+  const [
+    reprogrammingTransactionId,
+    setReprogrammingTransactionId,
+  ] = useState<number | null>(null);
+
+  const [
+    reprogramDueDate,
+    setReprogramDueDate,
+  ] = useState("");
+
+  const [
+    reprogramJustification,
+    setReprogramJustification,
+  ] = useState("");
+
+  const [
+    reprogrammingDueDateInProgress,
+    setReprogrammingDueDateInProgress,
+  ] = useState(false);
+
+  const [
+    processingChargeTransactionId,
+    setProcessingChargeTransactionId,
+  ] = useState<number | null>(null);
+
+  const [
+    processingBankChargeInProgress,
+    setProcessingBankChargeInProgress,
+  ] = useState(false);
+
+
+  const [
+    chargeReadinessTransactionId,
+    setChargeReadinessTransactionId,
+  ] = useState<number | null>(null);
+
+  const [
+    chargeReadinessClientId,
+    setChargeReadinessClientId,
+  ] = useState<number | null>(null);
+
+  const [
+    chargeReadinessName,
+    setChargeReadinessName,
+  ] = useState("");
+
+  const [
+    chargeReadinessPersonType,
+    setChargeReadinessPersonType,
+  ] = useState<"PF" | "PJ">("PF");
+
+  const [
+    chargeReadinessCpfCnpj,
+    setChargeReadinessCpfCnpj,
+  ] = useState("");
+
+  const [
+    chargeReadinessEmail,
+    setChargeReadinessEmail,
+  ] = useState("");
+
+  const [
+    chargeReadinessPhone,
+    setChargeReadinessPhone,
+  ] = useState("");
+
+  const [
+    chargeReadinessWhatsapp,
+    setChargeReadinessWhatsapp,
+  ] = useState("");
+
+  const [
+    chargeReadinessEmailRequired,
+    setChargeReadinessEmailRequired,
+  ] = useState(false);
+
+  const [
+    chargeReadinessMissing,
+    setChargeReadinessMissing,
+  ] = useState<string[]>([]);
 
   const [
     autoChargeSettings,
@@ -10933,6 +11040,541 @@ function FinancePage() {
     setTransactionAutoChargeEnabled(
       false
     );
+
+    setTransactionEmailNotificationEnabled(
+      true
+    );
+
+    setReprogrammingTransactionId(
+      null
+    );
+
+    setReprogramDueDate(
+      ""
+    );
+
+    setReprogramJustification(
+      ""
+    );
+
+    setProcessingChargeTransactionId(
+      null
+    );
+  }
+
+  function startReprogramTransactionDueDate(
+    obligation: BackendFinanceTransaction
+  ) {
+    clearMessages();
+
+    setReprogrammingTransactionId(
+      obligation.id
+    );
+
+    setReprogramDueDate(
+      obligation.dueDate?.slice(0, 10) ||
+      ""
+    );
+
+    setReprogramJustification(
+      ""
+    );
+  }
+
+  function cancelReprogramTransactionDueDate() {
+    setReprogrammingTransactionId(
+      null
+    );
+
+    setReprogramDueDate(
+      ""
+    );
+
+    setReprogramJustification(
+      ""
+    );
+  }
+
+  async function confirmReprogramTransactionDueDate(
+    obligation: BackendFinanceTransaction
+  ) {
+    if (reprogrammingDueDateInProgress) {
+      return;
+    }
+
+    if (!reprogramDueDate) {
+      setSuccess("");
+      setError(
+        "Informe o novo vencimento."
+      );
+      return;
+    }
+
+    if (!reprogramJustification.trim()) {
+      setSuccess("");
+      setError(
+        "Informe a justificativa da reprogramação."
+      );
+      return;
+    }
+
+    try {
+      clearMessages();
+      setReprogrammingDueDateInProgress(true);
+
+      const updated =
+        (await api.reprogramFinanceTransactionDueDate(
+          obligation.id,
+          {
+            newDueDate:
+              reprogramDueDate,
+
+            justification:
+              reprogramJustification.trim(),
+          }
+        )) as BackendFinanceTransaction;
+
+      setViewingPaymentPlan(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id === obligation.id
+                ? {
+                    ...item,
+                    ...updated,
+                  }
+                : item
+          )
+      );
+
+      cancelReprogramTransactionDueDate();
+
+      setSuccess(
+        "Vencimento reprogramado com sucesso."
+      );
+    } catch (error) {
+      setSuccess("");
+
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível reprogramar o vencimento."
+      );
+    } finally {
+      setReprogrammingDueDateInProgress(false);
+    }
+  }
+
+
+  type FinanceChargeReadiness = {
+    ready: boolean;
+    transactionId: number;
+    emailNotificationEnabled: boolean;
+    missing: string[];
+    blockers: string[];
+    client: {
+      id: number;
+      name: string;
+      personType?: string | null;
+      cpfCnpj?: string | null;
+      email?: string | null;
+      phone?: string | null;
+      whatsapp?: string | null;
+    } | null;
+  };
+
+  function closeChargeReadinessForm() {
+    setChargeReadinessTransactionId(null);
+    setChargeReadinessClientId(null);
+    setChargeReadinessName("");
+    setChargeReadinessPersonType("PF");
+    setChargeReadinessCpfCnpj("");
+    setChargeReadinessEmail("");
+    setChargeReadinessPhone("");
+    setChargeReadinessWhatsapp("");
+    setChargeReadinessEmailRequired(false);
+    setChargeReadinessMissing([]);
+  }
+
+  function openChargeReadinessForm(
+    readiness: FinanceChargeReadiness
+  ) {
+    const client = readiness.client;
+
+    if (!client) {
+      setError(
+        "A obrigação não possui cliente vinculado. Vincule um cliente antes de emitir a cobrança."
+      );
+      return;
+    }
+
+    const digits = String(
+      client.cpfCnpj || ""
+    ).replace(/\D/g, "");
+
+    setChargeReadinessTransactionId(
+      readiness.transactionId
+    );
+    setChargeReadinessClientId(client.id);
+    setChargeReadinessName(client.name || "");
+
+    setChargeReadinessPersonType(
+      client.personType === "PJ" ||
+      digits.length === 14
+        ? "PJ"
+        : "PF"
+    );
+
+    setChargeReadinessCpfCnpj(
+      client.cpfCnpj || ""
+    );
+    setChargeReadinessEmail(
+      client.email || ""
+    );
+    setChargeReadinessPhone(
+      client.phone || ""
+    );
+    setChargeReadinessWhatsapp(
+      client.whatsapp || ""
+    );
+    setChargeReadinessEmailRequired(
+      readiness.emailNotificationEnabled
+    );
+    setChargeReadinessMissing(
+      readiness.missing || []
+    );
+  }
+
+  async function saveChargeReadinessClient() {
+    if (
+      !chargeReadinessClientId ||
+      !chargeReadinessTransactionId
+    ) {
+      setError(
+        "Não foi possível identificar o cliente da cobrança."
+      );
+      return;
+    }
+
+    if (!chargeReadinessName.trim()) {
+      setError(
+        "Informe o nome ou razão social do cliente."
+      );
+      return;
+    }
+
+    const documentDigits =
+      chargeReadinessCpfCnpj.replace(
+        /\D/g,
+        ""
+      );
+
+    const expectedLength =
+      chargeReadinessPersonType === "PJ"
+        ? 14
+        : 11;
+
+    if (documentDigits.length !== expectedLength) {
+      setError(
+        chargeReadinessPersonType === "PJ"
+          ? "Informe um CNPJ com 14 dígitos."
+          : "Informe um CPF com 11 dígitos."
+      );
+      return;
+    }
+
+    if (
+      chargeReadinessEmailRequired &&
+      !chargeReadinessEmail.trim()
+    ) {
+      setError(
+        "O e-mail é obrigatório porque o envio por e-mail está ativado para esta cobrança."
+      );
+      return;
+    }
+
+    try {
+      clearMessages();
+
+      setProcessingChargeTransactionId(
+        chargeReadinessTransactionId
+      );
+
+      await api.updateFinanceChargeClientData(
+        chargeReadinessTransactionId,
+        {
+          name: chargeReadinessName.trim(),
+          personType: chargeReadinessPersonType,
+          cpfCnpj: chargeReadinessCpfCnpj.trim(),
+          email: chargeReadinessEmail.trim(),
+          phone: chargeReadinessPhone.trim(),
+          whatsapp: chargeReadinessWhatsapp.trim(),
+        }
+      );
+
+      const readiness =
+        (await api.getFinanceTransactionChargeReadiness(
+          chargeReadinessTransactionId
+        )) as FinanceChargeReadiness;
+
+      if (readiness.blockers?.length) {
+        setError(
+          readiness.blockers.join(" ")
+        );
+        return;
+      }
+
+      if (!readiness.ready) {
+        openChargeReadinessForm(readiness);
+
+        if (readiness.missing.includes("cpfCnpj")) {
+          setError(
+            "O CPF/CNPJ informado não é válido. Verifique o documento."
+          );
+        } else if (
+          readiness.missing.includes("email")
+        ) {
+          setError(
+            "Informe o e-mail do cliente ou desative o envio de e-mail desta obrigação."
+          );
+        } else {
+          setError(
+            "Ainda existem dados obrigatórios pendentes para a cobrança."
+          );
+        }
+
+        return;
+      }
+
+      closeChargeReadinessForm();
+
+      setSuccess(
+        "Dados atualizados. A cobrança está apta. Clique novamente em “Processar cobrança agora” para confirmar a emissão."
+      );
+    } catch (error) {
+      setSuccess("");
+
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível atualizar os dados necessários para cobrança."
+      );
+    } finally {
+      setProcessingChargeTransactionId(null);
+    }
+  }
+
+  async function processTransactionChargeNow(
+    obligation: BackendFinanceTransaction
+  ) {
+    if (
+      processingChargeTransactionId !== null ||
+      processingBankChargeInProgress
+    ) {
+      return;
+    }
+
+    try {
+      clearMessages();
+
+      setProcessingChargeTransactionId(
+        obligation.id
+      );
+
+      const readiness =
+        (await api.getFinanceTransactionChargeReadiness(
+          obligation.id
+        )) as FinanceChargeReadiness;
+
+      if (readiness.blockers?.length) {
+        setError(
+          readiness.blockers.join(" ")
+        );
+        return;
+      }
+
+      if (!readiness.ready) {
+        openChargeReadinessForm(readiness);
+
+        setError(
+          "Complete os dados obrigatórios do cliente antes de emitir a cobrança."
+        );
+
+        return;
+      }
+
+      closeChargeReadinessForm();
+
+      const confirmed =
+        window.confirm(
+          `Deseja processar agora a cobrança de ${
+            obligation.installmentNumber === 0
+              ? "Entrada"
+              : `Parcela ${obligation.installmentNumber}`
+          }? Esta ação poderá gerar uma cobrança real no Banco do Brasil.`
+        );
+
+      if (!confirmed) {
+        return;
+      }
+
+      setProcessingBankChargeInProgress(true);
+
+      const result =
+        await api.processFinanceAutoCharges({
+          transactionId:
+            obligation.id,
+
+          manual:
+            true,
+
+          dryRun:
+            false,
+        });
+
+      const resultObject =
+        result as {
+          created?: number;
+          recovered?: number;
+          skipped?: number;
+          errors?: number;
+          results?: Array<{
+            transactionId?: number;
+            status?: string;
+            reason?: string;
+          }>;
+        };
+
+      const itemResult =
+        resultObject.results?.find(
+          (item) =>
+            Number(item.transactionId) ===
+            obligation.id
+        );
+
+      if (
+        Number(resultObject.errors || 0) > 0 ||
+        itemResult?.status === "ERROR"
+      ) {
+        throw new Error(
+          itemResult?.reason ||
+          "A cobrança não pôde ser processada."
+        );
+      }
+
+      if (
+        Number(resultObject.created || 0) === 0 &&
+        Number(resultObject.recovered || 0) === 0
+      ) {
+        setSuccess("");
+
+        setError(
+          itemResult?.reason ||
+          "Nenhuma nova cobrança foi criada."
+        );
+
+        return;
+      }
+
+      /*
+       * Reabre o plano a partir da obrigação selecionada.
+       * Assim recebemos do backend o BillingCharge/TXID
+       * efetivamente persistido.
+       */
+      const refreshed =
+        (await api.financeTransactionPaymentPlan(
+          obligation.id
+        )) as {
+          transactions?: BackendFinanceTransaction[];
+        };
+
+      if (
+        Array.isArray(
+          refreshed?.transactions
+        )
+      ) {
+        setViewingPaymentPlan(
+          refreshed.transactions
+            .slice()
+            .sort(
+              (a, b) =>
+                Number(
+                  a.installmentNumber ?? 0
+                ) -
+                Number(
+                  b.installmentNumber ?? 0
+                )
+            )
+        );
+      }
+
+      setSuccess(
+        Number(resultObject.created || 0) > 0
+          ? "Cobrança processada com sucesso."
+          : "Cobrança existente recuperada com sucesso."
+      );
+    } catch (error) {
+      setSuccess("");
+
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível processar a cobrança."
+      );
+    } finally {
+      setProcessingBankChargeInProgress(false);
+
+      setProcessingChargeTransactionId(
+        null
+      );
+    }
+  }
+
+  async function updateTransactionEmailPreference(
+    obligation: BackendFinanceTransaction
+  ) {
+    try {
+      clearMessages();
+
+      const enabled =
+        obligation.emailNotificationEnabled === false;
+
+      await api.updateFinanceTransactionNotificationPreferences(
+        obligation.id,
+        {
+          emailNotificationEnabled:
+            enabled,
+        }
+      );
+
+      setViewingPaymentPlan(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id === obligation.id
+                ? {
+                    ...item,
+                    emailNotificationEnabled:
+                      enabled,
+                  }
+                : item
+          )
+      );
+
+      setSuccess(
+        enabled
+          ? "Envio automático de e-mail ativado para esta obrigação."
+          : "Envio automático de e-mail desativado para esta obrigação."
+      );
+    } catch (error) {
+      setSuccess("");
+
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível alterar a preferência de e-mail."
+      );
+    }
   }
 
   async function startEditTransaction(
@@ -11646,6 +12288,11 @@ async function handleSaveTransaction() {
             ? transactionAutoChargeEnabled
             : undefined,
 
+        emailNotificationEnabled:
+          !editingTransaction
+            ? transactionEmailNotificationEnabled
+            : undefined,
+
         /*
          * Só cria parcelas novas durante
          * o cadastro inicial.
@@ -11699,6 +12346,12 @@ async function handleSaveTransaction() {
             ? transactionAutoChargeEnabled
             : false,
 
+        entryEmailNotificationEnabled:
+          !editingTransaction &&
+          transactionInstallmentEnabled
+            ? transactionEmailNotificationEnabled
+            : undefined,
+
         installments:
           !editingTransaction &&
           transactionInstallmentEnabled
@@ -11715,6 +12368,9 @@ async function handleSaveTransaction() {
 
                   autoChargeEnabled:
                     transactionAutoChargeEnabled,
+
+                  emailNotificationEnabled:
+                    transactionEmailNotificationEnabled,
                 })
               )
             : undefined,
@@ -12175,6 +12831,16 @@ async function handleDeleteSalary(id: number) {
 
   return (
     <section className="page">
+      <ProcessingOverlay
+        message={
+          reprogrammingDueDateInProgress
+            ? "Reprogramando o vencimento e sincronizando a cobrança com o Banco do Brasil."
+            : processingBankChargeInProgress
+              ? "Processando e registrando a cobrança no Banco do Brasil."
+              : ""
+        }
+      />
+
       <div className="page-heading">
         <div>
           <span className="eyebrow">Financeiro</span>
@@ -12924,20 +13590,403 @@ async function handleDeleteSalary(id: number) {
           {showTransactionForm && editingTransaction?.installmentGroupId && (
             <div className="panel soft-panel">
               <h3>Plano financeiro — consulta</h3>
-              <p>A composição está protegida. Alterações deverão ocorrer pelo fluxo de reprogramação financeira, que será disponibilizado posteriormente.</p>
+              <p>A composição do plano está protegida. Obrigações pendentes podem ter o vencimento reprogramado individualmente, com registro da justificativa.</p>
               <div className="table-wrap">
                 <table className="data-table">
-                  <thead><tr><th>Obrigação</th><th>Valor</th><th>Vencimento</th><th>Estado</th></tr></thead>
-                  <tbody>{viewingPaymentPlan.map((obligation) => (
-                    <tr key={obligation.id}>
-                      <td>{obligation.installmentNumber === 0 ? "Entrada" : `Parcela ${obligation.installmentNumber}`}</td>
-                      <td>{formatOptionalMoneyCents(obligation.amountCents)}</td>
-                      <td>{obligation.dueDate?.slice(0, 10) || "—"}</td>
-                      <td>{isFinanceTransactionConsolidated(obligation)
-                        ? "🔒 Pagamento consolidado"
-                        : obligation.billingCharge ? `🔒 Cobrança protegida (${obligation.status})` : obligation.status}</td>
+                  <thead>
+                    <tr>
+                      <th>Obrigação</th>
+                      <th>Valor</th>
+                      <th>Vencimento</th>
+                      <th>Estado</th>
+                      <th>Comunicação</th>
+                      <th>Ações</th>
                     </tr>
-                  ))}</tbody>
+                  </thead>
+
+                  <tbody>
+                    {viewingPaymentPlan.map((obligation) => {
+                      const emailEnabled =
+                        obligation.emailNotificationEnabled !== false;
+
+                      return (
+                        <tr key={obligation.id}>
+                          <td>
+                            {obligation.installmentNumber === 0
+                              ? "Entrada"
+                              : `Parcela ${obligation.installmentNumber}`}
+                          </td>
+
+                          <td>
+                            {formatOptionalMoneyCents(
+                              obligation.amountCents
+                            )}
+                          </td>
+
+                          <td>
+                            {obligation.dueDate?.slice(0, 10) || "—"}
+                          </td>
+
+                          <td>
+                            {isFinanceTransactionConsolidated(obligation)
+                              ? "🔒 Pagamento consolidado"
+                              : obligation.billingCharge
+                                ? `🔒 Cobrança protegida (${obligation.status})`
+                                : obligation.status}
+                          </td>
+
+                          <td>
+                            <div className="form-actions compact-actions">
+                              <span>
+                                E-mail:{" "}
+                                <strong>
+                                  {emailEnabled
+                                    ? "Ativado"
+                                    : "Desativado"}
+                                </strong>
+                              </span>
+
+                              {obligation.status === "PENDENTE" && (
+                                <button
+                                  type="button"
+                                  className="secondary-action"
+                                  onClick={() =>
+                                    updateTransactionEmailPreference(
+                                      obligation
+                                    )
+                                  }
+                                >
+                                  {emailEnabled
+                                    ? "Desativar e-mail"
+                                    : "Ativar e-mail"}
+                                </button>
+                              )}
+                            </div>
+                          </td>
+
+                          <td>
+                            {obligation.status === "PENDENTE" ? (
+                              <div className="form-actions compact-actions">
+                                {obligation.billingCharge?.id && (
+                                  <button
+                                    type="button"
+                                    className="secondary-action"
+                                    onClick={async () => {
+                                      try {
+                                        clearMessages();
+
+                                        const charge =
+                                          (await api.billingChargeById(
+                                            obligation.billingCharge!.id
+                                          )) as BackendBillingCharge;
+
+                                        const path =
+                                          billingChargePublicPath(charge);
+
+                                        window.open(
+                                          path,
+                                          "_blank",
+                                          "noopener,noreferrer"
+                                        );
+                                      } catch (error) {
+                                        setError(
+                                          error instanceof Error
+                                            ? error.message
+                                            : "Não foi possível abrir a cobrança."
+                                        );
+                                      }
+                                    }}
+                                  >
+                                    Ver cobrança
+                                  </button>
+                                )}
+
+                                {obligation.status === "PENDENTE" && (
+                                  <button
+                                    type="button"
+                                    className="secondary-action"
+                                    onClick={() =>
+                                      startReprogramTransactionDueDate(
+                                        obligation
+                                      )
+                                    }
+                                  >
+                                    Reprogramar vencimento
+                                  </button>
+                                )}
+
+                                {!obligation.billingCharge &&
+                                  !obligation.providerTxId && (
+                                    <button
+                                      type="button"
+                                      className="secondary-action"
+                                      disabled={
+                                        processingChargeTransactionId ===
+                                        obligation.id
+                                      }
+                                      onClick={() =>
+                                        processTransactionChargeNow(
+                                          obligation
+                                        )
+                                      }
+                                    >
+                                      {processingChargeTransactionId ===
+                                      obligation.id
+                                        ? "Processando..."
+                                        : "Processar cobrança agora"}
+                                    </button>
+                                  )}
+
+                                {chargeReadinessTransactionId ===
+                                  obligation.id && (
+                                  <div className="panel soft-panel">
+                                    <h4>
+                                      Dados necessários para cobrança
+                                    </h4>
+
+                                    <p>
+                                      Complete os dados necessários para emitir esta cobrança.
+                                      Salvar os dados não gera a cobrança automaticamente.
+                                    </p>
+
+                                    <label>
+                                      Nome / Razão Social *
+                                      <input
+                                        value={chargeReadinessName}
+                                        onChange={(event) =>
+                                          setChargeReadinessName(
+                                            event.target.value
+                                          )
+                                        }
+                                      />
+                                    </label>
+
+                                    <label>
+                                      Tipo de pessoa *
+                                      <select
+                                        value={chargeReadinessPersonType}
+                                        onChange={(event) =>
+                                          setChargeReadinessPersonType(
+                                            event.target.value as
+                                              | "PF"
+                                              | "PJ"
+                                          )
+                                        }
+                                      >
+                                        <option value="PF">
+                                          Pessoa Física
+                                        </option>
+                                        <option value="PJ">
+                                          Pessoa Jurídica
+                                        </option>
+                                      </select>
+                                    </label>
+
+                                    <label>
+                                      {chargeReadinessPersonType === "PJ"
+                                        ? "CNPJ *"
+                                        : "CPF *"}
+
+                                      <input
+                                        value={chargeReadinessCpfCnpj}
+                                        onChange={(event) =>
+                                          setChargeReadinessCpfCnpj(
+                                            event.target.value
+                                          )
+                                        }
+                                        placeholder={
+                                          chargeReadinessPersonType === "PJ"
+                                            ? "00.000.000/0000-00"
+                                            : "000.000.000-00"
+                                        }
+                                      />
+                                    </label>
+
+                                    <label>
+                                      E-mail
+                                      {chargeReadinessEmailRequired
+                                        ? " *"
+                                        : ""}
+
+                                      <input
+                                        type="email"
+                                        value={chargeReadinessEmail}
+                                        onChange={(event) =>
+                                          setChargeReadinessEmail(
+                                            event.target.value
+                                          )
+                                        }
+                                        placeholder={
+                                          chargeReadinessEmailRequired
+                                            ? "Obrigatório para esta cobrança"
+                                            : "Opcional"
+                                        }
+                                      />
+                                    </label>
+
+                                    <label>
+                                      Telefone
+                                      <input
+                                        value={chargeReadinessPhone}
+                                        onChange={(event) =>
+                                          setChargeReadinessPhone(
+                                            event.target.value
+                                          )
+                                        }
+                                        placeholder="Opcional"
+                                      />
+                                    </label>
+
+                                    <label>
+                                      WhatsApp
+                                      <input
+                                        value={chargeReadinessWhatsapp}
+                                        onChange={(event) =>
+                                          setChargeReadinessWhatsapp(
+                                            event.target.value
+                                          )
+                                        }
+                                        placeholder="Opcional"
+                                      />
+                                    </label>
+
+                                    {chargeReadinessMissing.length > 0 && (
+                                      <p>
+                                        <strong>
+                                          Pendências:
+                                        </strong>{" "}
+                                        {chargeReadinessMissing
+                                          .map((field) => {
+                                            if (field === "cpfCnpj") {
+                                              return "CPF/CNPJ";
+                                            }
+
+                                            if (field === "email") {
+                                              return "E-mail";
+                                            }
+
+                                            if (field === "name") {
+                                              return "Nome/Razão Social";
+                                            }
+
+                                            return field;
+                                          })
+                                          .join(", ")}
+                                      </p>
+                                    )}
+
+                                    <div className="form-actions compact-actions">
+                                      <button
+                                        type="button"
+                                        className="secondary-action"
+                                        disabled={
+                                          processingChargeTransactionId ===
+                                          obligation.id
+                                        }
+                                        onClick={
+                                          saveChargeReadinessClient
+                                        }
+                                      >
+                                        {processingChargeTransactionId ===
+                                        obligation.id
+                                          ? "Salvando..."
+                                          : "Salvar dados"}
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        className="secondary-action"
+                                        disabled={
+                                          processingChargeTransactionId ===
+                                          obligation.id
+                                        }
+                                        onClick={
+                                          closeChargeReadinessForm
+                                        }
+                                      >
+                                        Cancelar
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {reprogrammingTransactionId ===
+                                  obligation.id && (
+                                  <div className="panel soft-panel">
+                                    <label>
+                                      Novo vencimento
+                                      <input
+                                        type="date"
+                                        value={
+                                          reprogramDueDate
+                                        }
+                                        onChange={(event) =>
+                                          setReprogramDueDate(
+                                            event.target.value
+                                          )
+                                        }
+                                      />
+                                    </label>
+
+                                    <label>
+                                      Justificativa
+                                      <input
+                                        value={
+                                          reprogramJustification
+                                        }
+                                        onChange={(event) =>
+                                          setReprogramJustification(
+                                            event.target.value
+                                          )
+                                        }
+                                        placeholder="Ex: vencimento renegociado com o cliente"
+                                      />
+                                    </label>
+
+                                    <div className="form-actions compact-actions">
+                                      <button
+                                        type="button"
+                                        className="secondary-action"
+                                        disabled={
+                                          reprogrammingDueDateInProgress
+                                        }
+                                        onClick={() =>
+                                          confirmReprogramTransactionDueDate(
+                                            obligation
+                                          )
+                                        }
+                                      >
+                                        {reprogrammingDueDateInProgress
+                                          ? "Processando..."
+                                          : "Confirmar"}
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        className="secondary-action"
+                                        disabled={
+                                          reprogrammingDueDateInProgress
+                                        }
+                                        onClick={
+                                          cancelReprogramTransactionDueDate
+                                        }
+                                      >
+                                        Cancelar
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="table-small">
+                                —
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
                 </table>
               </div>
               <button className="secondary-action" onClick={() => { resetTransactionForm(); setShowTransactionForm(false); }}>Fechar consulta</button>
@@ -13232,6 +14281,31 @@ async function handleDeleteSalary(id: number) {
                 </div>
 
               </div>
+
+              {transactionType === "ENTRADA" &&
+                !editingTransaction && (
+                  <div className="panel soft-panel">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={!transactionEmailNotificationEnabled}
+                        onChange={(event) =>
+                          setTransactionEmailNotificationEnabled(
+                            !event.target.checked
+                          )
+                        }
+                      />{" "}
+                      <strong>Não enviar e-mail ao cliente</strong>
+                    </label>
+
+                    <small className="table-small">
+                      Use esta opção para recadastros históricos ou quando
+                      o cliente ainda não possuir e-mail confirmado.
+                      A obrigação financeira continuará sendo registrada
+                      normalmente.
+                    </small>
+                  </div>
+                )}
 
               {transactionType === "ENTRADA" &&
                 !editingTransaction?.billingCharge && (
@@ -13865,7 +14939,9 @@ async function handleDeleteSalary(id: number) {
                     </td>
 
                     <td>
-                      {formatDate(item.dueDate)}
+                      {item.dueDate
+                        ? item.dueDate.slice(0, 10).split("-").reverse().join("/")
+                        : "-"}
                     </td>
                     <td>{formatOptionalMoneyCents(item.amountCents)}</td>
 

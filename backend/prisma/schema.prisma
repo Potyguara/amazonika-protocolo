@@ -374,11 +374,10 @@ model ServiceType {
 }
 
 model Protocol {
-
   // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
   // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
   estimatedValueCents Int?
-  finalValueCents Int?
+  finalValueCents     Int?
 
   id                Int    @id @default(autoincrement())
   protocolNumber    String @unique
@@ -467,11 +466,10 @@ enum PaymentDueDateExtensionStatus {
 }
 
 model Contract {
-
   // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
   // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
   contractValueCents Int?
-  entryAmountCents Int?
+  entryAmountCents   Int?
 
   id Int @id @default(autoincrement())
 
@@ -534,7 +532,7 @@ model Contract {
   // Prorrogações formais de vencimento.
   paymentDueDateExtensions PaymentDueDateExtension[]
 
-  signatures ContractSignature[]
+  signatures    ContractSignature[]
   signatureOtps ContractSignatureOtp[]
 }
 
@@ -615,7 +613,6 @@ model PaymentDueDateExtension {
 }
 
 model BillingCharge {
-
   // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
   // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
   paidAmountCents Int?
@@ -717,7 +714,6 @@ model BillingCharge {
 }
 
 model FiscalDocument {
-
   // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
   // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
   amountCents Int?
@@ -763,7 +759,6 @@ model FiscalDocument {
 }
 
 model Payment {
-
   // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
   // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
   amountCents Int?
@@ -897,7 +892,6 @@ model FinancialCategory {
 }
 
 model FinancialTransaction {
-
   // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
   // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
   amountCents Int?
@@ -982,8 +976,12 @@ model FinancialTransaction {
   paymentConfirmedAt DateTime?
 
   // Controle de avisos automáticos.
-  lastNotificationAt DateTime?
-  notificationCount  Int       @default(0)
+  // Permite suprimir e-mail por lançamento, especialmente em
+  // recadastros históricos, sem desativar a obrigação financeira
+  // nem a geração da cobrança bancária.
+  emailNotificationEnabled Boolean   @default(true)
+  lastNotificationAt       DateTime?
+  notificationCount        Int       @default(0)
 
   // Último webhook válido recebido.
   webhookLastReceivedAt DateTime?
@@ -994,7 +992,6 @@ model FinancialTransaction {
 }
 
 model EmployeeSalary {
-
   // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
   // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
   amountCents Int?
@@ -1020,7 +1017,6 @@ model EmployeeSalary {
 }
 
 model FixedCost {
-
   // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
   // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
   amountCents Int?
@@ -1085,7 +1081,6 @@ model ManagementCashSetting {
   updatedAt DateTime @updatedAt
 }
 
-
 model FinanceAutoChargeSettings {
   id Int @id @default(1)
 
@@ -1102,9 +1097,9 @@ model FinanceAutoChargeSettings {
   sendDueDateNotice Boolean @default(true)
 
   // Avisos após vencimento.
-  overdueNoticeDaysAfterDue      Int @default(1)
-  overdueNoticeRepeatEveryDays   Int @default(3)
-  overdueNoticeMaxCount          Int @default(3)
+  overdueNoticeDaysAfterDue    Int @default(1)
+  overdueNoticeRepeatEveryDays Int @default(3)
+  overdueNoticeMaxCount        Int @default(3)
 
   // Canais.
   sendEmail    Boolean @default(true)
@@ -1121,7 +1116,6 @@ model FinanceAutoChargeSettings {
 }
 
 model ProLaboreAdvance {
-
   // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
   // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
   amountCents Int?
@@ -1143,7 +1137,6 @@ model ProLaboreAdvance {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
-
 
 model ContractSignature {
   id Int @id @default(autoincrement())
@@ -1167,7 +1160,7 @@ model ContractSignature {
 
   acceptedTermsText String?
   acceptedAt        DateTime?
-  signedAt          DateTime @default(now())
+  signedAt          DateTime  @default(now())
 
   documentHash  String
   signatureHash String @unique
@@ -1212,11 +1205,10 @@ model ContractSignatureOtp {
 }
 
 model Proposal {
-
   // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
   // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
-  totalAmountCents Int?
-  entryAmountCents Int?
+  totalAmountCents       Int?
+  entryAmountCents       Int?
   installmentAmountCents Int?
 
   id             Int    @id @default(autoincrement())
@@ -1297,10 +1289,9 @@ enum ProposalPaymentScheduleType {
 }
 
 model ProposalItem {
-
   // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
   // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
-  unitAmountCents Int?
+  unitAmountCents  Int?
   totalAmountCents Int?
 
   id Int @id @default(autoincrement())
