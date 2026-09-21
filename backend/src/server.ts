@@ -22215,6 +22215,456 @@ doc
 }
 
 app.post(
+  "/billing-charges/:id/reconcile-bb",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  async (req: AuthRequest, res) => {
+    try {
+      const id = Number(req.params.id);
+
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({
+          code: "INVALID_BILLING_CHARGE_ID",
+          message: "ID da cobrança inválido.",
+        });
+      }
+
+      const charge = await prisma.billingCharge.findUnique({
+        where: { id },
+        include: {
+          financialTransaction: true,
+        },
+      });
+
+      if (!charge) {
+        return res.status(404).json({
+          code: "BILLING_CHARGE_NOT_FOUND",
+          message: "Cobrança não encontrada.",
+        });
+      }
+
+      /*
+       * Este endpoint pertence exclusivamente ao Financeiro V2.
+       *
+       * O fluxo Payment originado no Protocolo/Contrato continua
+       * utilizando /payments/:id/bb-pix-status e não passa por aqui.
+       */
+      if (charge.provider !== "BANCO_DO_BRASIL") {
+        return res.status(409).json({
+          code: "BB_RECONCILIATION_PROVIDER_REQUIRED",
+          message:
+            "Esta cobrança não pertence ao fluxo de cobrança do Banco do Brasil.",
+        });
+      }
+
+      if (!charge.financialTransactionId || !charge.financialTransaction) {
+        return res.status(409).json({
+          code: "FINANCIAL_TRANSACTION_LINK_REQUIRED",
+          message:
+            "Esta cobrança não está vinculada a um lançamento do Financeiro V2.",
+        });
+      }
+
+      if (!charge.txid) {
+        return res.status(409).json({
+          code: "BB_TXID_REQUIRED",
+          message:
+            "Esta cobrança ainda não possui TXID do Banco do Brasil.",
+        });
+      }
+
+      /*
+       * Idempotência:
+       * se os dois lados já estiverem consolidados, uma nova consulta
+       * não gera segunda baixa, segunda receita ou novo lançamento.
+       */
+      if (
+        charge.status === "PAGA" &&
+        charge.financialTransaction.status === "PAGO"
+      ) {
+        return res.json({
+          reconciled: true,
+          alreadyReconciled: true,
+          bbStatus: "CONCLUIDA",
+          billingCharge: charge,
+          financialTransaction: charge.financialTransaction,
+        });
+      }
+
+      if (
+        charge.status === "CANCELADA" ||
+        charge.financialTransaction.status === "CANCELADO"
+      ) {
+        return res.status(409).json({
+          code: "CANCELLED_OBLIGATION_CANNOT_BE_RECONCILED",
+          message:
+            "Cobranças ou lançamentos cancelados não podem ser conciliados.",
+        });
+      }
+
+      if (
+        !["EMITIDA", "ENVIADA", "VENCIDA"].includes(charge.status)
+      ) {
+        return res.status(409).json({
+          code: "BILLING_CHARGE_NOT_RECONCILABLE",
+          message:
+            `A cobrança está com status ${charge.status} e não pode ser conciliada neste momento.`,
+        });
+      }
+
+      if (charge.financialTransaction.status !== "PENDENTE") {
+        return res.status(409).json({
+          code: "FINANCIAL_TRANSACTION_STATUS_CONFLICT",
+          message:
+            `O lançamento financeiro está com status ${charge.financialTransaction.status}.`,
+        });
+      }
+
+      if (
+        charge.amountCents == null ||
+        !Number.isInteger(charge.amountCents) ||
+        charge.amountCents <= 0
+      ) {
+        return res.status(409).json({
+          code: "CANONICAL_CHARGE_AMOUNT_REQUIRED",
+          message:
+            "A cobrança não possui valor canônico válido em centavos.",
+        });
+      }
+
+      if (
+        charge.financialTransaction.amountCents == null ||
+        charge.financialTransaction.amountCents !== charge.amountCents
+      ) {
+        return res.status(409).json({
+          code: "FINANCIAL_CHARGE_AMOUNT_MISMATCH",
+          message:
+            "O valor da cobrança não corresponde ao valor canônico do lançamento financeiro.",
+        });
+      }
+
+      /*
+       * Única fonte autorizada para confirmar uma cobrança BB:
+       * consulta do próprio TXID junto ao Banco do Brasil.
+       */
+      const bbResult =
+        await getBbPixDueCharge(
+          charge.txid
+        );
+
+      const bbStatus =
+        String(
+          bbResult?.status ||
+          ""
+        ).toUpperCase();
+
+      /*
+       * ATIVA, REMOVIDA_PELO_USUARIO_RECEBEDOR etc.:
+       * nenhuma baixa financeira é realizada.
+       */
+      if (bbStatus !== "CONCLUIDA") {
+        return res.json({
+          reconciled: false,
+          alreadyReconciled: false,
+          bbStatus,
+          message:
+            bbStatus
+              ? `O Banco do Brasil retornou a cobrança como ${bbStatus}. Nenhum pagamento foi baixado.`
+              : "O Banco do Brasil ainda não confirmou o pagamento. Nenhum pagamento foi baixado.",
+        });
+      }
+
+      /*
+       * O padrão Pix CobV pode devolver o recebimento em pix[0].
+       * Quando horario estiver disponível, preservamos o instante
+       * informado pelo banco. Caso contrário, usamos o instante da
+       * confirmação desta consulta.
+       */
+      const firstPix =
+        Array.isArray(bbResult?.pix) &&
+        bbResult.pix.length > 0
+          ? bbResult.pix[0]
+          : null;
+
+      const bankPaidAt =
+        firstPix?.horario
+          ? new Date(firstPix.horario)
+          : null;
+
+      const paidAt =
+        bankPaidAt &&
+        !Number.isNaN(bankPaidAt.getTime())
+          ? bankPaidAt
+          : new Date();
+
+      /*
+       * Quando o BB informar o valor efetivamente recebido no Pix,
+       * validamos contra a obrigação canônica antes de realizar a baixa.
+       *
+       * O campo valor do Pix é retornado em reais.
+       */
+      const bankPaidAmountRaw =
+        firstPix?.valor != null
+          ? String(firstPix.valor)
+              .trim()
+              .replace(",", ".")
+          : null;
+
+      const bankPaidAmountNumber =
+        bankPaidAmountRaw
+          ? Number(bankPaidAmountRaw)
+          : null;
+
+      const bankPaidAmountCents =
+        bankPaidAmountNumber != null &&
+        Number.isFinite(bankPaidAmountNumber)
+          ? Math.round(
+              bankPaidAmountNumber * 100
+            )
+          : null;
+
+      if (
+        bankPaidAmountCents != null &&
+        bankPaidAmountCents !==
+          charge.amountCents
+      ) {
+        return res.status(409).json({
+          code: "BB_PAID_AMOUNT_MISMATCH",
+          message:
+            "O valor confirmado pelo Banco do Brasil não corresponde ao valor da obrigação financeira. Nenhuma baixa foi realizada.",
+        });
+      }
+
+      const paidAmountCents =
+        bankPaidAmountCents ??
+        charge.amountCents;
+
+      const paidAmount =
+        legacyReaisFromCents(
+          paidAmountCents,
+          "integer-reais"
+        );
+
+      const reconciled =
+        await prisma.$transaction(
+          async (tx) => {
+            /*
+             * Releitura dentro da transação.
+             * Evita dupla consolidação em chamadas concorrentes.
+             */
+            const currentCharge =
+              await tx.billingCharge.findUnique({
+                where: {
+                  id: charge.id,
+                },
+                include: {
+                  financialTransaction: true,
+                },
+              });
+
+            if (
+              !currentCharge ||
+              !currentCharge.financialTransactionId ||
+              !currentCharge.financialTransaction
+            ) {
+              throw new Error(
+                "FINANCIAL_RECONCILIATION_LINK_LOST"
+              );
+            }
+
+            if (
+              currentCharge.status === "PAGA" &&
+              currentCharge.financialTransaction.status === "PAGO"
+            ) {
+              return {
+                billingCharge:
+                  currentCharge,
+                financialTransaction:
+                  currentCharge.financialTransaction,
+                alreadyReconciled: true,
+              };
+            }
+
+            if (
+              currentCharge.status === "PAGA" ||
+              currentCharge.financialTransaction.status === "PAGO"
+            ) {
+              throw new Error(
+                "FINANCIAL_RECONCILIATION_STATE_CONFLICT"
+              );
+            }
+
+            const updatedCharge =
+              await tx.billingCharge.update({
+                where: {
+                  id: currentCharge.id,
+                },
+                data: {
+                  status: "PAGA",
+                  paidAt,
+                  paidAmount,
+                  paidAmountCents,
+                  rawResponse:
+                    safeJson(
+                      bbResult
+                    ),
+                  errorMessage:
+                    null,
+                },
+              });
+
+            const updatedTransaction =
+              await tx.financialTransaction.update({
+                where: {
+                  id:
+                    currentCharge.financialTransactionId,
+                },
+                data: {
+                  status: "PAGO",
+                  paidAt,
+                  paymentConfirmedAt:
+                    paidAt,
+                  chargeStatus:
+                    "CONCLUIDA",
+                },
+              });
+
+            await tx.auditLog.create({
+              data: {
+                userId:
+                  req.user?.id ||
+                  null,
+
+                userName:
+                  req.user?.name ||
+                  null,
+
+                userEmail:
+                  req.user?.email ||
+                  null,
+
+                userRole:
+                  req.user?.role ||
+                  null,
+
+                action:
+                  "RECONCILE_BB_FINANCIAL_PAYMENT",
+
+                entity:
+                  "FinancialTransaction",
+
+                entityId:
+                  String(
+                    updatedTransaction.id
+                  ),
+
+                description:
+                  `Pagamento do lançamento financeiro ${updatedTransaction.id} confirmado pela conciliação com o Banco do Brasil.`,
+
+                ipAddress:
+                  req.ip,
+
+                metadata:
+                  JSON.stringify({
+                    billingChargeId:
+                      updatedCharge.id,
+
+                    financialTransactionId:
+                      updatedTransaction.id,
+
+                    transactionType:
+                      updatedTransaction.type,
+
+                    bbStatus,
+
+                    amountCents:
+                      paidAmountCents,
+
+                    paidAt:
+                      paidAt.toISOString(),
+
+                    bankPaymentTimestampUsed:
+                      Boolean(
+                        bankPaidAt &&
+                        !Number.isNaN(
+                          bankPaidAt.getTime()
+                        )
+                      ),
+                  }),
+              },
+            });
+
+            return {
+              billingCharge:
+                updatedCharge,
+
+              financialTransaction:
+                updatedTransaction,
+
+              alreadyReconciled:
+                false,
+            };
+          }
+        );
+
+      return res.json({
+        reconciled: true,
+        alreadyReconciled:
+          reconciled.alreadyReconciled,
+        bbStatus,
+        billingCharge:
+          reconciled.billingCharge,
+        financialTransaction:
+          reconciled.financialTransaction,
+      });
+    } catch (error: any) {
+      if (
+        error?.message ===
+        "FINANCIAL_RECONCILIATION_STATE_CONFLICT"
+      ) {
+        return res.status(409).json({
+          code: "FINANCIAL_RECONCILIATION_STATE_CONFLICT",
+          message:
+            "A cobrança e o lançamento financeiro apresentam estados divergentes. Nenhuma baixa foi realizada.",
+        });
+      }
+
+      if (
+        error?.message ===
+        "FINANCIAL_RECONCILIATION_LINK_LOST"
+      ) {
+        return res.status(409).json({
+          code: "FINANCIAL_RECONCILIATION_LINK_LOST",
+          message:
+            "O vínculo entre a cobrança e o lançamento financeiro não está disponível.",
+        });
+      }
+
+      console.error(
+        "Erro ao conciliar cobrança BB do Financeiro V2:",
+        {
+          message:
+            error?.message,
+          status:
+            error?.response?.status,
+          data:
+            error?.response?.data,
+        }
+      );
+
+      return res.status(502).json({
+        code: "BB_FINANCIAL_RECONCILIATION_FAILED",
+        message:
+          error?.response?.data?.detail ||
+          error?.response?.data?.message ||
+          error?.message ||
+          "Não foi possível consultar ou conciliar a cobrança no Banco do Brasil.",
+      });
+    }
+  }
+);
+
+app.post(
   "/billing-charges/:id/mark-paid",
   authMiddleware,
   requireRoles(["GERENTE", "PROGRAMADOR"]),
@@ -22255,6 +22705,19 @@ app.post(
       if (charge.status === "PAGA") {
         return res.status(400).json({
           message: "Esta cobrança já está marcada como paga.",
+        });
+      }
+
+      /*
+       * Cobranças emitidas pelo Banco do Brasil não podem receber
+       * baixa administrativa. A confirmação deve vir da consulta/
+       * conciliação bancária pelo TXID.
+       */
+      if (charge.provider === "BANCO_DO_BRASIL") {
+        return res.status(409).json({
+          code: "BB_PAYMENT_REQUIRES_BANK_RECONCILIATION",
+          message:
+            "Cobranças do Banco do Brasil devem ser confirmadas pela conciliação bancária.",
         });
       }
 

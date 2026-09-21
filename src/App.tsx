@@ -342,9 +342,23 @@ function PublicBillingChargePage() {
             <h2>Orientações</h2>
 
             <p>
-              Após a confirmação do pagamento, a AMAZONIKA libera a mobilização
-              da equipe técnica e inicia a contagem do prazo previsto no
-              contrato.
+              {charge.chargeType === "PARCELA" ? (
+                <>
+                  Após a confirmação do pagamento, a situação financeira desta
+                  parcela será atualizada no sistema.
+                </>
+              ) : charge.chargeType === "ENTRADA" ? (
+                <>
+                  Após a confirmação do pagamento, a AMAZONIKA libera a
+                  mobilização da equipe técnica e inicia a contagem do prazo
+                  previsto no contrato.
+                </>
+              ) : (
+                <>
+                  Após a confirmação do pagamento, a situação financeira da
+                  cobrança será atualizada no sistema.
+                </>
+              )}
             </p>
 
             <p>
@@ -7076,6 +7090,54 @@ const confirmed = window.confirm(
     }
   }
 
+  async function handleReconcileBbCharge(
+    charge: BackendBillingCharge
+  ) {
+    try {
+      setSaving(true);
+      setError("");
+      setSuccess("");
+
+      const result =
+        await api.reconcileBbBillingCharge(
+          charge.id
+        ) as {
+          reconciled?: boolean;
+          alreadyReconciled?: boolean;
+          bbStatus?: string;
+          message?: string;
+        };
+
+      if (result.reconciled) {
+        setSuccess(
+          result.alreadyReconciled
+            ? "Pagamento já estava conciliado com o Banco do Brasil."
+            : "Pagamento confirmado pelo Banco do Brasil e conciliado com o Financeiro."
+        );
+      } else {
+        setSuccess(
+          result.message ||
+          `Pagamento ainda não confirmado pelo Banco do Brasil${
+            result.bbStatus
+              ? ` — status ${result.bbStatus}`
+              : ""
+          }.`
+        );
+      }
+
+      await loadData();
+      await onReload?.();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao consultar o pagamento no Banco do Brasil."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function handleMarkPaid(charge: BackendBillingCharge) {
     if (charge.amountCents == null) {
       setSuccess("");
@@ -7977,16 +8039,33 @@ const confirmed = window.confirm(
     Reemitir Pix
   </button>
 
-  {(charge.status === "EMITIDA" || charge.status === "ENVIADA") && (
-    <button
-      className="mini-button"
-      type="button"
-      disabled={saving}
-      onClick={() => handleMarkPaid(charge)}
-    >
-      Marcar como pago
-    </button>
-  )}
+  {(charge.status === "EMITIDA" ||
+    charge.status === "ENVIADA" ||
+    charge.status === "VENCIDA") &&
+    charge.provider === "BANCO_DO_BRASIL" && (
+      <button
+        className="mini-button"
+        type="button"
+        disabled={saving}
+        onClick={() =>
+          handleReconcileBbCharge(charge)
+        }
+      >
+        Consultar pagamento no BB
+      </button>
+    )}
+
+  {(charge.status === "EMITIDA" || charge.status === "ENVIADA") &&
+    charge.provider !== "BANCO_DO_BRASIL" && (
+      <button
+        className="mini-button"
+        type="button"
+        disabled={saving}
+        onClick={() => handleMarkPaid(charge)}
+      >
+        Marcar como pago
+      </button>
+    )}
 </div>
   </div>
 )}
@@ -13700,6 +13779,69 @@ async function handleDeleteSalary(id: number) {
                                     Ver cobrança
                                   </button>
                                 )}
+
+                                {obligation.status === "PENDENTE" &&
+                                  obligation.billingCharge?.id &&
+                                  obligation.paymentProvider ===
+                                    "BANCO_DO_BRASIL" &&
+                                  ["EMITIDA", "ENVIADA", "VENCIDA"].includes(
+                                    String(
+                                      obligation.billingCharge.status || ""
+                                    )
+                                  ) && (
+                                    <button
+                                      type="button"
+                                      className="secondary-action"
+                                      disabled={processingBankChargeInProgress}
+                                      onClick={async () => {
+                                        if (processingBankChargeInProgress) {
+                                          return;
+                                        }
+
+                                        try {
+                                          clearMessages();
+                                          setProcessingBankChargeInProgress(true);
+
+                                          const result =
+                                            (await api.reconcileBbBillingCharge(
+                                              obligation.billingCharge!.id
+                                            )) as {
+                                              reconciled?: boolean;
+                                              alreadyReconciled?: boolean;
+                                              bbStatus?: string;
+                                              message?: string;
+                                            };
+
+                                          if (result.reconciled) {
+                                            setSuccess(
+                                              result.alreadyReconciled
+                                                ? "Pagamento já estava conciliado com o Banco do Brasil."
+                                                : "Pagamento confirmado pelo Banco do Brasil e conciliado com o Financeiro."
+                                            );
+                                          } else {
+                                            setSuccess(
+                                              result.message ||
+                                                `Pagamento ainda não confirmado pelo Banco do Brasil${
+                                                  result.bbStatus
+                                                    ? ` — status ${result.bbStatus}`
+                                                    : ""
+                                                }.`
+                                            );
+                                          }
+                                        } catch (error) {
+                                          setError(
+                                            error instanceof Error
+                                              ? error.message
+                                              : "Não foi possível consultar o pagamento no Banco do Brasil."
+                                          );
+                                        } finally {
+                                          setProcessingBankChargeInProgress(false);
+                                        }
+                                      }}
+                                    >
+                                      Consultar pagamento no BB
+                                    </button>
+                                  )}
 
                                 {obligation.status === "PENDENTE" && (
                                   <button

@@ -1664,6 +1664,12 @@ sendBillingCharge(id: number) {
   });
 },
 
+reconcileBbBillingCharge(id: number) {
+  return request(`/billing-charges/${id}/reconcile-bb`, {
+    method: "POST",
+  });
+},
+
 markBillingChargePaid(
   id: number,
   data?: {
