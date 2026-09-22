@@ -161,6 +161,10 @@ model CatalogService {
 
   categoryId Int
 
+  // Modelo contratual sugerido automaticamente para este serviço.
+  // Pode ser substituído manualmente antes da criação da minuta.
+  defaultContractTemplateId Int?
+
   code    String  @unique
   name    String
   acronym String?
@@ -190,6 +194,8 @@ model CatalogService {
   updatedAt DateTime @updatedAt
 
   category ServiceCategory @relation(fields: [categoryId], references: [id])
+
+  defaultContractTemplate ContractTemplate? @relation(fields: [defaultContractTemplateId], references: [id], onDelete: SetNull)
 
   pricingTiers            CatalogServicePricingTier[]
   packageItems            ServicePackageItem[]
@@ -481,7 +487,14 @@ model Contract {
   contractNumber String @unique
   publicToken    String @unique
 
-  templateType       String?
+  // Campo legado preservado durante a transição para
+  // a biblioteca versionada de modelos.
+  templateType String?
+
+  // Versão exata do modelo utilizada na origem deste contrato.
+  // Null mantém compatibilidade com contratos anteriores.
+  templateVersionId Int?
+
   status             ContractStatus      @default(GERADO)
   partnerCommissions PartnerCommission[]
 
@@ -521,6 +534,10 @@ model Contract {
   proposal  Proposal? @relation(fields: [proposalId], references: [id])
   createdBy User?     @relation("ContractCreatedBy", fields: [createdById], references: [id])
 
+  templateVersion ContractTemplateVersion? @relation(fields: [templateVersionId], references: [id], onDelete: SetNull)
+
+  revisions ContractRevision[]
+
   payments        Payment[]
   billingCharges  BillingCharge[]
   fiscalDocuments FiscalDocument[]
@@ -534,6 +551,227 @@ model Contract {
 
   signatures    ContractSignature[]
   signatureOtps ContractSignatureOtp[]
+}
+
+// =========================================================
+// BIBLIOTECA E VERSIONAMENTO DE CONTRATOS
+// =========================================================
+
+enum ContractTemplateVersionStatus {
+  RASCUNHO
+  ATIVA
+  SUPERADA
+  INATIVA
+}
+
+enum ContractRevisionStatus {
+  RASCUNHO
+  EM_REVISAO
+  APROVADA
+  SUPERADA
+  CANCELADA
+}
+
+enum ContractClauseSource {
+  TEMPLATE
+  BIBLIOTECA
+  PERSONALIZADA
+  SISTEMA
+}
+
+model ContractTemplate {
+  id Int @id @default(autoincrement())
+
+  // Identificador estável utilizado pelo sistema.
+  // Exemplos: PMFS, GEO, CONSULTORIA_AMBIENTAL.
+  code String @unique
+
+  name        String
+  description String?
+
+  active Boolean @default(true)
+
+  // IDs operacionais preservados para auditoria.
+  createdById Int?
+  updatedById Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  versions ContractTemplateVersion[]
+
+  // Serviços que utilizam este modelo como sugestão padrão.
+  defaultForServices CatalogService[]
+
+  @@index([name])
+  @@index([active])
+}
+
+model ContractTemplateVersion {
+  id Int @id @default(autoincrement())
+
+  templateId Int
+
+  // 1, 2, 3...
+  versionNumber Int
+
+  status ContractTemplateVersionStatus @default(RASCUNHO)
+
+  // Ex.: "Modelo inicial outubro/2026".
+  label String?
+
+  notes String?
+
+  publishedAt DateTime?
+
+  createdById  Int?
+  approvedById Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  template ContractTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  clauses ContractTemplateClause[]
+
+  // Contratos que nasceram exatamente desta versão.
+  contracts Contract[]
+
+  @@unique([templateId, versionNumber])
+  @@index([templateId])
+  @@index([status])
+}
+
+model ContractTemplateClause {
+  id Int @id @default(autoincrement())
+
+  templateVersionId Int
+
+  // Identificador funcional opcional.
+  // Ex.: OBJETO, PAGAMENTO, PRAZO.
+  clauseKey String?
+
+  title String
+  body  String
+
+  sortOrder Int @default(0)
+
+  required  Boolean @default(false)
+  editable  Boolean @default(true)
+  deletable Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  templateVersion ContractTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Cascade)
+
+  contractClauses ContractClause[]
+
+  @@index([templateVersionId])
+  @@index([sortOrder])
+  @@index([clauseKey])
+}
+
+model ClauseLibrary {
+  id Int @id @default(autoincrement())
+
+  code String @unique
+
+  category String?
+  title    String
+  body     String
+
+  active Boolean @default(true)
+
+  createdById Int?
+  updatedById Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contractClauses ContractClause[]
+
+  @@index([category])
+  @@index([active])
+}
+
+model ContractRevision {
+  id Int @id @default(autoincrement())
+
+  contractId Int
+
+  // Número sequencial da revisão dentro do contrato.
+  revisionNumber Int
+
+  status ContractRevisionStatus @default(RASCUNHO)
+
+  // Snapshot do título da versão.
+  title String?
+
+  // Motivo da alteração.
+  // Ex.: "Alteração solicitada pelo contratante".
+  changeReason String?
+
+  // Snapshot integral opcional para renderização/auditoria.
+  htmlSnapshot String?
+
+  // Será preenchido quando a revisão for aprovada/congelada.
+  documentHash String?
+
+  createdById  Int?
+  approvedById Int?
+
+  approvedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  clauses ContractClause[]
+
+  @@unique([contractId, revisionNumber])
+  @@index([contractId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model ContractClause {
+  id Int @id @default(autoincrement())
+
+  revisionId Int
+
+  // Rastreamento da origem da cláusula.
+  // A cópia permanece editável e independente.
+  templateClauseId Int?
+  libraryClauseId  Int?
+
+  clauseKey String?
+
+  title String
+  body  String
+
+  sortOrder Int @default(0)
+
+  source ContractClauseSource @default(TEMPLATE)
+
+  // Indica que a cláusula veio marcada como obrigatória.
+  required Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  revision ContractRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+
+  templateClause ContractTemplateClause? @relation(fields: [templateClauseId], references: [id], onDelete: SetNull)
+
+  libraryClause ClauseLibrary? @relation(fields: [libraryClauseId], references: [id], onDelete: SetNull)
+
+  @@index([revisionId])
+  @@index([templateClauseId])
+  @@index([libraryClauseId])
+  @@index([sortOrder])
+  @@index([clauseKey])
 }
 
 model ContractPaymentSchedule {
