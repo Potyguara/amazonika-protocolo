@@ -50,6 +50,7 @@ import { registerFieldScheduleRoutes } from "./modules/field-schedule/field-sche
 import { registerPartnerReferralRoutes } from "./modules/partners/partner-referrals.routes";
 import { registerPartnerCommissionRoutes } from "./modules/partners/partner-commissions.routes";
 import { releasePartnerCommissionForEntryPayment } from "./modules/partners/partner-commission.service";
+import { createContractTemplateRouter } from "./routes/contractTemplates";
 
 
 import {
@@ -94,6 +95,26 @@ app.use(
 );
 
 app.use(express.json({ limit: "10mb" }));
+
+app.use(
+  (
+    error: any,
+    _req: Request,
+    res: Response,
+    next: NextFunction
+  ) => {
+    if (
+      error instanceof SyntaxError &&
+      "body" in error
+    ) {
+      return res.status(400).json({
+        message: "JSON inválido na requisição.",
+      });
+    }
+
+    return next(error);
+  }
+);
 app.use("/email", express.static(path.join(process.cwd(), "public", "email")));
 
 const uploadsDir = path.resolve(process.cwd(), "uploads", "documents");
@@ -23458,6 +23479,18 @@ registerCatalogRoutes({
   authMiddleware,
   requireRoles,
 });
+
+// ------------------------------------------------------
+// BIBLIOTECA DE MODELOS CONTRATUAIS
+// ------------------------------------------------------
+
+app.use(
+  createContractTemplateRouter({
+    prisma,
+    authMiddleware,
+    requireRoles,
+  })
+);
 
 
 registerStandaloneProposalRoutes({
