@@ -425,6 +425,20 @@ export function registerCatalogRoutes({
             include: {
               category: true,
 
+              defaultContractTemplate: {
+                include: {
+                  versions: {
+                    where: {
+                      status: "ATIVA",
+                    },
+                    orderBy: {
+                      versionNumber: "desc",
+                    },
+                    take: 1,
+                  },
+                },
+              },
+
               pricingTiers: {
                 orderBy: {
                   sortOrder: "asc",
@@ -478,6 +492,20 @@ export function registerCatalogRoutes({
 
             include: {
               category: true,
+
+              defaultContractTemplate: {
+                include: {
+                  versions: {
+                    where: {
+                      status: "ATIVA",
+                    },
+                    orderBy: {
+                      versionNumber: "desc",
+                    },
+                    take: 1,
+                  },
+                },
+              },
 
               pricingTiers: {
                 orderBy: {
@@ -890,6 +918,265 @@ export function registerCatalogRoutes({
 
         return res.status(500).json({
           message: "Erro ao atualizar serviço.",
+        });
+      }
+    }
+  );
+
+  // ======================================================
+  // MODELO CONTRATUAL PADRÃO DO SERVIÇO
+  // ======================================================
+
+  app.put(
+    "/catalog/services/:id/default-contract-template",
+    authMiddleware,
+    requireRoles(ADMIN_ROLES),
+    async (req: any, res) => {
+      try {
+        const serviceId = Number(req.params.id);
+
+        if (
+          !Number.isInteger(serviceId) ||
+          serviceId <= 0
+        ) {
+          return res.status(400).json({
+            message: "ID do serviço inválido.",
+          });
+        }
+
+        const service =
+          await prisma.catalogService.findUnique({
+            where: {
+              id: serviceId,
+            },
+            include: {
+              defaultContractTemplate: true,
+            },
+          });
+
+        if (!service) {
+          return res.status(404).json({
+            message: "Serviço não encontrado.",
+          });
+        }
+
+        const rawTemplateId = req.body?.templateId;
+
+        // --------------------------------------------------
+        // DESVINCULAR
+        // --------------------------------------------------
+
+        if (
+          rawTemplateId === null ||
+          rawTemplateId === ""
+        ) {
+          const updated =
+            await prisma.catalogService.update({
+              where: {
+                id: serviceId,
+              },
+              data: {
+                defaultContractTemplateId: null,
+              },
+              include: {
+                category: true,
+
+                defaultContractTemplate: {
+                  include: {
+                    versions: {
+                      where: {
+                        status: "ATIVA",
+                      },
+                      orderBy: {
+                        versionNumber: "desc",
+                      },
+                      take: 1,
+                    },
+                  },
+                },
+
+                pricingTiers: {
+                  orderBy: {
+                    sortOrder: "asc",
+                  },
+                },
+              },
+            });
+
+          await prisma.auditLog.create({
+            data: {
+              userId: req.user?.id || null,
+              userName: req.user?.name || null,
+              userEmail: req.user?.email || null,
+              userRole: req.user?.role || null,
+
+              action:
+                "UNLINK_DEFAULT_CONTRACT_TEMPLATE",
+
+              entity: "CatalogService",
+              entityId: String(serviceId),
+
+              description:
+                `Modelo contratual padrão removido do serviço ${service.code}.`,
+
+              ipAddress: req.ip,
+
+              metadata: JSON.stringify({
+                serviceId,
+                serviceCode: service.code,
+                previousTemplateId:
+                  service.defaultContractTemplateId,
+                nextTemplateId: null,
+              }),
+            },
+          });
+
+          return res.json(updated);
+        }
+
+        // --------------------------------------------------
+        // VINCULAR
+        // --------------------------------------------------
+
+        const templateId = Number(rawTemplateId);
+
+        if (
+          !Number.isInteger(templateId) ||
+          templateId <= 0
+        ) {
+          return res.status(400).json({
+            message:
+              "ID do modelo contratual inválido.",
+          });
+        }
+
+        const template =
+          await prisma.contractTemplate.findUnique({
+            where: {
+              id: templateId,
+            },
+            include: {
+              versions: {
+                where: {
+                  status: "ATIVA",
+                },
+                orderBy: {
+                  versionNumber: "desc",
+                },
+                take: 1,
+              },
+            },
+          });
+
+        if (!template) {
+          return res.status(404).json({
+            message:
+              "Modelo contratual não encontrado.",
+          });
+        }
+
+        if (!template.active) {
+          return res.status(409).json({
+            code:
+              "CONTRACT_TEMPLATE_INACTIVE",
+
+            message:
+              "Não é possível vincular um modelo contratual inativo.",
+          });
+        }
+
+        if (template.versions.length === 0) {
+          return res.status(409).json({
+            code:
+              "CONTRACT_TEMPLATE_NO_ACTIVE_VERSION",
+
+            message:
+              "O modelo contratual precisa possuir uma versão ATIVA antes de ser definido como padrão de um serviço.",
+          });
+        }
+
+        const updated =
+          await prisma.catalogService.update({
+            where: {
+              id: serviceId,
+            },
+            data: {
+              defaultContractTemplateId:
+                template.id,
+            },
+            include: {
+              category: true,
+
+              defaultContractTemplate: {
+                include: {
+                  versions: {
+                    where: {
+                      status: "ATIVA",
+                    },
+                    orderBy: {
+                      versionNumber: "desc",
+                    },
+                    take: 1,
+                  },
+                },
+              },
+
+              pricingTiers: {
+                orderBy: {
+                  sortOrder: "asc",
+                },
+              },
+            },
+          });
+
+        await prisma.auditLog.create({
+          data: {
+            userId: req.user?.id || null,
+            userName: req.user?.name || null,
+            userEmail: req.user?.email || null,
+            userRole: req.user?.role || null,
+
+            action:
+              "LINK_DEFAULT_CONTRACT_TEMPLATE",
+
+            entity: "CatalogService",
+            entityId: String(serviceId),
+
+            description:
+              `Modelo contratual ${template.code} definido como padrão do serviço ${service.code}.`,
+
+            ipAddress: req.ip,
+
+            metadata: JSON.stringify({
+              serviceId,
+              serviceCode: service.code,
+
+              previousTemplateId:
+                service.defaultContractTemplateId,
+
+              nextTemplateId:
+                template.id,
+
+              activeTemplateVersionId:
+                template.versions[0]?.id || null,
+
+              activeTemplateVersionNumber:
+                template.versions[0]
+                  ?.versionNumber || null,
+            }),
+          },
+        });
+
+        return res.json(updated);
+      } catch (error) {
+        console.error(
+          "Erro ao definir modelo contratual padrão do serviço:",
+          error
+        );
+
+        return res.status(500).json({
+          message:
+            "Erro ao definir modelo contratual padrão do serviço.",
         });
       }
     }
