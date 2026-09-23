@@ -56,6 +56,7 @@ import { registerPartnerCommissionRoutes } from "./modules/partners/partner-comm
 import { releasePartnerCommissionForEntryPayment } from "./modules/partners/partner-commission.service";
 import { createContractTemplateRouter } from "./routes/contractTemplates";
 import { createClauseLibraryRouter } from "./routes/clauseLibrary";
+import { createContractDraftRouter } from "./routes/contractDrafts";
 
 
 import {
@@ -23728,6 +23729,14 @@ app.use(
 
 app.use(
   createClauseLibraryRouter({
+    prisma,
+    authMiddleware,
+    requireRoles,
+  })
+);
+
+app.use(
+  createContractDraftRouter({
     prisma,
     authMiddleware,
     requireRoles,
