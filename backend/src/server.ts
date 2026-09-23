@@ -8,6 +8,10 @@ import {
   sumCents,
 } from "./lib/money";
 import { copyPaymentSchedule } from "./lib/payment-schedule";
+import {
+  collectUnresolvedContractPlaceholders,
+  renderContractTemplateClauses,
+} from "./lib/contract-template-renderer";
 import { allocateProLabore } from "./lib/pro-labore-money";
 import {
   AmbiguousMoneyError,
@@ -3322,7 +3326,31 @@ app.post(
           client: true,
           protocol: {
             include: {
-              serviceType: true,
+              serviceType: {
+                include: {
+                  defaultContractTemplate: {
+                    include: {
+                      versions: {
+                        where: {
+                          status: "ATIVA",
+                        },
+                        orderBy: {
+                          versionNumber: "desc",
+                        },
+                        take: 1,
+                        include: {
+                          clauses: {
+                            orderBy: [
+                              { sortOrder: "asc" },
+                              { id: "asc" },
+                            ],
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
             },
           },
           items: {
@@ -3396,6 +3424,42 @@ app.post(
       const company = await getCompanySettings();
 
       const contractNumber = await generateContractNumber();
+
+      // ======================================================
+      // ARQUITETURA CONTRATUAL V2
+      //
+      // Serviço sem template configurado:
+      // mantém integralmente o fluxo legado.
+      //
+      // Serviço com template configurado:
+      // exige template ativo + versão ATIVA e cria snapshot
+      // estruturado da minuta no momento da geração.
+      // ======================================================
+
+      const configuredTemplate =
+        proposal.protocol.serviceType.defaultContractTemplate;
+
+      if (configuredTemplate && !configuredTemplate.active) {
+        return res.status(409).json({
+          code: "CONTRACT_TEMPLATE_INACTIVE",
+          message:
+            "O serviço possui um modelo contratual padrão inativo. Revise a configuração do catálogo antes de gerar o contrato.",
+        });
+      }
+
+      const activeTemplateVersion =
+        configuredTemplate?.versions?.[0] || null;
+
+      if (
+        configuredTemplate &&
+        !activeTemplateVersion
+      ) {
+        return res.status(409).json({
+          code: "CONTRACT_TEMPLATE_NO_ACTIVE_VERSION",
+          message:
+            "O modelo contratual padrão do serviço não possui uma versão ATIVA.",
+        });
+      }
 
       const objectText =
         req.body?.objectText ||
@@ -3471,6 +3535,107 @@ app.post(
         });
       }
 
+      const templatePlaceholderValues = {
+        CONTRATO_NUMERO: contractNumber,
+
+        PROPOSTA_NUMERO:
+          proposal.proposalNumber,
+
+        PROTOCOLO_NUMERO:
+          proposal.protocol.protocolNumber,
+
+        CONTRATADA_NOME:
+          company.companyName,
+
+        CONTRATADA_RAZAO_SOCIAL:
+          company.companyLegalName,
+
+        CONTRATADA_CNPJ:
+          company.companyCnpj,
+
+        CONTRATADA_EMAIL:
+          company.companyEmail,
+
+        CONTRATADA_TELEFONE:
+          company.companyPhone,
+
+        CONTRATADA_ENDERECO:
+          company.companyAddress,
+
+        CONTRATANTE_NOME:
+          proposal.client.name,
+
+        CONTRATANTE_CPF_CNPJ:
+          proposal.client.cpfCnpj,
+
+        CONTRATANTE_EMAIL:
+          proposal.client.email,
+
+        CONTRATANTE_TELEFONE:
+          proposal.client.phone,
+
+        CONTRATANTE_ENDERECO:
+          proposal.client.address,
+
+        CONTRATANTE_CIDADE:
+          proposal.client.city,
+
+        CONTRATANTE_UF:
+          proposal.client.state,
+
+        SERVICO_NOME:
+          proposal.protocol.serviceType.name,
+
+        VALOR_TOTAL:
+          formatCurrencyBRFromCents(
+            proposalTotalCents,
+            "Valor total do contrato"
+          ),
+
+        VALOR_ENTRADA:
+          formatCurrencyBRFromCents(
+            proposalEntryAmountCents,
+            "Entrada do contrato"
+          ),
+
+        FORMA_PAGAMENTO:
+          String(proposal.paymentMode),
+
+        PRAZO_EXECUCAO_DIAS:
+          proposal.executionDays ?? "",
+
+        DATA_CONTRATO:
+          formatDateBR(new Date()),
+      };
+
+      const renderedTemplateClauses =
+        activeTemplateVersion
+          ? renderContractTemplateClauses(
+              activeTemplateVersion.clauses,
+              templatePlaceholderValues
+            )
+          : [];
+
+      const unresolvedTemplatePlaceholders =
+        collectUnresolvedContractPlaceholders(
+          renderedTemplateClauses
+        );
+
+      if (
+        unresolvedTemplatePlaceholders.length > 0
+      ) {
+        return res.status(409).json({
+          code:
+            "CONTRACT_TEMPLATE_UNRESOLVED_PLACEHOLDERS",
+
+          message:
+            "O modelo contratual possui campos que ainda não podem ser preenchidos automaticamente.",
+
+          placeholders:
+            unresolvedTemplatePlaceholders,
+        });
+      }
+
       const htmlSnapshot = buildContractHtmlSnapshot({
         contractNumber,
         proposalNumber: proposal.proposalNumber,
@@ -3514,6 +3679,60 @@ app.post(
           templateType: "CONTRATO_PRESTACAO_SERVICOS",
           status: "GERADO",
 
+          ...(activeTemplateVersion
+            ? {
+                templateVersionId:
+                  activeTemplateVersion.id,
+
+                revisions: {
+                  create: {
+                    revisionNumber: 1,
+                    status: "RASCUNHO",
+                    title:
+                      `Minuta inicial — ${contractNumber}`,
+
+                    changeReason:
+                      "Minuta inicial gerada automaticamente a partir do modelo contratual padrão do serviço.",
+
+                    htmlSnapshot,
+
+                    createdById:
+                      req.user?.id || null,
+
+                    clauses: {
+                      create:
+                        renderedTemplateClauses.map(
+                          (clause) => ({
+                            templateClauseId:
+                              clause.templateClauseId,
+
+                            libraryClauseId: null,
+
+                            clauseKey:
+                              clause.clauseKey,
+
+                            title:
+                              clause.title,
+
+                            body:
+                              clause.body,
+
+                            sortOrder:
+                              clause.sortOrder,
+
+                            source:
+                              "TEMPLATE" as const,
+
+                            required:
+                              clause.required,
+                          })
+                        ),
+                    },
+                  },
+                },
+              }
+            : {}),
+
           ...proposalToContractMoney(
             proposalTotalCents,
             proposalEntryAmountCents
@@ -3547,6 +3766,20 @@ app.post(
             },
           },
           proposal: true,
+          revisions: {
+            orderBy: {
+              revisionNumber: "desc",
+            },
+            include: {
+              clauses: {
+                orderBy: [
+                  { sortOrder: "asc" },
+                  { id: "asc" },
+                ],
+              },
+            },
+          },
+
           paymentSchedule: {
             orderBy: [
               { dueDate: "asc" },
