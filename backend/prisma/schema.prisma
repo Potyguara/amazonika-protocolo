@@ -730,6 +730,8 @@ model ContractRevision {
 
   clauses ContractClause[]
 
+  signatures ContractSignature[]
+
   @@unique([contractId, revisionNumber])
   @@index([contractId])
   @@index([status])
@@ -1382,6 +1384,13 @@ model ContractSignature {
   contractId Int
   contract   Contract @relation(fields: [contractId], references: [id])
 
+  // Revisão contratual efetivamente assinada.
+  //
+  // Opcional para preservar compatibilidade com assinaturas
+  // legadas realizadas antes da arquitetura de revisões.
+  contractRevisionId Int?
+  contractRevision   ContractRevision? @relation(fields: [contractRevisionId], references: [id], onDelete: SetNull)
+
   // CONTRATANTE ou CONTRATADA
   signerRole String
 
@@ -1409,6 +1418,7 @@ model ContractSignature {
   updatedAt DateTime @updatedAt
 
   @@index([contractId])
+  @@index([contractRevisionId])
   @@index([signerEmail])
   @@index([signatureHash])
 }
