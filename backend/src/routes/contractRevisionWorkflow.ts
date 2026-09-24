@@ -1,7 +1,9 @@
-import { createHash } from "node:crypto";
-
 import { PrismaClient } from "@prisma/client";
 import { Router } from "express";
+
+import {
+  createContractRevisionDocumentHash,
+} from "../lib/contract-revision-hash";
 
 type Dependencies = {
   prisma: PrismaClient;
@@ -38,69 +40,6 @@ function normalizeNullableText(
   return text || null;
 }
 
-function createRevisionDocumentHash(params: {
-  contractId: number;
-  revisionNumber: number;
-  title: string | null;
-  clauses: Array<{
-    clauseKey: string | null;
-    title: string;
-    body: string;
-    sortOrder: number;
-    source: string;
-    required: boolean;
-  }>;
-}) {
-  const canonical = JSON.stringify({
-    contractId: params.contractId,
-    revisionNumber:
-      params.revisionNumber,
-
-    title:
-      params.title || null,
-
-    clauses:
-      [...params.clauses]
-        .sort((a, b) => {
-          if (
-            a.sortOrder !==
-            b.sortOrder
-          ) {
-            return (
-              a.sortOrder -
-              b.sortOrder
-            );
-          }
-
-          return a.title.localeCompare(
-            b.title
-          );
-        })
-        .map((clause) => ({
-          clauseKey:
-            clause.clauseKey || null,
-
-          title:
-            clause.title,
-
-          body:
-            clause.body,
-
-          sortOrder:
-            clause.sortOrder,
-
-          source:
-            clause.source,
-
-          required:
-            clause.required,
-        })),
-  });
-
-  return createHash("sha256")
-    .update(canonical, "utf8")
-    .digest("hex");
-}
 
 export function createContractRevisionWorkflowRouter({
   prisma,
@@ -685,7 +624,7 @@ export function createContractRevisionWorkflowRouter({
         }
 
         const documentHash =
-          createRevisionDocumentHash({
+          createContractRevisionDocumentHash({
             contractId:
               revision.contractId,
 
