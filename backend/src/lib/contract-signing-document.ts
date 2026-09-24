@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 
 import {
   buildContractSigningSnapshot,
@@ -22,7 +22,9 @@ type CompanySettingsLike = {
 };
 
 type ResolveDependencies = {
-  prisma: PrismaClient;
+  prisma:
+    | PrismaClient
+    | Prisma.TransactionClient;
 
   getCompanySettings: () =>
     Promise<CompanySettingsLike>;

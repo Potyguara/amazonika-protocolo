@@ -9,6 +9,9 @@ import {
 } from "./lib/money";
 import { copyPaymentSchedule } from "./lib/payment-schedule";
 import {
+  resolveContractSigningDocument,
+} from "./lib/contract-signing-document";
+import {
   collectUnresolvedContractPlaceholders,
   renderContractTemplateClauses,
 } from "./lib/contract-template-renderer";
@@ -4187,8 +4190,33 @@ app.post(
       const signerUserAgent =
         getContractSignatureUserAgent(req);
 
+      /*
+       * Resolve a revisão APROVADA e o snapshot canônico
+       * completo que será efetivamente assinado.
+       */
+      const signingDocument =
+        await resolveContractSigningDocument(
+          {
+            prisma,
+
+            getCompanySettings:
+              async () => company,
+          },
+
+          contract.id
+        );
+
       const documentHash =
-        createContractDocumentHash(contract);
+        signingDocument.signingDocumentHash;
+
+      const contractRevisionId =
+        signingDocument.revisionId;
+
+      const contractRevisionNumber =
+        signingDocument.revisionNumber;
+
+      const revisionDocumentHash =
+        signingDocument.revisionDocumentHash;
 
       const signatureHash =
         createContractSignatureHash({
@@ -4251,14 +4279,35 @@ app.post(
              * A assinatura deve corresponder ao conteúdo
              * contratual existente no momento da gravação.
              */
-            const currentDocumentHash =
-              createContractDocumentHash(
-                currentContract
+            const currentSigningDocument =
+              await resolveContractSigningDocument(
+                {
+                  prisma:
+                    tx,
+
+                  /*
+                   * A identidade empresarial utilizada
+                   * no início desta operação deve ser a
+                   * mesma utilizada na revalidação.
+                   */
+                  getCompanySettings:
+                    async () =>
+                      company,
+                },
+
+                currentContract.id
               );
+
+            const currentDocumentHash =
+              currentSigningDocument
+                .signingDocumentHash;
 
             if (
               currentDocumentHash !==
-              documentHash
+                documentHash ||
+              currentSigningDocument
+                .revisionId !==
+                contractRevisionId
             ) {
               throw new Error(
                 "CONTRACT_DOCUMENT_CHANGED"
@@ -4270,6 +4319,8 @@ app.post(
                 data: {
                   contractId:
                     contract.id,
+
+                  contractRevisionId,
 
                   signerRole:
                     "CONTRATADA",
@@ -4313,6 +4364,12 @@ app.post(
 
                       publicToken:
                         contract.publicToken,
+
+                      contractRevisionId,
+
+                      contractRevisionNumber,
+
+                      revisionDocumentHash,
 
                       signerRole:
                         "CONTRATADA",
@@ -4406,6 +4463,11 @@ app.post(
           signerRole:
             signature.signerRole,
 
+          contractRevisionId:
+            signature.contractRevisionId,
+
+          contractRevisionNumber,
+
           method:
             signature.method,
 
@@ -4467,8 +4529,83 @@ app.post(
         "CONTRACT_DOCUMENT_CHANGED"
       ) {
         return res.status(409).json({
+          code:
+            "CONTRACT_DOCUMENT_CHANGED",
+
           message:
             "O conteúdo do contrato foi alterado durante a assinatura. Recarregue o contrato e tente novamente.",
+        });
+      }
+
+      if (
+        error?.message ===
+        "CONTRACT_SIGNING_CONTRACT_NOT_FOUND"
+      ) {
+        return res.status(404).json({
+          code:
+            "CONTRACT_SIGNING_CONTRACT_NOT_FOUND",
+
+          message:
+            "Contrato não encontrado.",
+        });
+      }
+
+      if (
+        error?.message ===
+        "CONTRACT_APPROVED_REVISION_REQUIRED"
+      ) {
+        return res.status(409).json({
+          code:
+            "CONTRACT_APPROVED_REVISION_REQUIRED",
+
+          message:
+            "O contrato deve possuir uma revisão aprovada antes da assinatura.",
+        });
+      }
+
+      if (
+        error?.message ===
+        "CONTRACT_MULTIPLE_APPROVED_REVISIONS"
+      ) {
+        return res.status(409).json({
+          code:
+            "CONTRACT_MULTIPLE_APPROVED_REVISIONS",
+
+          message:
+            "O contrato possui mais de uma revisão aprovada e não pode ser assinado até a inconsistência ser corrigida.",
+        });
+      }
+
+      if (
+        error?.message ===
+          "CONTRACT_APPROVED_REVISION_HASH_INVALID" ||
+        error?.message ===
+          "CONTRACT_APPROVED_REVISION_EMPTY" ||
+        error?.message ===
+          "CONTRACT_APPROVED_REVISION_CONTENT_CHANGED"
+      ) {
+        return res.status(409).json({
+          code:
+            error.message,
+
+          message:
+            "A revisão aprovada não possui integridade suficiente para assinatura. Revise o documento antes de prosseguir.",
+        });
+      }
+
+      if (
+        typeof error?.message ===
+          "string" &&
+        error.message.startsWith(
+          "CONTRACT_SIGNING_INVALID_MONEY:"
+        )
+      ) {
+        return res.status(409).json({
+          code:
+            "CONTRACT_SIGNING_INVALID_MONEY",
+
+          message:
+            "O contrato possui dados financeiros inválidos ou incompletos para assinatura.",
         });
       }
 
