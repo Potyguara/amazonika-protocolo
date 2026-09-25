@@ -2007,39 +2007,70 @@ async function generateSignedContractPdf(
   }
 
   /*
-   * Ambas as partes obrigatoriamente precisam ter
-   * assinado exatamente o mesmo snapshot contratual.
+   * Resolve novamente o documento canônico vigente.
+   *
+   * O PDF final só pode ser produzido a partir da mesma
+   * revisão e do mesmo conteúdo assinados por ambas as
+   * partes.
    */
+  const company =
+    await getCompanySettings();
+
+  const signingDocument =
+    await resolveContractSigningDocument(
+      {
+        prisma,
+
+        getCompanySettings:
+          async () => company,
+      },
+
+      contract.id
+    );
+
+  if (
+    contractorSignature.contractRevisionId !==
+      signingDocument.revisionId ||
+    clientSignature.contractRevisionId !==
+      signingDocument.revisionId
+  ) {
+    throw new Error(
+      "SIGNED_PDF_REVISION_MISMATCH"
+    );
+  }
+
+  if (
+    contractorSignature.contractRevisionId !==
+      clientSignature.contractRevisionId
+  ) {
+    throw new Error(
+      "SIGNED_PDF_SIGNATURE_REVISION_MISMATCH"
+    );
+  }
+
   if (
     contractorSignature.documentHash !==
-    clientSignature.documentHash
+      clientSignature.documentHash
   ) {
     throw new Error(
       "SIGNED_PDF_DOCUMENT_HASH_MISMATCH"
     );
   }
 
-  const currentDocumentHash =
-    createContractDocumentHash(
-      contract
-    );
-
-  /*
-   * Também verificamos se o snapshot atualmente
-   * persistido continua correspondendo ao documento
-   * que foi efetivamente assinado.
-   */
   if (
-    currentDocumentHash !==
-    contractorSignature.documentHash
+    contractorSignature.documentHash !==
+      signingDocument.signingDocumentHash
   ) {
     throw new Error(
       "SIGNED_PDF_CURRENT_DOCUMENT_CHANGED"
     );
   }
 
-  const company =
-    await getCompanySettings();
+  const currentDocumentHash =
+    signingDocument.signingDocumentHash;
+
+  const signedRevision =
+    signingDocument.revision;
 
   /*
    * =====================================================
@@ -2667,6 +2698,23 @@ async function generateSignedContractPdf(
     );
 
   doc
+    .moveDown(0.08)
+    .font(
+      "Helvetica"
+    )
+    .fontSize(8.8)
+    .fillColor(
+      "#475569"
+    )
+    .text(
+      `Revisão contratual ${signedRevision.revisionNumber}`,
+      {
+        align:
+          "center",
+      }
+    );
+
+  doc
     .moveDown(0.35);
 
   /*
@@ -2720,24 +2768,37 @@ async function generateSignedContractPdf(
     );
   }
 
-  heading(
-    "2. OBJETO"
-  );
-
-  paragraph(
-    contract.objectText
-  );
+  /*
+   * =====================================================
+   * CONTEÚDO CONTRATUAL DA REVISÃO ASSINADA
+   * =====================================================
+   */
 
   heading(
-    "3. OBRIGAÇÕES DAS PARTES"
+    "2. CONTEÚDO CONTRATUAL"
   );
 
-  paragraph(
-    contract.obligationsText
-  );
+  for (
+    const clause of
+    signedRevision.clauses
+  ) {
+    heading(
+      clause.title
+    );
+
+    paragraph(
+      clause.body
+    );
+  }
+
+  /*
+   * =====================================================
+   * CONDIÇÕES FINANCEIRAS CANÔNICAS
+   * =====================================================
+   */
 
   heading(
-    "4. CONDIÇÕES COMERCIAIS"
+    "3. CONDIÇÕES FINANCEIRAS"
   );
 
   labelValue(
@@ -2770,20 +2831,8 @@ async function generateSignedContractPdf(
     )
   );
 
-  doc.moveDown(0.2);
-
-  paragraph(
-    contract.paymentText
-  );
-
-  /*
-   * =====================================================
-   * CRONOGRAMA
-   * =====================================================
-   */
-
   heading(
-    "5. CRONOGRAMA FINANCEIRO"
+    "4. CRONOGRAMA FINANCEIRO"
   );
 
   for (
@@ -2808,22 +2857,6 @@ async function generateSignedContractPdf(
       )}`
     );
   }
-
-  heading(
-    "6. PRAZO"
-  );
-
-  paragraph(
-    contract.deadlineText
-  );
-
-  heading(
-    "7. CLÁUSULAS GERAIS"
-  );
-
-  paragraph(
-    contract.legalText
-  );
 
   /*
    * =====================================================
@@ -3006,8 +3039,46 @@ async function generateSignedContractPdf(
   );
 
   paragraph(
-    "As duas assinaturas eletrônicas acima estão vinculadas ao mesmo conteúdo contratual por meio do identificador SHA-256 abaixo."
+    "As duas assinaturas eletrônicas acima estão vinculadas à mesma revisão contratual e ao mesmo conteúdo por meio dos identificadores criptográficos registrados abaixo."
   );
+
+  labelValue(
+    "Revisão contratual assinada",
+    `Revisão ${signedRevision.revisionNumber}`
+  );
+
+  doc
+    .moveDown(0.35)
+    .font(
+      "Helvetica-Bold"
+    )
+    .fontSize(9)
+    .fillColor(
+      "#111827"
+    )
+    .text(
+      "SHA-256 da revisão aprovada:"
+    );
+
+  doc
+    .moveDown(0.3)
+    .font(
+      "Courier"
+    )
+    .fontSize(7.5)
+    .fillColor(
+      "#334155"
+    )
+    .text(
+      signingDocument.revisionDocumentHash,
+      {
+        width:
+          contentWidth,
+      }
+    );
+
+  doc
+    .moveDown(0.55);
 
   doc
     .font(
