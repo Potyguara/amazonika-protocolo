@@ -841,6 +841,28 @@ type BackendContract = {
   entryAmountCents?: number | null;
   paymentMode?: string | null;
 
+
+  approvedRevision?: {
+    id: number;
+    revisionNumber: number;
+    status: string;
+    title?: string | null;
+    approvedAt?: string | null;
+    revisionDocumentHash: string;
+
+    clauses: Array<{
+      id: number;
+      clauseKey: string;
+      title: string;
+      body: string;
+      sortOrder: number;
+      source: string;
+      required: boolean;
+    }>;
+  };
+
+  signingDocumentHash?: string;
+
   title?: string | null;
   objectText?: string | null;
   obligationsText?: string | null;
@@ -1770,6 +1792,30 @@ function PublicHome() {
 function PublicContractPage() {
   const { token } = useParams();
 
+  const formatContractMoney = (
+    value: number | string | null | undefined
+  ) => {
+    const numericValue =
+      Number(value || 0);
+
+    return new Intl.NumberFormat(
+      "pt-BR",
+      {
+        style:
+          "currency",
+
+        currency:
+          "BRL",
+      }
+    ).format(
+      Number.isFinite(
+        numericValue
+      )
+        ? numericValue
+        : 0
+    );
+  };
+
   const [contract, setContract] = useState<BackendContract | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -2001,72 +2047,147 @@ function PublicContractPage() {
             </div>
 
             <div className="contract-clause">
-              <h3>2. Objeto</h3>
-              <p>{contract.objectText || "-"}</p>
+              <h3>
+                Conteúdo contratual
+                {contract.approvedRevision
+                  ? ` — Revisão ${contract.approvedRevision.revisionNumber}`
+                  : ""}
+              </h3>
+
+              {contract.approvedRevision?.title && (
+                <p>
+                  <strong>
+                    {contract.approvedRevision.title}
+                  </strong>
+                </p>
+              )}
+
+              {contract.approvedRevision?.clauses?.length ? (
+                contract.approvedRevision.clauses
+                  .slice()
+                  .sort(
+                    (a, b) =>
+                      a.sortOrder -
+                      b.sortOrder
+                  )
+                  .map((clause) => (
+                    <div
+                      className="contract-clause"
+                      key={clause.id}
+                    >
+                      <h3>{clause.title}</h3>
+
+                      <p
+                        style={{
+                          whiteSpace: "pre-wrap",
+                        }}
+                      >
+                        {clause.body}
+                      </p>
+                    </div>
+                  ))
+              ) : (
+                <div className="info-panel">
+                  Nenhuma cláusula da revisão aprovada está disponível.
+                </div>
+              )}
             </div>
 
             <div className="contract-clause">
-              <h3>3. Obrigações das partes</h3>
-              <p>{contract.obligationsText || "-"}</p>
-            </div>
-
-            <div className="contract-clause">
-              <h3>4. Condições comerciais</h3>
+              <h3>Condições financeiras</h3>
 
               <div className="contract-values-grid">
-<div>
-  <span>Valor total</span>
-  <strong>{formatOptionalMoneyCents(contract.contractValueCents)}</strong>
-</div>
+                <div>
+                  <span>Valor total</span>
 
-<div>
-  <span>Entrada</span>
-  <strong>{formatOptionalMoneyCents(contract.entryAmountCents)}</strong>
-</div>
+                  <strong>
+                    {formatContractMoney(
+                      Number(
+                        contract.contractValueCents ||
+                        0
+                      ) / 100
+                    )}
+                  </strong>
+                </div>
+
+                <div>
+                  <span>Entrada</span>
+
+                  <strong>
+                    {formatContractMoney(
+                      Number(
+                        contract.entryAmountCents ||
+                        0
+                      ) / 100
+                    )}
+                  </strong>
+                </div>
 
                 <div>
                   <span>Forma de pagamento</span>
-                  <strong>{paymentModeLabel(contract.paymentMode || "-")}</strong>
+
+                  <strong>
+                    {paymentModeLabel(
+                      contract.paymentMode || "-"
+                    )}
+                  </strong>
                 </div>
               </div>
-
-              <p>{contract.paymentText || "-"}</p>
 
               {contract.paymentSchedule &&
                 contract.paymentSchedule.length > 0 && (
                   <div
                     style={{
                       marginTop: "24px",
-                      border: "1px solid #dfe7e2",
-                      borderRadius: "14px",
-                      overflow: "hidden",
+                      border:
+                        "1px solid #dfe7e2",
+                      borderRadius:
+                        "14px",
+                      overflow:
+                        "hidden",
                     }}
                   >
                     <div
                       style={{
-                        padding: "14px 16px",
-                        background: "#f4f8f5",
-                        borderBottom: "1px solid #dfe7e2",
+                        padding:
+                          "14px 16px",
+                        background:
+                          "#f4f8f5",
+                        borderBottom:
+                          "1px solid #dfe7e2",
                       }}
                     >
-                      <strong>Cronograma financeiro contratado</strong>
+                      <strong>
+                        Cronograma financeiro contratado
+                      </strong>
                     </div>
 
-                    <div style={{ overflowX: "auto" }}>
+                    <div
+                      style={{
+                        overflowX:
+                          "auto",
+                      }}
+                    >
                       <table
                         style={{
-                          width: "100%",
-                          borderCollapse: "collapse",
-                          minWidth: "520px",
+                          width:
+                            "100%",
+                          borderCollapse:
+                            "collapse",
+                          minWidth:
+                            "520px",
                         }}
                       >
                         <thead>
                           <tr>
                             <th
                               style={{
-                                padding: "12px 16px",
-                                textAlign: "left",
-                                borderBottom: "1px solid #e4ebe7",
+                                padding:
+                                  "12px 16px",
+                                textAlign:
+                                  "left",
+                                borderBottom:
+                                  "1px solid #e4ebe7",
                               }}
                             >
                               Etapa
@@ -2074,9 +2195,12 @@ function PublicContractPage() {
 
                             <th
                               style={{
-                                padding: "12px 16px",
-                                textAlign: "right",
-                                borderBottom: "1px solid #e4ebe7",
+                                padding:
+                                  "12px 16px",
+                                textAlign:
+                                  "right",
+                                borderBottom:
+                                  "1px solid #e4ebe7",
                               }}
                             >
                               Valor
@@ -2084,9 +2208,12 @@ function PublicContractPage() {
 
                             <th
                               style={{
-                                padding: "12px 16px",
-                                textAlign: "right",
-                                borderBottom: "1px solid #e4ebe7",
+                                padding:
+                                  "12px 16px",
+                                textAlign:
+                                  "right",
+                                borderBottom:
+                                  "1px solid #e4ebe7",
                               }}
                             >
                               Vencimento
@@ -2095,63 +2222,97 @@ function PublicContractPage() {
                         </thead>
 
                         <tbody>
-                          {contract.paymentSchedule.map((item) => {
-                            const label =
-                              item.type === "ENTRADA"
-                                ? "Entrada"
-                                : `Parcela ${item.installmentNumber}${
-                                    item.totalInstallments
-                                      ? ` de ${item.totalInstallments}`
-                                      : ""
-                                  }`;
+                          {contract.paymentSchedule.map(
+                            (item) => {
+                              const label =
+                                item.type ===
+                                "ENTRADA"
+                                  ? "Entrada"
+                                  : `Parcela ${item.installmentNumber}${
+                                      item.totalInstallments
+                                        ? ` de ${item.totalInstallments}`
+                                        : ""
+                                    }`;
 
-                            const dueDate = new Date(item.dueDate);
+                              const amount =
+                                Number(
+                                  item.amountCents ||
+                                  0
+                                ) / 100;
 
-                            return (
-                              <tr key={item.id}>
-                                <td
-                                  style={{
-                                    padding: "12px 16px",
-                                    borderBottom: "1px solid #edf1ee",
-                                  }}
+                              const dueDate =
+                                new Date(
+                                  item.dueDate
+                                );
+
+                              return (
+                                <tr
+                                  key={item.id}
                                 >
-                                  <strong>{label}</strong>
-                                </td>
+                                  <td
+                                    style={{
+                                      padding:
+                                        "12px 16px",
+                                      borderBottom:
+                                        "1px solid #edf1ee",
+                                    }}
+                                  >
+                                    <strong>
+                                      {label}
+                                    </strong>
+                                  </td>
 
-                                <td
-                                  style={{
-                                    padding: "12px 16px",
-                                    textAlign: "right",
-                                    borderBottom: "1px solid #edf1ee",
-                                  }}
-                                >
-                                  {formatMoneyCents(item.amountCents)}
-                                </td>
+                                  <td
+                                    style={{
+                                      padding:
+                                        "12px 16px",
+                                      textAlign:
+                                        "right",
+                                      borderBottom:
+                                        "1px solid #edf1ee",
+                                    }}
+                                  >
+                                    {formatContractMoney(
+                                      amount
+                                    )}
+                                  </td>
 
-                                <td
-                                  style={{
-                                    padding: "12px 16px",
-                                    textAlign: "right",
-                                    borderBottom: "1px solid #edf1ee",
-                                  }}
-                                >
-                                  {Number.isNaN(dueDate.getTime())
-                                    ? "-"
-                                    : dueDate.toLocaleDateString("pt-BR", {
-                                        timeZone: "America/Belem",
-                                      })}
-                                </td>
-                              </tr>
-                            );
-                          })}
+                                  <td
+                                    style={{
+                                      padding:
+                                        "12px 16px",
+                                      textAlign:
+                                        "right",
+                                      borderBottom:
+                                        "1px solid #edf1ee",
+                                    }}
+                                  >
+                                    {Number.isNaN(
+                                      dueDate.getTime()
+                                    )
+                                      ? "-"
+                                      : dueDate.toLocaleDateString(
+                                          "pt-BR",
+                                          {
+                                            timeZone:
+                                              "America/Belem",
+                                          }
+                                        )}
+                                  </td>
+                                </tr>
+                              );
+                            }
+                          )}
                         </tbody>
 
                         <tfoot>
                           <tr>
                             <td
                               style={{
-                                padding: "14px 16px",
-                                fontWeight: 700,
+                                padding:
+                                  "14px 16px",
+                                fontWeight:
+                                  700,
                               }}
                             >
                               Total contratado
@@ -2159,15 +2320,26 @@ function PublicContractPage() {
 
                             <td
                               style={{
-                                padding: "14px 16px",
-                                textAlign: "right",
-                                fontWeight: 700,
+                                padding:
+                                  "14px 16px",
+                                textAlign:
+                                  "right",
+                                fontWeight:
+                                  700,
                               }}
                             >
-                              {formatMoneyCents(
+                              {formatContractMoney(
                                 contract.paymentSchedule.reduce(
-                                  (sum, item) =>
-                                    sum + item.amountCents,
+                                  (
+                                    sum,
+                                    item
+                                  ) =>
+                                    sum +
+                                    Number(
+                                      item.amountCents ||
+                                      0
+                                    ) /
+                                      100,
                                   0
                                 )
                               )}
@@ -2182,15 +2354,28 @@ function PublicContractPage() {
                 )}
             </div>
 
-            <div className="contract-clause">
-              <h3>5. Prazo</h3>
-              <p>{contract.deadlineText || "-"}</p>
-            </div>
+            {contract.approvedRevision && (
+              <div className="contract-legal-confirmation">
+                <strong>
+                  Documento para assinatura:
+                </strong>{" "}
+                Revisão{" "}
+                {
+                  contract.approvedRevision
+                    .revisionNumber
+                }.
 
-            <div className="contract-clause">
-              <h3>6. Cláusulas gerais</h3>
-              <p>{contract.legalText || "-"}</p>
-            </div>
+                <br />
+
+                <small>
+                  Identificador de integridade da revisão:{" "}
+                  {
+                    contract.approvedRevision
+                      .revisionDocumentHash
+                  }
+                </small>
+              </div>
+            )}
 
             {alreadySigned && (
               <div className="contract-signature-box signed">
@@ -10457,6 +10642,8 @@ type BackendFinanceTransaction = {
   lastNotificationAt?: string | null;
   notificationCount?: number;
   webhookLastReceivedAt?: string | null;
+
+  emailNotificationEnabled?: boolean;
 
   billingCharge?: {
     id: number;
