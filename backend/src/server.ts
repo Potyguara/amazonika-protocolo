@@ -9,6 +9,7 @@ import {
 } from "./lib/money";
 import { copyPaymentSchedule } from "./lib/payment-schedule";
 import {
+  loadFrozenContractSigningDocument,
   materializeContractSigningSnapshot,
   resolveContractSigningDocument,
 } from "./lib/contract-signing-document";
@@ -4748,11 +4749,56 @@ app.post(
       }
 
       /*
-       * O envio só pode ocorrer se a assinatura da
-       * CONTRATADA corresponder exatamente à revisão
-       * aprovada atualmente vigente e ao documento
-       * canônico atual.
+       * A assinatura da CONTRATADA deve estar vinculada
+       * ao snapshot imutável da revisão efetivamente
+       * assinada.
+       *
+       * Em seguida, comparamos o documento vivo atual
+       * contra esse snapshot para impedir o envio caso
+       * tenha ocorrido alteração posterior à assinatura.
        */
+      if (
+        !contractorSignature.contractRevisionId
+      ) {
+        return res.status(409).json({
+          code:
+            "CONTRACT_SIGNED_REVISION_MISMATCH",
+
+          message:
+            "A assinatura da CONTRATADA não está vinculada a uma revisão contratual válida.",
+        });
+      }
+
+      let frozenSigningDocument:
+        Awaited<
+          ReturnType<
+            typeof loadFrozenContractSigningDocument
+          >
+        > | null = null;
+
+      try {
+        frozenSigningDocument =
+          await loadFrozenContractSigningDocument(
+            {
+              prisma,
+            },
+
+            contract.id,
+            contractorSignature.contractRevisionId
+          );
+      } catch (error: any) {
+        /*
+         * Compatibilidade temporária com assinaturas
+         * anteriores à implantação do snapshot imutável.
+         */
+        if (
+          error?.message !==
+          "CONTRACT_SIGNING_SNAPSHOT_NOT_MATERIALIZED"
+        ) {
+          throw error;
+        }
+      }
+
       const signingDocument =
         await resolveContractSigningDocument(
           {
@@ -4763,9 +4809,35 @@ app.post(
           contract.id
         );
 
+      const expectedRevisionId =
+        frozenSigningDocument?.revisionId ??
+        contractorSignature.contractRevisionId;
+
+      const expectedDocumentHash =
+        frozenSigningDocument?.signingDocumentHash ??
+        contractorSignature.documentHash;
+
+      /*
+       * Quando há snapshot congelado, a própria assinatura
+       * também precisa apontar exatamente para ele.
+       */
       if (
-        contractorSignature.contractRevisionId !==
-          signingDocument.revisionId
+        frozenSigningDocument &&
+        contractorSignature.documentHash !==
+          frozenSigningDocument.signingDocumentHash
+      ) {
+        return res.status(409).json({
+          code:
+            "CONTRACT_SIGNED_DOCUMENT_MISMATCH",
+
+          message:
+            "A assinatura da CONTRATADA não corresponde ao snapshot imutável do contrato.",
+        });
+      }
+
+      if (
+        signingDocument.revisionId !==
+          expectedRevisionId
       ) {
         return res.status(409).json({
           code:
@@ -4777,8 +4849,8 @@ app.post(
       }
 
       if (
-        contractorSignature.documentHash !==
-          signingDocument.signingDocumentHash
+        signingDocument.signingDocumentHash !==
+          expectedDocumentHash
       ) {
         return res.status(409).json({
           code:
