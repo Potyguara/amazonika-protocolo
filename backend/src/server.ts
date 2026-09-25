@@ -5144,12 +5144,157 @@ app.get("/public/contracts/:token", async (req, res) => {
       });
     }
 
-    return res.json(contract);
-  } catch (error) {
-    console.error("Erro ao carregar contrato público:", error);
+    /*
+     * O documento apresentado publicamente deve ser a
+     * mesma revisão aprovada que poderá ser assinada.
+     *
+     * Não utilizamos os campos jurídicos legados como
+     * fonte de verdade da conferência pública.
+     */
+    const company =
+      await getCompanySettings();
+
+    const signingDocument =
+      await resolveContractSigningDocument(
+        {
+          prisma,
+
+          getCompanySettings:
+            async () => company,
+        },
+
+        contract.id
+      );
+
+    return res.json({
+      ...contract,
+
+      approvedRevision: {
+        id:
+          signingDocument.revision.id,
+
+        revisionNumber:
+          signingDocument.revision.revisionNumber,
+
+        status:
+          signingDocument.revision.status,
+
+        title:
+          signingDocument.revision.title,
+
+        approvedAt:
+          signingDocument.revision.approvedAt,
+
+        revisionDocumentHash:
+          signingDocument.revisionDocumentHash,
+
+        clauses:
+          signingDocument.revision.clauses
+            .slice()
+            .sort(
+              (a, b) =>
+                a.sortOrder -
+                b.sortOrder
+            )
+            .map(
+              (clause) => ({
+                id:
+                  clause.id,
+
+                clauseKey:
+                  clause.clauseKey,
+
+                title:
+                  clause.title,
+
+                body:
+                  clause.body,
+
+                sortOrder:
+                  clause.sortOrder,
+
+                source:
+                  clause.source,
+
+                required:
+                  clause.required,
+              })
+            ),
+      },
+
+      signingDocumentHash:
+        signingDocument.signingDocumentHash,
+    });
+  } catch (error: any) {
+    if (
+      error?.message ===
+      "CONTRACT_SIGNING_CONTRACT_NOT_FOUND"
+    ) {
+      return res.status(404).json({
+        code:
+          "CONTRACT_SIGNING_CONTRACT_NOT_FOUND",
+
+        message:
+          "Contrato não encontrado.",
+      });
+    }
+
+    if (
+      error?.message ===
+      "CONTRACT_APPROVED_REVISION_REQUIRED"
+    ) {
+      return res.status(409).json({
+        code:
+          "CONTRACT_APPROVED_REVISION_REQUIRED",
+
+        message:
+          "Este contrato ainda não possui uma revisão aprovada para conferência.",
+      });
+    }
+
+    if (
+      error?.message ===
+        "CONTRACT_MULTIPLE_APPROVED_REVISIONS" ||
+      error?.message ===
+        "CONTRACT_APPROVED_REVISION_HASH_INVALID" ||
+      error?.message ===
+        "CONTRACT_APPROVED_REVISION_EMPTY" ||
+      error?.message ===
+        "CONTRACT_APPROVED_REVISION_CONTENT_CHANGED"
+    ) {
+      return res.status(409).json({
+        code:
+          error.message,
+
+        message:
+          "A revisão contratual aprovada possui uma inconsistência de integridade.",
+      });
+    }
+
+    if (
+      typeof error?.message ===
+        "string" &&
+      error.message.startsWith(
+        "CONTRACT_SIGNING_INVALID_MONEY:"
+      )
+    ) {
+      return res.status(409).json({
+        code:
+          "CONTRACT_SIGNING_INVALID_MONEY",
+
+        message:
+          "O contrato possui dados financeiros inválidos ou incompletos.",
+      });
+    }
+
+    console.error(
+      "Erro ao carregar contrato público:",
+      error
+    );
 
     return res.status(500).json({
-      message: "Erro ao carregar contrato.",
+      message:
+        "Erro ao carregar contrato.",
     });
   }
 });
