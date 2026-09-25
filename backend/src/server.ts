@@ -4675,14 +4675,43 @@ app.post(
         });
       }
 
-      const currentDocumentHash =
-        createContractDocumentHash(contract);
+      /*
+       * O envio só pode ocorrer se a assinatura da
+       * CONTRATADA corresponder exatamente à revisão
+       * aprovada atualmente vigente e ao documento
+       * canônico atual.
+       */
+      const signingDocument =
+        await resolveContractSigningDocument(
+          {
+            prisma,
+            getCompanySettings,
+          },
+
+          contract.id
+        );
+
+      if (
+        contractorSignature.contractRevisionId !==
+          signingDocument.revisionId
+      ) {
+        return res.status(409).json({
+          code:
+            "CONTRACT_SIGNED_REVISION_MISMATCH",
+
+          message:
+            "A revisão atualmente aprovada não corresponde à revisão assinada pela CONTRATADA. O contrato deve ser assinado novamente antes do envio.",
+        });
+      }
 
       if (
         contractorSignature.documentHash !==
-        currentDocumentHash
+          signingDocument.signingDocumentHash
       ) {
         return res.status(409).json({
+          code:
+            "CONTRACT_SIGNED_DOCUMENT_MISMATCH",
+
           message:
             "O conteúdo atual do contrato não corresponde ao documento assinado pela CONTRATADA. O contrato não pode ser enviado.",
         });
@@ -4849,15 +4878,100 @@ app.post(
           rejected: info.rejected,
         },
       });
-    } catch (error) {
-      console.error("Erro ao enviar contrato:", error);
+    } catch (error: any) {
+      if (
+        error?.message ===
+        "CONTRACT_SIGNING_CONTRACT_NOT_FOUND"
+      ) {
+        return res.status(404).json({
+          code:
+            "CONTRACT_SIGNING_CONTRACT_NOT_FOUND",
 
-      if (error instanceof AmbiguousMoneyError) {
-        return res.status(409).json({ code: error.code, message: error.message });
+          message:
+            "Contrato não encontrado.",
+        });
+      }
+
+      if (
+        error?.message ===
+        "CONTRACT_APPROVED_REVISION_REQUIRED"
+      ) {
+        return res.status(409).json({
+          code:
+            "CONTRACT_APPROVED_REVISION_REQUIRED",
+
+          message:
+            "O contrato deve possuir uma revisão aprovada antes do envio.",
+        });
+      }
+
+      if (
+        error?.message ===
+        "CONTRACT_MULTIPLE_APPROVED_REVISIONS"
+      ) {
+        return res.status(409).json({
+          code:
+            "CONTRACT_MULTIPLE_APPROVED_REVISIONS",
+
+          message:
+            "O contrato possui mais de uma revisão aprovada e não pode ser enviado até a inconsistência ser corrigida.",
+        });
+      }
+
+      if (
+        error?.message ===
+          "CONTRACT_APPROVED_REVISION_HASH_INVALID" ||
+        error?.message ===
+          "CONTRACT_APPROVED_REVISION_EMPTY" ||
+        error?.message ===
+          "CONTRACT_APPROVED_REVISION_CONTENT_CHANGED"
+      ) {
+        return res.status(409).json({
+          code:
+            error.message,
+
+          message:
+            "A revisão aprovada não possui integridade suficiente para envio.",
+        });
+      }
+
+      if (
+        typeof error?.message ===
+          "string" &&
+        error.message.startsWith(
+          "CONTRACT_SIGNING_INVALID_MONEY:"
+        )
+      ) {
+        return res.status(409).json({
+          code:
+            "CONTRACT_SIGNING_INVALID_MONEY",
+
+          message:
+            "O contrato possui dados financeiros inválidos ou incompletos para envio.",
+        });
+      }
+
+      console.error(
+        "Erro ao enviar contrato:",
+        error
+      );
+
+      if (
+        error instanceof
+        AmbiguousMoneyError
+      ) {
+        return res.status(409).json({
+          code:
+            error.code,
+
+          message:
+            error.message,
+        });
       }
 
       return res.status(500).json({
-        message: "Erro ao enviar contrato por e-mail.",
+        message:
+          "Erro ao enviar contrato por e-mail.",
       });
     }
   }
