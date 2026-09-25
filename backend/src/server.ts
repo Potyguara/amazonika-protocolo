@@ -5361,6 +5361,55 @@ app.post("/public/contracts/:token/signature-otp", async (req, res) => {
       });
     }
 
+    /*
+     * Antes de emitir qualquer OTP, confirmamos que a
+     * assinatura da CONTRATADA ainda corresponde à revisão
+     * aprovada e ao documento canônico atualmente vigente.
+     *
+     * Nenhum código deve ser criado ou enviado se o
+     * documento tiver mudado após a assinatura.
+     */
+    const company =
+      await getCompanySettings();
+
+    const signingDocument =
+      await resolveContractSigningDocument(
+        {
+          prisma,
+
+          getCompanySettings:
+            async () => company,
+        },
+
+        contract.id
+      );
+
+    if (
+      contractorSignature.contractRevisionId !==
+        signingDocument.revisionId
+    ) {
+      return res.status(409).json({
+        code:
+          "CONTRACT_SIGNED_REVISION_MISMATCH",
+
+        message:
+          "A revisão atualmente aprovada não corresponde à revisão assinada pela CONTRATADA. Solicite nova assinatura da CONTRATADA antes de prosseguir.",
+      });
+    }
+
+    if (
+      contractorSignature.documentHash !==
+        signingDocument.signingDocumentHash
+    ) {
+      return res.status(409).json({
+        code:
+          "CONTRACT_SIGNED_DOCUMENT_MISMATCH",
+
+        message:
+          "O conteúdo atual do contrato não corresponde ao documento assinado pela CONTRATADA. Solicite nova assinatura da CONTRATADA antes de prosseguir.",
+      });
+    }
+
     const transporter =
       await createTransporterFromSettings();
 
@@ -5573,7 +5622,68 @@ app.post("/public/contracts/:token/signature-otp", async (req, res) => {
       expiresAt:
         expiresAt.toISOString(),
     });
-  } catch (error) {
+  } catch (error: any) {
+    if (
+      error?.message ===
+      "CONTRACT_SIGNING_CONTRACT_NOT_FOUND"
+    ) {
+      return res.status(404).json({
+        code:
+          "CONTRACT_SIGNING_CONTRACT_NOT_FOUND",
+
+        message:
+          "Contrato não encontrado.",
+      });
+    }
+
+    if (
+      error?.message ===
+      "CONTRACT_APPROVED_REVISION_REQUIRED"
+    ) {
+      return res.status(409).json({
+        code:
+          "CONTRACT_APPROVED_REVISION_REQUIRED",
+
+        message:
+          "O contrato deve possuir uma revisão aprovada antes da emissão do código de assinatura.",
+      });
+    }
+
+    if (
+      error?.message ===
+        "CONTRACT_MULTIPLE_APPROVED_REVISIONS" ||
+      error?.message ===
+        "CONTRACT_APPROVED_REVISION_HASH_INVALID" ||
+      error?.message ===
+        "CONTRACT_APPROVED_REVISION_EMPTY" ||
+      error?.message ===
+        "CONTRACT_APPROVED_REVISION_CONTENT_CHANGED"
+    ) {
+      return res.status(409).json({
+        code:
+          error.message,
+
+        message:
+          "A revisão aprovada possui uma inconsistência de integridade e não pode receber código de assinatura.",
+      });
+    }
+
+    if (
+      typeof error?.message ===
+        "string" &&
+      error.message.startsWith(
+        "CONTRACT_SIGNING_INVALID_MONEY:"
+      )
+    ) {
+      return res.status(409).json({
+        code:
+          "CONTRACT_SIGNING_INVALID_MONEY",
+
+        message:
+          "O contrato possui dados financeiros inválidos ou incompletos para assinatura.",
+      });
+    }
+
     console.error(
       "Erro ao enviar OTP de assinatura:",
       error
