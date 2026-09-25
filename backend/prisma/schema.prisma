@@ -718,6 +718,23 @@ model ContractRevision {
   // Será preenchido quando a revisão for aprovada/congelada.
   documentHash String?
 
+  // Snapshot canônico integral congelado no primeiro ato de
+  // assinatura da CONTRATADA.
+  //
+  // Depois de preenchido, este conteúdo não deve ser
+  // recalculado a partir de cadastros ou dados vivos.
+  signingSnapshotJson String?
+
+  // Versão do formato utilizado em signingSnapshotJson.
+  // Permite evolução futura sem alterar contratos históricos.
+  signingSnapshotVersion Int?
+
+  // SHA-256 calculado sobre o snapshot canônico integral.
+  signingDocumentHash String?
+
+  // Momento em que o snapshot imutável foi materializado.
+  signingSnapshotCreatedAt DateTime?
+
   createdById  Int?
   approvedById Int?
 

@@ -9,6 +9,7 @@ import {
 } from "./lib/money";
 import { copyPaymentSchedule } from "./lib/payment-schedule";
 import {
+  materializeContractSigningSnapshot,
   resolveContractSigningDocument,
 } from "./lib/contract-signing-document";
 import {
@@ -4346,21 +4347,18 @@ app.post(
             }
 
             /*
-             * Recalcula o hash dentro da transação.
-             * A assinatura deve corresponder ao conteúdo
-             * contratual existente no momento da gravação.
+             * Congela atomicamente o documento canônico
+             * no primeiro ato de assinatura da CONTRATADA.
+             *
+             * Depois deste ponto, o documento histórico
+             * passa a ser o snapshot persistido da revisão.
              */
-            const currentSigningDocument =
-              await resolveContractSigningDocument(
+            const frozenSigningDocument =
+              await materializeContractSigningSnapshot(
                 {
                   prisma:
                     tx,
 
-                  /*
-                   * A identidade empresarial utilizada
-                   * no início desta operação deve ser a
-                   * mesma utilizada na revalidação.
-                   */
                   getCompanySettings:
                     async () =>
                       company,
@@ -4369,15 +4367,18 @@ app.post(
                 currentContract.id
               );
 
-            const currentDocumentHash =
-              currentSigningDocument
+            const frozenDocumentHash =
+              frozenSigningDocument
                 .signingDocumentHash;
 
+            const frozenRevisionId =
+              frozenSigningDocument
+                .revisionId;
+
             if (
-              currentDocumentHash !==
+              frozenDocumentHash !==
                 documentHash ||
-              currentSigningDocument
-                .revisionId !==
+              frozenRevisionId !==
                 contractRevisionId
             ) {
               throw new Error(

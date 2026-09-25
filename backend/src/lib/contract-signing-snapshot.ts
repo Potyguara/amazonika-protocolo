@@ -375,10 +375,36 @@ export function buildContractSigningSnapshot(
   };
 }
 
+export type ContractSigningSnapshot =
+  ReturnType<
+    typeof buildContractSigningSnapshot
+  >;
+
+export function serializeBuiltContractSigningSnapshot(
+  snapshot: ContractSigningSnapshot
+) {
+  return JSON.stringify(
+    snapshot
+  );
+}
+
+export function createBuiltContractSigningDocumentHash(
+  snapshot: ContractSigningSnapshot
+) {
+  return createHash("sha256")
+    .update(
+      serializeBuiltContractSigningSnapshot(
+        snapshot
+      ),
+      "utf8"
+    )
+    .digest("hex");
+}
+
 export function serializeContractSigningSnapshot(
   input: ContractSigningSnapshotInput
 ) {
-  return JSON.stringify(
+  return serializeBuiltContractSigningSnapshot(
     buildContractSigningSnapshot(
       input
     )
@@ -388,12 +414,9 @@ export function serializeContractSigningSnapshot(
 export function createContractSigningDocumentHash(
   input: ContractSigningSnapshotInput
 ) {
-  return createHash("sha256")
-    .update(
-      serializeContractSigningSnapshot(
-        input
-      ),
-      "utf8"
+  return createBuiltContractSigningDocumentHash(
+    buildContractSigningSnapshot(
+      input
     )
-    .digest("hex");
+  );
 }

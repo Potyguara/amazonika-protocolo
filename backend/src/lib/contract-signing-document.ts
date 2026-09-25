@@ -2,7 +2,10 @@ import { Prisma, PrismaClient } from "@prisma/client";
 
 import {
   buildContractSigningSnapshot,
+  createBuiltContractSigningDocumentHash,
   createContractSigningDocumentHash,
+  serializeBuiltContractSigningSnapshot,
+  type ContractSigningSnapshot,
 } from "./contract-signing-snapshot";
 
 import {
@@ -439,4 +442,367 @@ export async function resolveContractSigningDocument(
 
     snapshot,
   };
+}
+
+
+const CONTRACT_SIGNING_SNAPSHOT_VERSION =
+  1;
+
+type FrozenSnapshotRecord = {
+  id: number;
+  contractId: number;
+  revisionNumber: number;
+  documentHash: string | null;
+  signingSnapshotJson: string | null;
+  signingSnapshotVersion: number | null;
+  signingDocumentHash: string | null;
+  signingSnapshotCreatedAt: Date | null;
+};
+
+function parseFrozenSigningSnapshot(
+  revision: FrozenSnapshotRecord
+) {
+  if (
+    !revision.signingSnapshotJson ||
+    revision.signingSnapshotVersion === null ||
+    !revision.signingDocumentHash ||
+    !revision.signingSnapshotCreatedAt
+  ) {
+    throw new Error(
+      "CONTRACT_SIGNING_SNAPSHOT_NOT_MATERIALIZED"
+    );
+  }
+
+  if (
+    revision.signingSnapshotVersion !==
+    CONTRACT_SIGNING_SNAPSHOT_VERSION
+  ) {
+    throw new Error(
+      "CONTRACT_SIGNING_SNAPSHOT_VERSION_UNSUPPORTED"
+    );
+  }
+
+  let snapshot:
+    ContractSigningSnapshot;
+
+  try {
+    snapshot =
+      JSON.parse(
+        revision.signingSnapshotJson
+      ) as ContractSigningSnapshot;
+  } catch {
+    throw new Error(
+      "CONTRACT_SIGNING_SNAPSHOT_INVALID_JSON"
+    );
+  }
+
+  if (
+    !snapshot ||
+    snapshot.schemaVersion !==
+      CONTRACT_SIGNING_SNAPSHOT_VERSION ||
+    snapshot.contract?.id !==
+      revision.contractId ||
+    snapshot.revision?.id !==
+      revision.id ||
+    snapshot.revision?.revisionNumber !==
+      revision.revisionNumber ||
+    !Array.isArray(
+      snapshot.revision?.clauses
+    ) ||
+    !Array.isArray(
+      snapshot.paymentSchedule
+    )
+  ) {
+    throw new Error(
+      "CONTRACT_SIGNING_SNAPSHOT_IDENTITY_MISMATCH"
+    );
+  }
+
+  const recalculatedHash =
+    createBuiltContractSigningDocumentHash(
+      snapshot
+    );
+
+  if (
+    recalculatedHash !==
+    revision.signingDocumentHash
+  ) {
+    throw new Error(
+      "CONTRACT_SIGNING_SNAPSHOT_HASH_MISMATCH"
+    );
+  }
+
+  if (
+    snapshot.revision
+      .revisionDocumentHash !==
+    revision.documentHash
+  ) {
+    throw new Error(
+      "CONTRACT_SIGNING_SNAPSHOT_REVISION_HASH_MISMATCH"
+    );
+  }
+
+  return {
+    snapshot,
+
+    signingDocumentHash:
+      revision.signingDocumentHash,
+
+    signingSnapshotVersion:
+      revision.signingSnapshotVersion,
+
+    signingSnapshotCreatedAt:
+      revision.signingSnapshotCreatedAt,
+  };
+}
+
+
+async function loadFrozenRevisionRecord(
+  prisma:
+    | PrismaClient
+    | Prisma.TransactionClient,
+  contractId: number,
+  revisionId: number
+) {
+  const revision =
+    await prisma.contractRevision.findFirst({
+      where: {
+        id:
+          revisionId,
+
+        contractId,
+      },
+
+      select: {
+        id:
+          true,
+
+        contractId:
+          true,
+
+        revisionNumber:
+          true,
+
+        documentHash:
+          true,
+
+        signingSnapshotJson:
+          true,
+
+        signingSnapshotVersion:
+          true,
+
+        signingDocumentHash:
+          true,
+
+        signingSnapshotCreatedAt:
+          true,
+      },
+    });
+
+  if (!revision) {
+    throw new Error(
+      "CONTRACT_SIGNING_REVISION_NOT_FOUND"
+    );
+  }
+
+  return revision;
+}
+
+
+export async function loadFrozenContractSigningDocument(
+  dependencies: {
+    prisma:
+      | PrismaClient
+      | Prisma.TransactionClient;
+  },
+  contractId: number,
+  revisionId: number
+) {
+  if (
+    !Number.isInteger(contractId) ||
+    contractId <= 0 ||
+    !Number.isInteger(revisionId) ||
+    revisionId <= 0
+  ) {
+    throw new Error(
+      "CONTRACT_SIGNING_INVALID_FROZEN_ID"
+    );
+  }
+
+  const revision =
+    await loadFrozenRevisionRecord(
+      dependencies.prisma,
+      contractId,
+      revisionId
+    );
+
+  const frozen =
+    parseFrozenSigningSnapshot(
+      revision
+    );
+
+  return {
+    revisionId:
+      revision.id,
+
+    revisionNumber:
+      revision.revisionNumber,
+
+    revisionDocumentHash:
+      revision.documentHash!,
+
+    signingDocumentHash:
+      frozen.signingDocumentHash,
+
+    signingSnapshotVersion:
+      frozen.signingSnapshotVersion,
+
+    signingSnapshotCreatedAt:
+      frozen.signingSnapshotCreatedAt,
+
+    snapshot:
+      frozen.snapshot,
+  };
+}
+
+
+export async function materializeContractSigningSnapshot(
+  dependencies: ResolveDependencies,
+  contractId: number
+) {
+  const live =
+    await resolveContractSigningDocument(
+      dependencies,
+      contractId
+    );
+
+  const snapshotJson =
+    serializeBuiltContractSigningSnapshot(
+      live.snapshot
+    );
+
+  const signingDocumentHash =
+    createBuiltContractSigningDocumentHash(
+      live.snapshot
+    );
+
+  if (
+    signingDocumentHash !==
+    live.signingDocumentHash
+  ) {
+    throw new Error(
+      "CONTRACT_SIGNING_SNAPSHOT_INTERNAL_HASH_MISMATCH"
+    );
+  }
+
+  const existingSnapshotFields = [
+    live.revision
+      .signingSnapshotJson,
+
+    live.revision
+      .signingSnapshotVersion,
+
+    live.revision
+      .signingDocumentHash,
+
+    live.revision
+      .signingSnapshotCreatedAt,
+  ];
+
+  const existingCount =
+    existingSnapshotFields.filter(
+      (value) =>
+        value !== null &&
+        value !== undefined
+    ).length;
+
+  if (
+    existingCount > 0 &&
+    existingCount < 4
+  ) {
+    throw new Error(
+      "CONTRACT_SIGNING_SNAPSHOT_PARTIAL_STATE"
+    );
+  }
+
+  if (existingCount === 4) {
+    return loadFrozenContractSigningDocument(
+      {
+        prisma:
+          dependencies.prisma,
+      },
+      contractId,
+      live.revisionId
+    );
+  }
+
+  const createdAt =
+    new Date();
+
+  /*
+   * updateMany + campos NULL implementam compare-and-set.
+   *
+   * Apenas uma execução concorrente poderá materializar
+   * o snapshot pela primeira vez.
+   */
+  const writeResult =
+    await dependencies.prisma
+      .contractRevision
+      .updateMany({
+        where: {
+          id:
+            live.revisionId,
+
+          contractId,
+
+          signingSnapshotJson:
+            null,
+
+          signingSnapshotVersion:
+            null,
+
+          signingDocumentHash:
+            null,
+
+          signingSnapshotCreatedAt:
+            null,
+        },
+
+        data: {
+          signingSnapshotJson:
+            snapshotJson,
+
+          signingSnapshotVersion:
+            CONTRACT_SIGNING_SNAPSHOT_VERSION,
+
+          signingDocumentHash,
+
+          signingSnapshotCreatedAt:
+            createdAt,
+        },
+      });
+
+  /*
+   * count=0 pode significar que outra execução acabou de
+   * congelar a mesma revisão. Nesse caso nunca sobrescrevemos:
+   * apenas carregamos e validamos o snapshot vencedor.
+   */
+  if (
+    writeResult.count !== 0 &&
+    writeResult.count !== 1
+  ) {
+    throw new Error(
+      "CONTRACT_SIGNING_SNAPSHOT_WRITE_FAILED"
+    );
+  }
+
+  return loadFrozenContractSigningDocument(
+    {
+      prisma:
+        dependencies.prisma,
+    },
+    contractId,
+    live.revisionId
+  );
 }
