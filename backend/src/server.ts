@@ -6140,12 +6140,55 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
       );
 
     /*
-     * Resolve o documento canônico que será assinado
-     * pelo CONTRATANTE.
+     * O CONTRATANTE deve assinar exatamente o mesmo
+     * documento imutável já assinado pela CONTRATADA.
      *
-     * Ele precisa corresponder exatamente à revisão e
-     * ao hash já assinados pela CONTRATADA.
+     * O snapshot congelado é a referência documental
+     * primária. O estado vivo é resolvido apenas para
+     * detectar alterações posteriores.
      */
+    if (
+      !contractorSignature.contractRevisionId
+    ) {
+      return res.status(409).json({
+        code:
+          "CONTRACT_SIGNED_REVISION_MISMATCH",
+
+        message:
+          "A assinatura da CONTRATADA não está vinculada a uma revisão contratual válida.",
+      });
+    }
+
+    let frozenSigningDocument:
+      Awaited<
+        ReturnType<
+          typeof loadFrozenContractSigningDocument
+        >
+      > | null = null;
+
+    try {
+      frozenSigningDocument =
+        await loadFrozenContractSigningDocument(
+          {
+            prisma,
+          },
+
+          contract.id,
+          contractorSignature.contractRevisionId
+        );
+    } catch (error: any) {
+      /*
+       * Compatibilidade temporária com contratos
+       * assinados antes da implantação do snapshot.
+       */
+      if (
+        error?.message !==
+        "CONTRACT_SIGNING_SNAPSHOT_NOT_MATERIALIZED"
+      ) {
+        throw error;
+      }
+    }
+
     const company =
       await getCompanySettings();
 
@@ -6161,9 +6204,31 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
         contract.id
       );
 
+    const expectedRevisionId =
+      frozenSigningDocument?.revisionId ??
+      contractorSignature.contractRevisionId;
+
+    const expectedDocumentHash =
+      frozenSigningDocument?.signingDocumentHash ??
+      contractorSignature.documentHash;
+
     if (
-      contractorSignature.contractRevisionId !==
-        signingDocument.revisionId
+      frozenSigningDocument &&
+      contractorSignature.documentHash !==
+        frozenSigningDocument.signingDocumentHash
+    ) {
+      return res.status(409).json({
+        code:
+          "CONTRACT_SIGNED_DOCUMENT_MISMATCH",
+
+        message:
+          "A assinatura da CONTRATADA não corresponde ao snapshot imutável do contrato.",
+      });
+    }
+
+    if (
+      signingDocument.revisionId !==
+        expectedRevisionId
     ) {
       return res.status(409).json({
         code:
@@ -6175,8 +6240,8 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
     }
 
     if (
-      contractorSignature.documentHash !==
-        signingDocument.signingDocumentHash
+      signingDocument.signingDocumentHash !==
+        expectedDocumentHash
     ) {
       return res.status(409).json({
         code:
@@ -6188,15 +6253,17 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
     }
 
     const documentHash =
-      signingDocument.signingDocumentHash;
+      expectedDocumentHash;
 
     const contractRevisionId =
-      signingDocument.revisionId;
+      expectedRevisionId;
 
     const contractRevisionNumber =
+      frozenSigningDocument?.revisionNumber ??
       signingDocument.revisionNumber;
 
     const revisionDocumentHash =
+      frozenSigningDocument?.revisionDocumentHash ??
       signingDocument.revisionDocumentHash;
 
     const signatureHash =
@@ -6270,38 +6337,6 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
             );
           }
 
-          const currentSigningDocument =
-            await resolveContractSigningDocument(
-              {
-                prisma:
-                  tx,
-
-                getCompanySettings:
-                  async () =>
-                    company,
-              },
-
-              currentContract.id
-            );
-
-          if (
-            currentSigningDocument.revisionId !==
-              contractRevisionId
-          ) {
-            throw new Error(
-              "CONTRACT_SIGNED_REVISION_MISMATCH"
-            );
-          }
-
-          if (
-            currentSigningDocument.signingDocumentHash !==
-              documentHash
-          ) {
-            throw new Error(
-              "CONTRACT_SIGNED_DOCUMENT_MISMATCH"
-            );
-          }
-
           const currentContractorSignature =
             await tx.contractSignature.findFirst({
               where: {
@@ -6325,13 +6360,124 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
           }
 
           if (
-            currentContractorSignature.contractRevisionId !==
-              contractRevisionId ||
-            currentContractorSignature.documentHash !==
+            !currentContractorSignature.contractRevisionId
+          ) {
+            throw new Error(
+              "CONTRACT_SIGNED_REVISION_MISMATCH"
+            );
+          }
+
+          let currentFrozenSigningDocument:
+            Awaited<
+              ReturnType<
+                typeof loadFrozenContractSigningDocument
+              >
+            > | null = null;
+
+          try {
+            currentFrozenSigningDocument =
+              await loadFrozenContractSigningDocument(
+                {
+                  prisma:
+                    tx,
+                },
+
+                currentContract.id,
+                currentContractorSignature
+                  .contractRevisionId
+              );
+          } catch (error: any) {
+            /*
+             * Compatibilidade temporária com assinaturas
+             * anteriores ao snapshot imutável.
+             */
+            if (
+              error?.message !==
+              "CONTRACT_SIGNING_SNAPSHOT_NOT_MATERIALIZED"
+            ) {
+              throw error;
+            }
+          }
+
+          const currentExpectedRevisionId =
+            currentFrozenSigningDocument?.revisionId ??
+            currentContractorSignature
+              .contractRevisionId;
+
+          const currentExpectedDocumentHash =
+            currentFrozenSigningDocument
+              ?.signingDocumentHash ??
+            currentContractorSignature
+              .documentHash;
+
+          /*
+           * O documento congelado não pode mudar entre
+           * a validação externa e a gravação final.
+           */
+          if (
+            currentExpectedRevisionId !==
+              contractRevisionId
+          ) {
+            throw new Error(
+              "CONTRACT_SIGNED_REVISION_MISMATCH"
+            );
+          }
+
+          if (
+            currentExpectedDocumentHash !==
               documentHash
           ) {
             throw new Error(
+              "CONTRACT_SIGNED_DOCUMENT_MISMATCH"
+            );
+          }
+
+          if (
+            currentContractorSignature
+              .contractRevisionId !==
+                contractRevisionId ||
+            currentContractorSignature
+              .documentHash !==
+                documentHash
+          ) {
+            throw new Error(
               "CONTRACTOR_SIGNATURE_DOCUMENT_MISMATCH"
+            );
+          }
+
+          const currentSigningDocument =
+            await resolveContractSigningDocument(
+              {
+                prisma:
+                  tx,
+
+                getCompanySettings:
+                  async () =>
+                    company,
+              },
+
+              currentContract.id
+            );
+
+          /*
+           * O estado vivo ainda precisa corresponder ao
+           * snapshot congelado até a assinatura final.
+           */
+          if (
+            currentSigningDocument.revisionId !==
+              contractRevisionId
+          ) {
+            throw new Error(
+              "CONTRACT_SIGNED_REVISION_MISMATCH"
+            );
+          }
+
+          if (
+            currentSigningDocument.signingDocumentHash !==
+              documentHash
+          ) {
+            throw new Error(
+              "CONTRACT_SIGNED_DOCUMENT_MISMATCH"
             );
           }
 
