@@ -5676,13 +5676,64 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
       );
 
     /*
-     * O hash é calculado sobre o conteúdo contratual
-     * efetivamente disponibilizado para assinatura.
+     * Resolve o documento canônico que será assinado
+     * pelo CONTRATANTE.
+     *
+     * Ele precisa corresponder exatamente à revisão e
+     * ao hash já assinados pela CONTRATADA.
      */
-    const documentHash =
-      createContractDocumentHash(
-        contract
+    const company =
+      await getCompanySettings();
+
+    const signingDocument =
+      await resolveContractSigningDocument(
+        {
+          prisma,
+
+          getCompanySettings:
+            async () => company,
+        },
+
+        contract.id
       );
+
+    if (
+      contractorSignature.contractRevisionId !==
+        signingDocument.revisionId
+    ) {
+      return res.status(409).json({
+        code:
+          "CONTRACT_SIGNED_REVISION_MISMATCH",
+
+        message:
+          "A revisão atualmente aprovada não corresponde à revisão assinada pela CONTRATADA.",
+      });
+    }
+
+    if (
+      contractorSignature.documentHash !==
+        signingDocument.signingDocumentHash
+    ) {
+      return res.status(409).json({
+        code:
+          "CONTRACT_SIGNED_DOCUMENT_MISMATCH",
+
+        message:
+          "O conteúdo atual do contrato não corresponde ao documento assinado pela CONTRATADA.",
+      });
+    }
+
+    const documentHash =
+      signingDocument.signingDocumentHash;
+
+    const contractRevisionId =
+      signingDocument.revisionId;
+
+    const contractRevisionNumber =
+      signingDocument.revisionNumber;
+
+    const revisionDocumentHash =
+      signingDocument.revisionDocumentHash;
 
     const signatureHash =
       createContractSignatureHash({
@@ -5755,6 +5806,71 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
             );
           }
 
+          const currentSigningDocument =
+            await resolveContractSigningDocument(
+              {
+                prisma:
+                  tx,
+
+                getCompanySettings:
+                  async () =>
+                    company,
+              },
+
+              currentContract.id
+            );
+
+          if (
+            currentSigningDocument.revisionId !==
+              contractRevisionId
+          ) {
+            throw new Error(
+              "CONTRACT_SIGNED_REVISION_MISMATCH"
+            );
+          }
+
+          if (
+            currentSigningDocument.signingDocumentHash !==
+              documentHash
+          ) {
+            throw new Error(
+              "CONTRACT_SIGNED_DOCUMENT_MISMATCH"
+            );
+          }
+
+          const currentContractorSignature =
+            await tx.contractSignature.findFirst({
+              where: {
+                contractId:
+                  currentContract.id,
+
+                signerRole:
+                  "CONTRATADA",
+              },
+
+              orderBy: {
+                signedAt:
+                  "desc",
+              },
+            });
+
+          if (!currentContractorSignature) {
+            throw new Error(
+              "CONTRACTOR_SIGNATURE_REQUIRED"
+            );
+          }
+
+          if (
+            currentContractorSignature.contractRevisionId !==
+              contractRevisionId ||
+            currentContractorSignature.documentHash !==
+              documentHash
+          ) {
+            throw new Error(
+              "CONTRACTOR_SIGNATURE_DOCUMENT_MISMATCH"
+            );
+          }
+
           const currentOtp =
             await tx.contractSignatureOtp.findUnique({
               where: {
@@ -5787,6 +5903,8 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
               data: {
                 contractId:
                   contract.id,
+
+                contractRevisionId,
 
                 signerRole:
                   "CONTRATANTE",
@@ -5834,6 +5952,12 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
 
                     publicToken:
                       contract.publicToken,
+
+                    contractRevisionId,
+
+                    contractRevisionNumber,
+
+                    revisionDocumentHash,
 
                     signerRole:
                       "CONTRATANTE",
@@ -6428,6 +6552,11 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
         signerRole:
           result.signature.signerRole,
 
+        contractRevisionId:
+          result.signature.contractRevisionId,
+
+        contractRevisionNumber,
+
         method:
           result.signature.method,
 
@@ -6493,6 +6622,84 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
       return res.status(404).json({
         message:
           "Contrato não encontrado.",
+      });
+    }
+
+    if (
+      error?.message ===
+        "CONTRACT_SIGNED_REVISION_MISMATCH" ||
+      error?.message ===
+        "CONTRACT_SIGNED_DOCUMENT_MISMATCH" ||
+      error?.message ===
+        "CONTRACTOR_SIGNATURE_DOCUMENT_MISMATCH"
+    ) {
+      return res.status(409).json({
+        code:
+          error.message,
+
+        message:
+          "O documento atualmente disponível não corresponde ao documento assinado pela CONTRATADA.",
+      });
+    }
+
+    if (
+      error?.message ===
+      "CONTRACTOR_SIGNATURE_REQUIRED"
+    ) {
+      return res.status(409).json({
+        code:
+          "CONTRACTOR_SIGNATURE_REQUIRED",
+
+        message:
+          "O contrato deve possuir assinatura válida da CONTRATADA antes da assinatura do CONTRATANTE.",
+      });
+    }
+
+    if (
+      error?.message ===
+      "CONTRACT_APPROVED_REVISION_REQUIRED"
+    ) {
+      return res.status(409).json({
+        code:
+          "CONTRACT_APPROVED_REVISION_REQUIRED",
+
+        message:
+          "O contrato deve possuir uma revisão aprovada antes da assinatura.",
+      });
+    }
+
+    if (
+      error?.message ===
+        "CONTRACT_MULTIPLE_APPROVED_REVISIONS" ||
+      error?.message ===
+        "CONTRACT_APPROVED_REVISION_HASH_INVALID" ||
+      error?.message ===
+        "CONTRACT_APPROVED_REVISION_EMPTY" ||
+      error?.message ===
+        "CONTRACT_APPROVED_REVISION_CONTENT_CHANGED"
+    ) {
+      return res.status(409).json({
+        code:
+          error.message,
+
+        message:
+          "A revisão aprovada não possui integridade suficiente para assinatura.",
+      });
+    }
+
+    if (
+      typeof error?.message ===
+        "string" &&
+      error.message.startsWith(
+        "CONTRACT_SIGNING_INVALID_MONEY:"
+      )
+    ) {
+      return res.status(409).json({
+        code:
+          "CONTRACT_SIGNING_INVALID_MONEY",
+
+        message:
+          "O contrato possui dados financeiros inválidos ou incompletos para assinatura.",
       });
     }
 
