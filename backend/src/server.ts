@@ -5435,13 +5435,56 @@ app.post("/public/contracts/:token/signature-otp", async (req, res) => {
     }
 
     /*
-     * Antes de emitir qualquer OTP, confirmamos que a
-     * assinatura da CONTRATADA ainda corresponde à revisão
-     * aprovada e ao documento canônico atualmente vigente.
+     * Antes de emitir qualquer OTP, validamos primeiro
+     * o snapshot imutável efetivamente assinado pela
+     * CONTRATADA.
      *
-     * Nenhum código deve ser criado ou enviado se o
-     * documento tiver mudado após a assinatura.
+     * Depois, o documento vivo atual é comparado com esse
+     * snapshot. Nenhum OTP pode ser criado caso exista
+     * divergência posterior à assinatura.
      */
+    if (
+      !contractorSignature.contractRevisionId
+    ) {
+      return res.status(409).json({
+        code:
+          "CONTRACT_SIGNED_REVISION_MISMATCH",
+
+        message:
+          "A assinatura da CONTRATADA não está vinculada a uma revisão contratual válida.",
+      });
+    }
+
+    let frozenSigningDocument:
+      Awaited<
+        ReturnType<
+          typeof loadFrozenContractSigningDocument
+        >
+      > | null = null;
+
+    try {
+      frozenSigningDocument =
+        await loadFrozenContractSigningDocument(
+          {
+            prisma,
+          },
+
+          contract.id,
+          contractorSignature.contractRevisionId
+        );
+    } catch (error: any) {
+      /*
+       * Compatibilidade temporária com assinaturas
+       * anteriores ao snapshot imutável.
+       */
+      if (
+        error?.message !==
+        "CONTRACT_SIGNING_SNAPSHOT_NOT_MATERIALIZED"
+      ) {
+        throw error;
+      }
+    }
+
     const company =
       await getCompanySettings();
 
@@ -5457,9 +5500,31 @@ app.post("/public/contracts/:token/signature-otp", async (req, res) => {
         contract.id
       );
 
+    const expectedRevisionId =
+      frozenSigningDocument?.revisionId ??
+      contractorSignature.contractRevisionId;
+
+    const expectedDocumentHash =
+      frozenSigningDocument?.signingDocumentHash ??
+      contractorSignature.documentHash;
+
     if (
-      contractorSignature.contractRevisionId !==
-        signingDocument.revisionId
+      frozenSigningDocument &&
+      contractorSignature.documentHash !==
+        frozenSigningDocument.signingDocumentHash
+    ) {
+      return res.status(409).json({
+        code:
+          "CONTRACT_SIGNED_DOCUMENT_MISMATCH",
+
+        message:
+          "A assinatura da CONTRATADA não corresponde ao snapshot imutável do contrato.",
+      });
+    }
+
+    if (
+      signingDocument.revisionId !==
+        expectedRevisionId
     ) {
       return res.status(409).json({
         code:
@@ -5471,8 +5536,8 @@ app.post("/public/contracts/:token/signature-otp", async (req, res) => {
     }
 
     if (
-      contractorSignature.documentHash !==
-        signingDocument.signingDocumentHash
+      signingDocument.signingDocumentHash !==
+        expectedDocumentHash
     ) {
       return res.status(409).json({
         code:
