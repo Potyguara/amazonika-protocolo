@@ -4840,8 +4840,25 @@ app.post(
       }
 
       const settings = await getSmtpSettings();
-      const company = await getCompanySettings();
       const transporter = await createTransporterFromSettings();
+
+      const signedSnapshot =
+        frozenSigningDocument.snapshot;
+
+      const signedCompany =
+        signedSnapshot.company;
+
+      const signedClient =
+        signedSnapshot.client;
+
+      const signedProtocol =
+        signedSnapshot.protocol;
+
+      const signedService =
+        signedSnapshot.service;
+
+      const signedContract =
+        signedSnapshot.contract;
 
       if (!transporter) {
         console.error("SMTP incompleto ao enviar contrato:", {
@@ -4864,10 +4881,10 @@ app.post(
       }`;
       const contractValueText = formatCurrencyBRFromCents(
         requireCanonicalCents(
-          contract.contractValueCents,
-          "Valor total do contrato"
+          signedContract.contractValueCents,
+          "Valor total do contrato assinado"
         ),
-        "Valor total do contrato"
+        "Valor total do contrato assinado"
       );
 
       const html = `
@@ -4875,20 +4892,20 @@ app.post(
           <div style="max-width:720px;margin:0 auto;background:#ffffff;border-radius:18px;overflow:hidden;border:1px solid #dfe7e2;">
             <div style="background:#0f4f3a;color:#ffffff;padding:24px;">
               <h1 style="margin:0;font-size:24px;">Contrato disponível para assinatura</h1>
-              <p style="margin:8px 0 0;">${company.companyName || "AMAZONIKA Engenharia & Meio Ambiente"}</p>
+              <p style="margin:8px 0 0;">${signedCompany.name || signedCompany.legalName || "AMAZONIKA Engenharia & Meio Ambiente"}</p>
             </div>
 
             <div style="padding:24px;color:#1f2d26;">
-              <p>Prezado(a) ${contract.client.name},</p>
+              <p>Prezado(a) ${signedClient.name},</p>
 
               <p>
-                Seu contrato referente ao protocolo <strong>${contract.protocol.protocolNumber}</strong>
+                Seu contrato referente ao protocolo <strong>${signedProtocol.protocolNumber}</strong>
                 está disponível para conferência e assinatura eletrônica.
               </p>
 
               <div style="background:#f8fbf9;border:1px solid #dfe7e2;border-radius:14px;padding:16px;margin:18px 0;">
-                <p><strong>Contrato:</strong> ${contract.contractNumber}</p>
-                <p><strong>Serviço:</strong> ${contract.protocol.serviceType.name}</p>
+                <p><strong>Contrato:</strong> ${signedContract.contractNumber}</p>
+                <p><strong>Serviço:</strong> ${signedService.name}</p>
                 <p><strong>Valor:</strong> ${contractValueText}</p>
                 <p><strong>Status:</strong> Aguardando assinatura</p>
               </div>
@@ -4912,7 +4929,7 @@ app.post(
       const info = await transporter.sendMail({
         from: settings.smtpFrom,
         to: contract.client.email,
-        subject: `Contrato para assinatura — ${contract.contractNumber}`,
+        subject: `Contrato para assinatura — ${signedContract.contractNumber}`,
         html,
         attachments: getEmailImageAttachments(),
       });
