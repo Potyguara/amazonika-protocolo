@@ -5160,12 +5160,225 @@ app.get("/public/contracts/:token", async (req, res) => {
     }
 
     /*
-     * O documento apresentado publicamente deve ser a
-     * mesma revisão aprovada que poderá ser assinada.
+     * Antes da assinatura da CONTRATADA, a conferência
+     * pública utiliza a revisão aprovada viva.
      *
-     * Não utilizamos os campos jurídicos legados como
-     * fonte de verdade da conferência pública.
+     * Depois da assinatura da CONTRATADA, o documento
+     * público deve reproduzir exclusivamente o snapshot
+     * imutável efetivamente assinado.
      */
+    const contractorSignature =
+      await prisma.contractSignature.findFirst({
+        where: {
+          contractId:
+            contract.id,
+
+          signerRole:
+            "CONTRATADA",
+        },
+
+        orderBy: {
+          signedAt:
+            "desc",
+        },
+      });
+
+    if (contractorSignature) {
+      if (
+        !contractorSignature.contractRevisionId
+      ) {
+        return res.status(409).json({
+          code:
+            "CONTRACT_SIGNED_REVISION_MISMATCH",
+
+          message:
+            "A assinatura da CONTRATADA não está vinculada a uma revisão contratual válida.",
+        });
+      }
+
+      const frozenSigningDocument =
+        await loadFrozenContractSigningDocument(
+          {
+            prisma,
+          },
+
+          contract.id,
+          contractorSignature.contractRevisionId
+        );
+
+      if (
+        contractorSignature.documentHash !==
+          frozenSigningDocument.signingDocumentHash
+      ) {
+        return res.status(409).json({
+          code:
+            "CONTRACT_SIGNED_DOCUMENT_MISMATCH",
+
+          message:
+            "A assinatura da CONTRATADA não corresponde ao snapshot imutável do contrato.",
+        });
+      }
+
+      const signedSnapshot =
+        frozenSigningDocument.snapshot;
+
+      const signedContract =
+        signedSnapshot.contract;
+
+      const signedRevision =
+        signedSnapshot.revision;
+
+      const signedClient =
+        signedSnapshot.client;
+
+      const signedProtocol =
+        signedSnapshot.protocol;
+
+      const signedService =
+        signedSnapshot.service;
+
+      return res.json({
+        ...contract,
+
+        contractNumber:
+          signedContract.contractNumber,
+
+        title:
+          signedContract.title,
+
+        contractValueCents:
+          signedContract.contractValueCents,
+
+        entryAmountCents:
+          signedContract.entryAmountCents,
+
+        paymentMode:
+          signedContract.paymentMode,
+
+        startDate:
+          signedContract.startDate,
+
+        deadlineDate:
+          signedContract.deadlineDate,
+
+        client: {
+          id:
+            signedClient.id,
+
+          name:
+            signedClient.name,
+
+          cpfCnpj:
+            signedClient.cpfCnpj,
+
+          email:
+            signedClient.email,
+
+          phone:
+            signedClient.phone,
+        },
+
+        protocol: {
+          id:
+            signedProtocol.id,
+
+          protocolNumber:
+            signedProtocol.protocolNumber,
+
+          status:
+            contract.protocol.status,
+
+          serviceType: {
+            id:
+              signedService.id,
+
+            name:
+              signedService.name,
+          },
+        },
+
+        paymentSchedule:
+          signedSnapshot.paymentSchedule.map(
+            (item, index) => ({
+              id:
+                index + 1,
+
+              contractId:
+                signedContract.id,
+
+              type:
+                item.type,
+
+              installmentNumber:
+                item.installmentNumber,
+
+              totalInstallments:
+                item.totalInstallments,
+
+              amountCents:
+                item.amountCents,
+
+              dueDate:
+                item.dueDate,
+
+              dueDateExtensions:
+                [],
+            })
+          ),
+
+        approvedRevision: {
+          id:
+            signedRevision.id,
+
+          revisionNumber:
+            signedRevision.revisionNumber,
+
+          status:
+            signedRevision.status,
+
+          title:
+            signedRevision.title,
+
+          approvedAt:
+            null,
+
+          revisionDocumentHash:
+            frozenSigningDocument.revisionDocumentHash,
+
+          clauses:
+            signedRevision.clauses.map(
+              (clause, index) => ({
+                id:
+                  clause.id ??
+                  index + 1,
+
+                clauseKey:
+                  clause.clauseKey ||
+                  "",
+
+                title:
+                  clause.title,
+
+                body:
+                  clause.body,
+
+                sortOrder:
+                  clause.sortOrder,
+
+                source:
+                  clause.source,
+
+                required:
+                  clause.required,
+              })
+            ),
+        },
+
+        signingDocumentHash:
+          frozenSigningDocument.signingDocumentHash,
+      });
+    }
+
     const company =
       await getCompanySettings();
 
@@ -5241,6 +5454,19 @@ app.get("/public/contracts/:token", async (req, res) => {
         signingDocument.signingDocumentHash,
     });
   } catch (error: any) {
+    if (
+      error?.message ===
+      "CONTRACT_SIGNING_SNAPSHOT_NOT_MATERIALIZED"
+    ) {
+      return res.status(409).json({
+        code:
+          "CONTRACT_SIGNING_SNAPSHOT_REQUIRED",
+
+        message:
+          "O contrato não possui o snapshot imutável obrigatório da assinatura da CONTRATADA.",
+      });
+    }
+
     if (
       error?.message ===
       "CONTRACT_SIGNING_CONTRACT_NOT_FOUND"
