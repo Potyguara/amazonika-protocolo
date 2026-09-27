@@ -1833,23 +1833,6 @@ function hashContractSignatureOtpCode(params: {
     .digest("hex");
 }
 
-function createContractDocumentHash(contract: {
-  id: number;
-  contractNumber?: string | null;
-  htmlSnapshot?: string | null;
-}) {
-  return crypto
-    .createHash("sha256")
-    .update(
-      JSON.stringify({
-        id: contract.id,
-        contractNumber: contract.contractNumber || null,
-        htmlSnapshot: contract.htmlSnapshot || "",
-      })
-    )
-    .digest("hex");
-}
-
 function createContractSignatureHash(params: {
   contractId: number;
   signerRole: string;
