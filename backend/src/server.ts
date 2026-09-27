@@ -1937,27 +1937,6 @@ async function generateSignedContractPdf(
       },
 
       include: {
-        client: true,
-
-        protocol: {
-          include: {
-            serviceType: true,
-          },
-        },
-
-        proposal: true,
-
-        paymentSchedule: {
-          orderBy: [
-            {
-              dueDate: "asc",
-            },
-            {
-              installmentNumber: "asc",
-            },
-          ],
-        },
-
         signatures: {
           orderBy: {
             signedAt: "asc",
@@ -1977,15 +1956,6 @@ async function generateSignedContractPdf(
       "SIGNED_PDF_CONTRACT_NOT_SIGNED"
     );
   }
-
-  const contractValueCents = requireCanonicalCents(
-    contract.contractValueCents,
-    "Valor total do contrato assinado"
-  );
-  const contractEntryAmountCents = requireCanonicalCents(
-    contract.entryAmountCents,
-    "Entrada do contrato assinado"
-  );
 
   const contractorSignature =
     contract.signatures.find(
@@ -2008,33 +1978,9 @@ async function generateSignedContractPdf(
     );
   }
 
-  /*
-   * Resolve novamente o documento canônico vigente.
-   *
-   * O PDF final só pode ser produzido a partir da mesma
-   * revisão e do mesmo conteúdo assinados por ambas as
-   * partes.
-   */
-  const company =
-    await getCompanySettings();
-
-  const signingDocument =
-    await resolveContractSigningDocument(
-      {
-        prisma,
-
-        getCompanySettings:
-          async () => company,
-      },
-
-      contract.id
-    );
-
   if (
-    contractorSignature.contractRevisionId !==
-      signingDocument.revisionId ||
-    clientSignature.contractRevisionId !==
-      signingDocument.revisionId
+    !contractorSignature.contractRevisionId ||
+    !clientSignature.contractRevisionId
   ) {
     throw new Error(
       "SIGNED_PDF_REVISION_MISMATCH"
@@ -2059,20 +2005,82 @@ async function generateSignedContractPdf(
     );
   }
 
+  /*
+   * O PDF assinado é reproduzido exclusivamente
+   * a partir do snapshot imutável materializado
+   * no momento da assinatura da CONTRATADA.
+   *
+   * Dados vivos de cliente, empresa, serviço,
+   * valores ou cronograma não participam da
+   * reconstrução documental.
+   */
+  const frozenSigningDocument =
+    await loadFrozenContractSigningDocument(
+      {
+        prisma,
+      },
+
+      contract.id,
+      contractorSignature.contractRevisionId
+    );
+
   if (
-    contractorSignature.documentHash !==
-      signingDocument.signingDocumentHash
+    frozenSigningDocument.revisionId !==
+      contractorSignature.contractRevisionId ||
+    frozenSigningDocument.revisionId !==
+      clientSignature.contractRevisionId
   ) {
     throw new Error(
-      "SIGNED_PDF_CURRENT_DOCUMENT_CHANGED"
+      "SIGNED_PDF_REVISION_MISMATCH"
     );
   }
 
-  const currentDocumentHash =
-    signingDocument.signingDocumentHash;
+  if (
+    frozenSigningDocument.signingDocumentHash !==
+      contractorSignature.documentHash ||
+    frozenSigningDocument.signingDocumentHash !==
+      clientSignature.documentHash
+  ) {
+    throw new Error(
+      "SIGNED_PDF_DOCUMENT_HASH_MISMATCH"
+    );
+  }
+
+  const signedSnapshot =
+    frozenSigningDocument.snapshot;
 
   const signedRevision =
-    signingDocument.revision;
+    signedSnapshot.revision;
+
+  const signedCompany =
+    signedSnapshot.company;
+
+  const signedClient =
+    signedSnapshot.client;
+
+  const signedService =
+    signedSnapshot.service;
+
+  const signedContractData =
+    signedSnapshot.contract;
+
+  const signedPaymentSchedule =
+    signedSnapshot.paymentSchedule;
+
+  const contractValueCents =
+    requireCanonicalCents(
+      signedContractData.contractValueCents,
+      "Valor total do contrato assinado"
+    );
+
+  const contractEntryAmountCents =
+    requireCanonicalCents(
+      signedContractData.entryAmountCents,
+      "Entrada do contrato assinado"
+    );
+
+  const currentDocumentHash =
+    frozenSigningDocument.signingDocumentHash;
 
   /*
    * =====================================================
@@ -2115,7 +2123,7 @@ async function generateSignedContractPdf(
   );
 
   const safeContractNumber =
-    contract.contractNumber
+    signedContractData.contractNumber
       .replace(
         /[^a-zA-Z0-9._-]+/g,
         "-"
@@ -2389,11 +2397,11 @@ async function generateSignedContractPdf(
 
       info: {
         Title:
-          `Contrato ${contract.contractNumber}`,
+          `Contrato ${signedContractData.contractNumber}`,
 
         Author:
-          company.companyLegalName ||
-          company.companyName ||
+          signedCompany.legalName ||
+          signedCompany.name ||
           "AMAZONIKA",
 
         Subject:
@@ -2565,7 +2573,7 @@ async function generateSignedContractPdf(
       "#123c32"
     )
     .text(
-      company.companyName ||
+      signedCompany.name ||
         "AMAZONIKA ENGENHARIA",
       {
         align:
@@ -2583,7 +2591,7 @@ async function generateSignedContractPdf(
       "#334155"
     )
     .text(
-      company.companyLegalName ||
+      signedCompany.legalName ||
         "AMAZONIKA ENGENHARIA LTDA",
       {
         align:
@@ -2599,7 +2607,7 @@ async function generateSignedContractPdf(
     )
     .text(
       `CNPJ: ${formatCpfCnpj(
-        company.companyCnpj
+        signedCompany.cnpj
       )}`,
       {
         align:
@@ -2609,11 +2617,11 @@ async function generateSignedContractPdf(
 
   const companyAddress =
     [
-      company.companyAddress,
-      company.companyCity,
-      company.companyState,
-      company.companyZipCode
-        ? `CEP ${company.companyZipCode}`
+      signedCompany.address,
+      signedCompany.city,
+      signedCompany.state,
+      signedCompany.zipCode
+        ? `CEP ${signedCompany.zipCode}`
         : "",
     ]
       .filter(Boolean)
@@ -2631,12 +2639,8 @@ async function generateSignedContractPdf(
 
   const companyContact =
     [
-      company.companyEmail,
-      company.companyPhone,
-      company.companyWhatsapp,
-      normalizeWebsite(
-        company.companyWebsite
-      ),
+      signedCompany.email,
+      signedCompany.phone,
     ]
       .filter(Boolean)
       .join(" | ");
@@ -2692,7 +2696,7 @@ async function generateSignedContractPdf(
       "#123c32"
     )
     .text(
-      contract.contractNumber,
+      signedContractData.contractNumber,
       {
         align:
           "center",
@@ -2731,14 +2735,14 @@ async function generateSignedContractPdf(
 
   labelValue(
     "CONTRATADA",
-    company.companyLegalName ||
-      company.companyName
+    signedCompany.legalName ||
+      signedCompany.name
   );
 
   labelValue(
     "CNPJ",
     formatCpfCnpj(
-      company.companyCnpj
+      signedCompany.cnpj
     )
   );
 
@@ -2746,27 +2750,27 @@ async function generateSignedContractPdf(
 
   labelValue(
     "CONTRATANTE",
-    contract.client.name
+    signedClient.name
   );
 
   labelValue(
     "CPF/CNPJ",
     formatCpfCnpj(
-      contract.client.cpfCnpj
+      signedClient.cpfCnpj
     )
   );
 
   labelValue(
     "E-mail",
-    contract.client.email
+    signedClient.email
   );
 
   if (
-    contract.client.address
+    signedClient.address
   ) {
     labelValue(
       "Endereço",
-      contract.client.address
+      signedClient.address
     );
   }
 
@@ -2805,9 +2809,7 @@ async function generateSignedContractPdf(
 
   labelValue(
     "Serviço",
-    contract.protocol
-      .serviceType
-      ?.name
+    signedService.name
   );
 
   labelValue(
@@ -2829,7 +2831,7 @@ async function generateSignedContractPdf(
   labelValue(
     "Forma de pagamento",
     paymentModeLabel(
-      contract.paymentMode
+      signedContractData.paymentMode
     )
   );
 
@@ -2839,7 +2841,7 @@ async function generateSignedContractPdf(
 
   for (
     const item of
-    contract.paymentSchedule
+    signedPaymentSchedule
   ) {
     const stage =
       item.type === "ENTRADA"
@@ -2894,7 +2896,7 @@ async function generateSignedContractPdf(
       "#475569"
     )
     .text(
-      `Documento: ${contract.contractNumber}`,
+      `Documento: ${signedContractData.contractNumber}`,
       {
         align:
           "center",
@@ -3072,7 +3074,7 @@ async function generateSignedContractPdf(
       "#334155"
     )
     .text(
-      signingDocument.revisionDocumentHash,
+      frozenSigningDocument.revisionDocumentHash,
       {
         width:
           contentWidth,
