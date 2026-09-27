@@ -6924,11 +6924,20 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
         const emailSettings =
           await getSmtpSettings();
 
-        const emailCompany =
-          await getCompanySettings();
-
         const emailTransporter =
           await createTransporterFromSettings();
+
+        const signedEmailSnapshot =
+          frozenSigningDocument.snapshot;
+
+        const signedEmailCompany =
+          signedEmailSnapshot.company;
+
+        const signedEmailContract =
+          signedEmailSnapshot.contract;
+
+        const signedEmailProtocol =
+          signedEmailSnapshot.protocol;
 
         if (!emailTransporter) {
           throw new Error(
@@ -6982,7 +6991,8 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
                   margin:8px 0 0;
                 ">
                   ${
-                    emailCompany.companyName ||
+                    signedEmailCompany.name ||
+                    signedEmailCompany.legalName ||
                     "AMAZONIKA ENGENHARIA"
                   }
                 </p>
@@ -6999,7 +7009,7 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
 
                 <p>
                   O contrato
-                  <strong>${contract.contractNumber}</strong>
+                  <strong>${signedEmailContract.contractNumber}</strong>
                   foi assinado eletronicamente com sucesso.
                 </p>
 
@@ -7013,12 +7023,12 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
 
                   <p>
                     <strong>Contrato:</strong>
-                    ${contract.contractNumber}
+                    ${signedEmailContract.contractNumber}
                   </p>
 
                   <p>
                     <strong>Protocolo:</strong>
-                    ${contract.protocol.protocolNumber}
+                    ${signedEmailProtocol.protocolNumber}
                   </p>
 
                   <p>
@@ -7053,7 +7063,8 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
                   Atenciosamente,<br/>
                   <strong>
                     ${
-                      emailCompany.companyName ||
+                      signedEmailCompany.name ||
+                      signedEmailCompany.legalName ||
                       "AMAZONIKA ENGENHARIA"
                     }
                   </strong>
@@ -7073,7 +7084,7 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
               signedContractRecipient,
 
             subject:
-              `Contrato assinado — ${contract.contractNumber}`,
+              `Contrato assinado — ${signedEmailContract.contractNumber}`,
 
             html:
               signedContractEmailHtml,
