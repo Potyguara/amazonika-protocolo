@@ -5124,56 +5124,6 @@ app.post(
 );
 
 
-/*
- * =========================================================
- * ROTA TEMPORÁRIA — TESTE DO PDF FINAL ASSINADO
- * Remover após validação.
- * =========================================================
- */
-app.post(
-  "/contracts/:id/generate-signed-pdf-test",
-  authMiddleware,
-  requireRoles(["GERENTE", "PROGRAMADOR"]),
-  async (req: any, res) => {
-    try {
-      const contractId =
-        Number(req.params.id);
-
-      if (!contractId) {
-        return res.status(400).json({
-          message:
-            "ID do contrato inválido.",
-        });
-      }
-
-      const pdf =
-        await generateSignedContractPdf(
-          contractId
-        );
-
-      return res.json({
-        message:
-          "PDF final assinado gerado com sucesso.",
-        contractId,
-        ...pdf,
-      });
-    } catch (error) {
-      console.error(
-        "Erro ao gerar PDF final assinado:",
-        error
-      );
-
-      return res.status(500).json({
-        message:
-          error instanceof Error
-            ? error.message
-            : "Erro ao gerar PDF final assinado.",
-      });
-    }
-  }
-);
-
-
 app.get("/public/contracts/:token", async (req, res) => {
   try {
     const token = req.params.token;
