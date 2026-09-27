@@ -4771,35 +4771,15 @@ app.post(
         });
       }
 
-      let frozenSigningDocument:
-        Awaited<
-          ReturnType<
-            typeof loadFrozenContractSigningDocument
-          >
-        > | null = null;
+      const frozenSigningDocument =
+        await loadFrozenContractSigningDocument(
+          {
+            prisma,
+          },
 
-      try {
-        frozenSigningDocument =
-          await loadFrozenContractSigningDocument(
-            {
-              prisma,
-            },
-
-            contract.id,
-            contractorSignature.contractRevisionId
-          );
-      } catch (error: any) {
-        /*
-         * Compatibilidade temporária com assinaturas
-         * anteriores à implantação do snapshot imutável.
-         */
-        if (
-          error?.message !==
-          "CONTRACT_SIGNING_SNAPSHOT_NOT_MATERIALIZED"
-        ) {
-          throw error;
-        }
-      }
+          contract.id,
+          contractorSignature.contractRevisionId
+        );
 
       const signingDocument =
         await resolveContractSigningDocument(
@@ -4812,19 +4792,16 @@ app.post(
         );
 
       const expectedRevisionId =
-        frozenSigningDocument?.revisionId ??
-        contractorSignature.contractRevisionId;
+        frozenSigningDocument.revisionId;
 
       const expectedDocumentHash =
-        frozenSigningDocument?.signingDocumentHash ??
-        contractorSignature.documentHash;
+        frozenSigningDocument.signingDocumentHash;
 
       /*
        * Quando há snapshot congelado, a própria assinatura
        * também precisa apontar exatamente para ele.
        */
       if (
-        frozenSigningDocument &&
         contractorSignature.documentHash !==
           frozenSigningDocument.signingDocumentHash
       ) {
@@ -5094,6 +5071,19 @@ app.post(
 
           message:
             "O contrato possui dados financeiros inválidos ou incompletos para envio.",
+        });
+      }
+
+      if (
+        error?.message ===
+        "CONTRACT_SIGNING_SNAPSHOT_NOT_MATERIALIZED"
+      ) {
+        return res.status(409).json({
+          code:
+            "CONTRACT_SIGNING_SNAPSHOT_REQUIRED",
+
+          message:
+            "O contrato não possui o snapshot imutável obrigatório da assinatura da CONTRATADA.",
         });
       }
 
@@ -5407,35 +5397,15 @@ app.post("/public/contracts/:token/signature-otp", async (req, res) => {
       });
     }
 
-    let frozenSigningDocument:
-      Awaited<
-        ReturnType<
-          typeof loadFrozenContractSigningDocument
-        >
-      > | null = null;
+    const frozenSigningDocument =
+      await loadFrozenContractSigningDocument(
+        {
+          prisma,
+        },
 
-    try {
-      frozenSigningDocument =
-        await loadFrozenContractSigningDocument(
-          {
-            prisma,
-          },
-
-          contract.id,
-          contractorSignature.contractRevisionId
-        );
-    } catch (error: any) {
-      /*
-       * Compatibilidade temporária com assinaturas
-       * anteriores ao snapshot imutável.
-       */
-      if (
-        error?.message !==
-        "CONTRACT_SIGNING_SNAPSHOT_NOT_MATERIALIZED"
-      ) {
-        throw error;
-      }
-    }
+        contract.id,
+        contractorSignature.contractRevisionId
+      );
 
     const company =
       await getCompanySettings();
@@ -5453,15 +5423,12 @@ app.post("/public/contracts/:token/signature-otp", async (req, res) => {
       );
 
     const expectedRevisionId =
-      frozenSigningDocument?.revisionId ??
-      contractorSignature.contractRevisionId;
+      frozenSigningDocument.revisionId;
 
     const expectedDocumentHash =
-      frozenSigningDocument?.signingDocumentHash ??
-      contractorSignature.documentHash;
+      frozenSigningDocument.signingDocumentHash;
 
     if (
-      frozenSigningDocument &&
       contractorSignature.documentHash !==
         frozenSigningDocument.signingDocumentHash
     ) {
@@ -5771,6 +5738,19 @@ app.post("/public/contracts/:token/signature-otp", async (req, res) => {
 
         message:
           "O contrato possui dados financeiros inválidos ou incompletos para assinatura.",
+      });
+    }
+
+    if (
+      error?.message ===
+      "CONTRACT_SIGNING_SNAPSHOT_NOT_MATERIALIZED"
+    ) {
+      return res.status(409).json({
+        code:
+          "CONTRACT_SIGNING_SNAPSHOT_REQUIRED",
+
+        message:
+          "O contrato não possui o snapshot imutável obrigatório da assinatura da CONTRATADA.",
       });
     }
 
@@ -6111,35 +6091,15 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
       });
     }
 
-    let frozenSigningDocument:
-      Awaited<
-        ReturnType<
-          typeof loadFrozenContractSigningDocument
-        >
-      > | null = null;
+    const frozenSigningDocument =
+      await loadFrozenContractSigningDocument(
+        {
+          prisma,
+        },
 
-    try {
-      frozenSigningDocument =
-        await loadFrozenContractSigningDocument(
-          {
-            prisma,
-          },
-
-          contract.id,
-          contractorSignature.contractRevisionId
-        );
-    } catch (error: any) {
-      /*
-       * Compatibilidade temporária com contratos
-       * assinados antes da implantação do snapshot.
-       */
-      if (
-        error?.message !==
-        "CONTRACT_SIGNING_SNAPSHOT_NOT_MATERIALIZED"
-      ) {
-        throw error;
-      }
-    }
+        contract.id,
+        contractorSignature.contractRevisionId
+      );
 
     const company =
       await getCompanySettings();
@@ -6157,15 +6117,12 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
       );
 
     const expectedRevisionId =
-      frozenSigningDocument?.revisionId ??
-      contractorSignature.contractRevisionId;
+      frozenSigningDocument.revisionId;
 
     const expectedDocumentHash =
-      frozenSigningDocument?.signingDocumentHash ??
-      contractorSignature.documentHash;
+      frozenSigningDocument.signingDocumentHash;
 
     if (
-      frozenSigningDocument &&
       contractorSignature.documentHash !==
         frozenSigningDocument.signingDocumentHash
     ) {
@@ -6211,12 +6168,10 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
       expectedRevisionId;
 
     const contractRevisionNumber =
-      frozenSigningDocument?.revisionNumber ??
-      signingDocument.revisionNumber;
+      frozenSigningDocument.revisionNumber;
 
     const revisionDocumentHash =
-      frozenSigningDocument?.revisionDocumentHash ??
-      signingDocument.revisionDocumentHash;
+      frozenSigningDocument.revisionDocumentHash;
 
     const signatureHash =
       createContractSignatureHash({
@@ -6319,48 +6274,23 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
             );
           }
 
-          let currentFrozenSigningDocument:
-            Awaited<
-              ReturnType<
-                typeof loadFrozenContractSigningDocument
-              >
-            > | null = null;
+          const currentFrozenSigningDocument =
+            await loadFrozenContractSigningDocument(
+              {
+                prisma:
+                  tx,
+              },
 
-          try {
-            currentFrozenSigningDocument =
-              await loadFrozenContractSigningDocument(
-                {
-                  prisma:
-                    tx,
-                },
-
-                currentContract.id,
-                currentContractorSignature
-                  .contractRevisionId
-              );
-          } catch (error: any) {
-            /*
-             * Compatibilidade temporária com assinaturas
-             * anteriores ao snapshot imutável.
-             */
-            if (
-              error?.message !==
-              "CONTRACT_SIGNING_SNAPSHOT_NOT_MATERIALIZED"
-            ) {
-              throw error;
-            }
-          }
+              currentContract.id,
+              currentContractorSignature
+                .contractRevisionId
+            );
 
           const currentExpectedRevisionId =
-            currentFrozenSigningDocument?.revisionId ??
-            currentContractorSignature
-              .contractRevisionId;
+            currentFrozenSigningDocument.revisionId;
 
           const currentExpectedDocumentHash =
-            currentFrozenSigningDocument
-              ?.signingDocumentHash ??
-            currentContractorSignature
-              .documentHash;
+            currentFrozenSigningDocument.signingDocumentHash;
 
           /*
            * O documento congelado não pode mudar entre
@@ -7142,6 +7072,19 @@ app.post("/public/contracts/:token/sign", async (req, res) => {
       },
     });
   } catch (error: any) {
+    if (
+      error?.message ===
+      "CONTRACT_SIGNING_SNAPSHOT_NOT_MATERIALIZED"
+    ) {
+      return res.status(409).json({
+        code:
+          "CONTRACT_SIGNING_SNAPSHOT_REQUIRED",
+
+        message:
+          "O contrato não possui o snapshot imutável obrigatório da assinatura da CONTRATADA.",
+      });
+    }
+
     console.error(
       "Erro ao assinar contrato:",
       error
