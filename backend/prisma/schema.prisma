@@ -1403,10 +1403,10 @@ model ContractSignature {
 
   // Revisão contratual efetivamente assinada.
   //
-  // Opcional para preservar compatibilidade com assinaturas
-  // legadas realizadas antes da arquitetura de revisões.
-  contractRevisionId Int?
-  contractRevision   ContractRevision? @relation(fields: [contractRevisionId], references: [id], onDelete: SetNull)
+  // Toda assinatura deve estar vinculada à revisão exata
+  // cujo snapshot documental foi assinado.
+  contractRevisionId Int
+  contractRevision   ContractRevision @relation(fields: [contractRevisionId], references: [id], onDelete: Restrict)
 
   // CONTRATANTE ou CONTRATADA
   signerRole String
