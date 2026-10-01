@@ -895,6 +895,13 @@ payFinanceTransaction(id: number) {
   });
 },
 
+
+cancelFinanceTransaction(id: number) {
+  return request(`/finance/transactions/${id}/cancel`, {
+    method: "PATCH",
+  });
+},
+
 financeFixedCosts() {
   return request("/finance/fixed-costs");
 },

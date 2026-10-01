@@ -10710,7 +10710,8 @@ function isFinanceTransactionConsolidated(item: BackendFinanceTransaction) {
 }
 
 function isFinanceTransactionProtected(item: BackendFinanceTransaction) {
-  return isFinanceTransactionConsolidated(item) || Boolean(item.billingCharge) ||
+  return item.status === "CANCELADO" ||
+    isFinanceTransactionConsolidated(item) || Boolean(item.billingCharge) ||
     item.source === "CONTRATO" || item.source === "COMISSAO_PARCEIRO" ||
     Boolean(item.providerChargeId || item.providerTxId || item.chargeCreatedAt ||
       item.chargeExpiresAt || (item.chargeStatus && item.chargeStatus !== "PENDING"));
@@ -12847,6 +12848,52 @@ async function handleSaveTransaction() {
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Erro ao marcar como pago."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+
+  async function handleCancelTransaction(
+    item: BackendFinanceTransaction
+  ) {
+    if (
+      item.status !== "PENDENTE" ||
+      item.installmentGroupId ||
+      isFinanceTransactionProtected(item)
+    ) {
+      setError(
+        "Este lançamento não pode ser cancelado administrativamente."
+      );
+      return;
+    }
+
+    const confirmed =
+      window.confirm(
+        `Cancelar o lançamento "${item.description}"?\n\nO registro permanecerá no histórico financeiro com status CANCELADO.`
+      );
+
+    if (!confirmed) return;
+
+    try {
+      setSaving(true);
+      clearMessages();
+
+      await api.cancelFinanceTransaction(
+        item.id
+      );
+
+      setSuccess(
+        "Lançamento cancelado e preservado no histórico."
+      );
+
+      await loadFinance();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao cancelar lançamento."
       );
     } finally {
       setSaving(false);
@@ -15792,14 +15839,18 @@ async function handleDeleteSalary(id: number) {
                           {!isFinanceTransactionProtected(item) &&
                             !item.installmentGroupId && (
                               <>
-                                <button
-                                  className="mini-button"
-                                  type="button"
-                                  disabled
-                                  title="Cancelamento indisponível nesta etapa para preservar o histórico financeiro."
-                                >
-                                  Cancelar indisponível
-                                </button>
+                                {item.status === "PENDENTE" && (
+                                  <button
+                                    className="mini-button"
+                                    type="button"
+                                    disabled={saving}
+                                    onClick={() =>
+                                      handleCancelTransaction(item)
+                                    }
+                                  >
+                                    Cancelar
+                                  </button>
+                                )}
 
                                 <button
                                   className="mini-button danger"

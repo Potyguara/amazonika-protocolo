@@ -15831,7 +15831,7 @@ app.get(
 
 // Proteções emergenciais compartilhadas. Leitura, mutação e auditoria
 // permanecem na mesma transação local; nenhuma chamada bancária ocorre aqui.
-function financeMutationHandler(operation: "UPDATE" | "PAY" | "DELETE") {
+function financeMutationHandler(operation: "UPDATE" | "PAY" | "CANCEL" | "DELETE") {
   return async (req: any, res: any) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) {
@@ -15865,6 +15865,48 @@ function financeMutationHandler(operation: "UPDATE" | "PAY" | "DELETE") {
             "Um lançamento cancelado não pode receber baixa administrativa.");
         }
 
+
+        if (
+          operation === "CANCEL" &&
+          current.status === "CANCELADO"
+        ) {
+          return {
+            status: 200,
+            body: current,
+          };
+        }
+
+        if (
+          operation === "CANCEL" &&
+          current.status !== "PENDENTE"
+        ) {
+          return conflict(
+            "FINANCIAL_TRANSACTION_CANCEL_NOT_ALLOWED",
+            "Somente lançamentos pendentes podem ser cancelados."
+          );
+        }
+
+        if (
+          current.status === "CANCELADO" &&
+          operation === "UPDATE" &&
+          !notesOnly
+        ) {
+          return conflict(
+            "FINANCIAL_TRANSACTION_CANCELLED",
+            "Lançamentos cancelados são históricos e não podem ter seus dados financeiros alterados."
+          );
+        }
+
+        if (
+          current.status === "CANCELADO" &&
+          operation === "DELETE"
+        ) {
+          return conflict(
+            "FINANCIAL_TRANSACTION_CANCELLED",
+            "Lançamentos cancelados permanecem no histórico financeiro."
+          );
+        }
+
         /*
          * Baixa administrativa nunca pode liquidar uma obrigação
          * que já entrou no fluxo bancário.
@@ -15885,8 +15927,15 @@ function financeMutationHandler(operation: "UPDATE" | "PAY" | "DELETE") {
             "Este lançamento possui cobrança bancária. A confirmação do pagamento deve ocorrer pela conciliação bancária."
           );
         }
-        if (consolidated && operation !== "PAY" &&
-            (operation === "DELETE" || !notesOnly)) {
+        if (
+          consolidated &&
+          operation !== "PAY" &&
+          (
+            operation === "DELETE" ||
+            operation === "CANCEL" ||
+            !notesOnly
+          )
+        ) {
           return conflict("FINANCIAL_TRANSACTION_CONSOLIDATED",
             "Este lançamento possui pagamento consolidado. Os dados financeiros são protegidos; somente observações podem ser atualizadas.");
         }
@@ -15936,7 +15985,19 @@ function financeMutationHandler(operation: "UPDATE" | "PAY" | "DELETE") {
           ? await tx.financialTransaction.delete({ where: { id } })
           : await tx.financialTransaction.update({
               where: { id },
-              data: operation === "PAY" ? { status: "PAGO", paidAt: new Date() } : {
+              data:
+                operation === "PAY"
+                  ? {
+                      status: "PAGO",
+                      paidAt: new Date(),
+                    }
+                  : operation === "CANCEL"
+                    ? {
+                        status: "CANCELADO",
+                        paidAt: null,
+                        autoChargeEnabled: false,
+                      }
+                    : {
                 type: body.type,
                 source: body.source,
                 status: body.status,
@@ -16745,6 +16806,14 @@ app.patch(
   authMiddleware,
   requireRoles(["GERENTE", "PROGRAMADOR"]),
   financeMutationHandler("PAY")
+);
+
+
+app.patch(
+  "/finance/transactions/:id/cancel",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  financeMutationHandler("CANCEL")
 );
 
 app.delete(
