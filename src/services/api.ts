@@ -996,6 +996,20 @@ deleteFinancialTransaction(id: number) {
   });
 },
 
+
+permanentDeleteFinancialPaymentPlan(
+  installmentGroupId: string
+) {
+  return request(
+    `/finance/payment-plans/${encodeURIComponent(
+      installmentGroupId
+    )}/permanent`,
+    {
+      method: "DELETE",
+    }
+  );
+},
+
 deleteFixedCost(id: number) {
   return request(`/finance/fixed-costs/${id}`, {
     method: "DELETE",
@@ -1010,6 +1024,24 @@ deleteEmployeeSalary(id: number) {
 
 deleteFinanceCategory(id: number) {
   return request(`/finance/categories/${id}`, {
+    method: "DELETE",
+  });
+},
+
+permanentDeleteFixedCost(id: number) {
+  return request(`/finance/fixed-costs/${id}/permanent`, {
+    method: "DELETE",
+  });
+},
+
+permanentDeleteEmployeeSalary(id: number) {
+  return request(`/finance/salaries/${id}/permanent`, {
+    method: "DELETE",
+  });
+},
+
+permanentDeleteFinanceCategory(id: number) {
+  return request(`/finance/categories/${id}/permanent`, {
     method: "DELETE",
   });
 },
@@ -1838,6 +1870,12 @@ updatePartner(
 togglePartnerActive(id: number) {
   return request(`/partners/${id}/toggle-active`, {
     method: "PATCH",
+  });
+},
+
+permanentDeletePartner(id: number) {
+  return request(`/partners/${id}/permanent`, {
+    method: "DELETE",
   });
 },
 

@@ -355,6 +355,158 @@ export function registerPartnerRoutes({
     }
   );
 
+
+  // ------------------------------------------------------
+  // EXCLUSÃO DEFINITIVA
+  // ------------------------------------------------------
+
+  app.delete(
+    "/partners/:id/permanent",
+    authMiddleware,
+    requireRoles(["PROGRAMADOR"]),
+    async (req: any, res) => {
+      const id =
+        Number(req.params.id);
+
+      if (
+        !Number.isInteger(id) ||
+        id <= 0
+      ) {
+        return res.status(400).json({
+          message:
+            "ID do parceiro inválido.",
+        });
+      }
+
+      try {
+        const result =
+          await prisma.$transaction(
+            async (tx) => {
+              const partner =
+                await tx.partner.findUnique({
+                  where: { id },
+
+                  include: {
+                    _count: {
+                      select: {
+                        commissions: true,
+                      },
+                    },
+                  },
+                });
+
+              if (!partner) {
+                return {
+                  status: 404,
+
+                  body: {
+                    message:
+                      "Parceiro não encontrado.",
+                  },
+                };
+              }
+
+              if (
+                partner._count.commissions > 0
+              ) {
+                return {
+                  status: 409,
+
+                  body: {
+                    code:
+                      "PARTNER_IN_USE",
+
+                    message:
+                      "Este parceiro não pode ser excluído definitivamente porque possui comissões ou indicações vinculadas.",
+
+                    commissions:
+                      partner._count.commissions,
+                  },
+                };
+              }
+
+              await tx.partner.delete({
+                where: { id },
+              });
+
+              await tx.auditLog.create({
+                data: {
+                  userId:
+                    req.user?.id || null,
+
+                  userName:
+                    req.user?.name || null,
+
+                  userEmail:
+                    req.user?.email || null,
+
+                  userRole:
+                    req.user?.role || null,
+
+                  action:
+                    "PERMANENT_DELETE_PARTNER",
+
+                  entity:
+                    "Partner",
+
+                  entityId:
+                    String(partner.id),
+
+                  description:
+                    `Parceiro ${partner.name} excluído definitivamente.`,
+
+                  ipAddress:
+                    req.ip,
+
+                  metadata:
+                    JSON.stringify({
+                      id:
+                        partner.id,
+
+                      name:
+                        partner.name,
+
+                      cpfCnpj:
+                        partner.cpfCnpj,
+
+                      defaultPercent:
+                        partner.defaultPercent,
+
+                      active:
+                        partner.active,
+                    }),
+                },
+              });
+
+              return {
+                status: 200,
+
+                body: {
+                  deleted: true,
+                  id: partner.id,
+                },
+              };
+            }
+          );
+
+        return res
+          .status(result.status)
+          .json(result.body);
+
+      } catch (error) {
+        console.error(
+          "Erro ao excluir definitivamente parceiro:",
+          error
+        );
+
+        return res.status(500).json({
+          message:
+            "Erro ao excluir definitivamente o parceiro.",
+        });
+      }
+    }
+  );
+
   // ------------------------------------------------------
   // RANKING
   // ------------------------------------------------------

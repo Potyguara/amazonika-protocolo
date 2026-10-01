@@ -10819,6 +10819,9 @@ type BackendProLaboreAdvance = {
 function FinancePage() {
   const currentMonth = new Date().toISOString().slice(0, 7);
 
+  const isProgrammer =
+    currentRole() === "PROGRAMADOR";
+
   const [activeTab, setActiveTab] = useState<
     | "OVERVIEW"
     | "TRANSACTIONS"
@@ -12920,6 +12923,109 @@ async function handleDeleteCategory(id: number) {
   }
 }
 
+
+async function handlePermanentDeleteFixedCost(
+  item: BackendFinanceFixedCost
+) {
+  const confirmed = window.confirm(
+    `EXCLUSÃO DEFINITIVA\n\nDeseja apagar permanentemente o custo fixo "${item.description}"?\n\nEsta ação não pode ser desfeita.`
+  );
+
+  if (!confirmed) return;
+
+  try {
+    setSaving(true);
+    setError("");
+    setSuccess("");
+
+    await api.permanentDeleteFixedCost(
+      item.id
+    );
+
+    setSuccess(
+      "Custo fixo excluído definitivamente."
+    );
+
+    await loadFinance();
+  } catch (err) {
+    setError(
+      err instanceof Error
+        ? err.message
+        : "Erro ao excluir definitivamente custo fixo."
+    );
+  } finally {
+    setSaving(false);
+  }
+}
+
+async function handlePermanentDeleteSalary(
+  item: BackendFinanceSalary
+) {
+  const confirmed = window.confirm(
+    `EXCLUSÃO DEFINITIVA\n\nDeseja apagar permanentemente o salário de "${item.employeeName}"?\n\nEsta ação não pode ser desfeita.`
+  );
+
+  if (!confirmed) return;
+
+  try {
+    setSaving(true);
+    setError("");
+    setSuccess("");
+
+    await api.permanentDeleteEmployeeSalary(
+      item.id
+    );
+
+    setSuccess(
+      "Salário excluído definitivamente."
+    );
+
+    await loadFinance();
+  } catch (err) {
+    setError(
+      err instanceof Error
+        ? err.message
+        : "Erro ao excluir definitivamente salário."
+    );
+  } finally {
+    setSaving(false);
+  }
+}
+
+async function handlePermanentDeleteCategory(
+  category: BackendFinanceCategory
+) {
+  const confirmed = window.confirm(
+    `EXCLUSÃO DEFINITIVA\n\nDeseja apagar permanentemente a categoria "${category.name}"?\n\nA exclusão será bloqueada se existirem registros vinculados.`
+  );
+
+  if (!confirmed) return;
+
+  try {
+    setSaving(true);
+    setError("");
+    setSuccess("");
+
+    await api.permanentDeleteFinanceCategory(
+      category.id
+    );
+
+    setSuccess(
+      "Categoria excluída definitivamente."
+    );
+
+    await loadFinance();
+  } catch (err) {
+    setError(
+      err instanceof Error
+        ? err.message
+        : "Erro ao excluir definitivamente categoria."
+    );
+  } finally {
+    setSaving(false);
+  }
+}
+
   function resetSalaryForm() {
     setEditingSalary(null);
     setSalaryEmployeeName("");
@@ -13063,6 +13169,65 @@ async function handleDeleteSalary(id: number) {
 
   const resultIsPositive = (summary?.resultadoPrevistoCents ?? 0) >= 0;
 
+
+  async function handlePermanentDeletePaymentPlan(
+    installmentGroupId: string
+  ) {
+    const plan =
+      viewingPaymentPlan.filter(
+        (item) =>
+          item.installmentGroupId ===
+          installmentGroupId
+      );
+
+    if (
+      plan.length === 0
+    ) {
+      setError(
+        "Plano financeiro não encontrado."
+      );
+      return;
+    }
+
+    const confirmed =
+      window.confirm(
+        `EXCLUSÃO DEFINITIVA DO PLANO\n\nSerão apagados ${plan.length} lançamento(s) do plano ${installmentGroupId}.\n\nA operação será bloqueada automaticamente se existir pagamento, cobrança bancária, contrato ou comissão vinculada.\n\nDeseja continuar?`
+      );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setSaving(true);
+      setError("");
+      setSuccess("");
+
+      const result =
+        await api.permanentDeleteFinancialPaymentPlan(
+          installmentGroupId
+        ) as {
+          deleted?: boolean;
+          deletedCount?: number;
+        };
+
+      setViewingPaymentPlan([]);
+
+      setSuccess(
+        `Plano financeiro excluído definitivamente. ${result.deletedCount ?? plan.length} lançamento(s) removido(s).`
+      );
+
+      await loadFinance();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao excluir definitivamente o plano financeiro."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function handleDeleteTransaction(id: number) {
   const item = transactions.find((transaction) => transaction.id === id);
@@ -14318,7 +14483,34 @@ async function handleDeleteSalary(id: number) {
                   </tbody>
                 </table>
               </div>
-              <button className="secondary-action" onClick={() => { resetTransactionForm(); setShowTransactionForm(false); }}>Fechar consulta</button>
+              <div className="form-actions">
+                {isProgrammer &&
+                  editingTransaction?.installmentGroupId && (
+                    <button
+                      type="button"
+                      className="mini-button danger"
+                      disabled={saving}
+                      onClick={() =>
+                        handlePermanentDeletePaymentPlan(
+                          editingTransaction.installmentGroupId!
+                        )
+                      }
+                    >
+                      Excluir plano definitivamente
+                    </button>
+                  )}
+
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={() => {
+                    resetTransactionForm();
+                    setShowTransactionForm(false);
+                  }}
+                >
+                  Fechar consulta
+                </button>
+              </div>
             </div>
           )}
 
@@ -15478,6 +15670,18 @@ async function handleDeleteSalary(id: number) {
     {!item.active && (
       <span className="table-small">Desativado</span>
     )}
+
+    {isProgrammer && (
+      <button
+        className="mini-button danger"
+        type="button"
+        onClick={() =>
+          handlePermanentDeleteFixedCost(item)
+        }
+      >
+        Excluir definitivamente
+      </button>
+    )}
   </div>
 </td>
                   </tr>
@@ -15664,6 +15868,18 @@ async function handleDeleteSalary(id: number) {
     {!item.active && (
       <span className="table-small">Desativado</span>
     )}
+
+    {isProgrammer && (
+      <button
+        className="mini-button danger"
+        type="button"
+        onClick={() =>
+          handlePermanentDeleteSalary(item)
+        }
+      >
+        Excluir definitivamente
+      </button>
+    )}
   </div>
 </td>
                   </tr>
@@ -15804,6 +16020,18 @@ async function handleDeleteSalary(id: number) {
             </button>
           ) : (
             <span className="table-small">Desativada</span>
+          )}
+
+          {isProgrammer && (
+            <button
+              className="mini-button danger"
+              type="button"
+              onClick={() =>
+                handlePermanentDeleteCategory(category)
+              }
+            >
+              Excluir definitivamente
+            </button>
           )}
         </div>
       </td>

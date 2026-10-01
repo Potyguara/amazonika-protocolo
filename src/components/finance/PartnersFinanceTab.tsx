@@ -72,6 +72,10 @@ function periodLabel(period: string) {
 }
 
 export default function PartnersFinanceTab() {
+  const isProgrammer =
+    localStorage.getItem("amazonika_role") ===
+    "PROGRAMADOR";
+
   const [partners, setPartners] = useState<Partner[]>([]);
   const [ranking, setRanking] = useState<RankingResponse | null>(null);
 
@@ -200,6 +204,42 @@ export default function PartnersFinanceTab() {
         err instanceof Error
           ? err.message
           : "Erro ao salvar parceiro."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function permanentlyDeletePartner(
+    partner: Partner
+  ) {
+    const confirmed = window.confirm(
+      `EXCLUSÃO DEFINITIVA\n\nDeseja apagar permanentemente o parceiro "${partner.name}"?\n\nA exclusão será bloqueada se existirem comissões ou indicações vinculadas.`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setSaving(true);
+      setError("");
+      setSuccess("");
+
+      await api.permanentDeletePartner(
+        partner.id
+      );
+
+      setSuccess(
+        "Parceiro excluído definitivamente."
+      );
+
+      await loadData();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao excluir definitivamente parceiro."
       );
     } finally {
       setSaving(false);
@@ -751,6 +791,20 @@ export default function PartnersFinanceTab() {
                               ? "Inativar"
                               : "Ativar"}
                           </button>
+
+                          {isProgrammer && (
+                            <button
+                              type="button"
+                              className="mini-button danger"
+                              onClick={() =>
+                                permanentlyDeletePartner(
+                                  partner
+                                )
+                              }
+                            >
+                              Excluir definitivamente
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

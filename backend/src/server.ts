@@ -16754,6 +16754,241 @@ app.delete(
   financeMutationHandler("DELETE")
 );
 
+
+app.delete(
+  "/finance/payment-plans/:installmentGroupId/permanent",
+  authMiddleware,
+  requireRoles(["PROGRAMADOR"]),
+  async (req: any, res) => {
+    const installmentGroupId =
+      String(
+        req.params.installmentGroupId ||
+        ""
+      ).trim();
+
+    if (!installmentGroupId) {
+      return res.status(400).json({
+        message:
+          "Identificador do plano financeiro inválido.",
+      });
+    }
+
+    try {
+      const outcome =
+        await prisma.$transaction(
+          async (tx) => {
+            const transactions =
+              await tx.financialTransaction.findMany({
+                where: {
+                  installmentGroupId,
+                },
+
+                include: {
+                  billingCharge:
+                    true,
+
+                  partnerCommission:
+                    true,
+                },
+
+                orderBy: [
+                  {
+                    installmentNumber:
+                      "asc",
+                  },
+                  {
+                    id:
+                      "asc",
+                  },
+                ],
+              });
+
+            if (
+              transactions.length === 0
+            ) {
+              return {
+                status: 404,
+
+                body: {
+                  message:
+                    "Plano financeiro não encontrado.",
+                },
+              };
+            }
+
+            const protectedTransaction =
+              transactions.find(
+                (item) =>
+                  isFinancialTransactionConsolidated(
+                    item
+                  ) ||
+                  Boolean(
+                    item.billingCharge
+                  ) ||
+                  Boolean(
+                    item.partnerCommission
+                  ) ||
+                  hasFinanceBankEvidence(
+                    item
+                  ) ||
+                  item.source ===
+                    "CONTRATO" ||
+                  item.source ===
+                    "COMISSAO_PARCEIRO"
+              );
+
+            if (
+              protectedTransaction
+            ) {
+              return {
+                status: 409,
+
+                body: {
+                  code:
+                    "FINANCIAL_PAYMENT_PLAN_PROTECTED",
+
+                  message:
+                    "Este plano não pode ser excluído definitivamente porque possui pagamento, cobrança bancária, contrato ou comissão vinculada.",
+
+                  transactionId:
+                    protectedTransaction.id,
+                },
+              };
+            }
+
+            const deletedIds =
+              transactions.map(
+                (item) =>
+                  item.id
+              );
+
+            const snapshot =
+              transactions.map(
+                (item) => ({
+                  id:
+                    item.id,
+
+                  type:
+                    item.type,
+
+                  source:
+                    item.source,
+
+                  status:
+                    item.status,
+
+                  description:
+                    item.description,
+
+                  amount:
+                    item.amount,
+
+                  amountCents:
+                    item.amountCents,
+
+                  dueDate:
+                    item.dueDate,
+
+                  clientId:
+                    item.clientId,
+
+                  clientName:
+                    item.clientName,
+
+                  installmentNumber:
+                    item.installmentNumber,
+
+                  totalInstallments:
+                    item.totalInstallments,
+                })
+              );
+
+            await tx.financialTransaction.deleteMany({
+              where: {
+                installmentGroupId,
+              },
+            });
+
+            await tx.auditLog.create({
+              data: {
+                userId:
+                  req.user?.id ||
+                  null,
+
+                userName:
+                  req.user?.name ||
+                  null,
+
+                userEmail:
+                  req.user?.email ||
+                  null,
+
+                userRole:
+                  req.user?.role ||
+                  null,
+
+                action:
+                  "PERMANENT_DELETE_FINANCIAL_PAYMENT_PLAN",
+
+                entity:
+                  "FinancialTransaction",
+
+                entityId:
+                  installmentGroupId,
+
+                description:
+                  `Plano financeiro ${installmentGroupId} excluído definitivamente.`,
+
+                ipAddress:
+                  req.ip,
+
+                metadata:
+                  JSON.stringify({
+                    installmentGroupId,
+
+                    deletedIds,
+
+                    transactions:
+                      snapshot,
+                  }),
+              },
+            });
+
+            return {
+              status: 200,
+
+              body: {
+                deleted: true,
+
+                installmentGroupId,
+
+                deletedCount:
+                  transactions.length,
+
+                deletedIds,
+              },
+            };
+          }
+        );
+
+      return res
+        .status(outcome.status)
+        .json(outcome.body);
+
+    } catch (error) {
+      console.error(
+        "Erro ao excluir definitivamente plano financeiro:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Erro ao excluir definitivamente o plano financeiro.",
+      });
+    }
+  }
+);
+
 app.delete(
   "/finance/fixed-costs/:id",
   authMiddleware,
@@ -16922,6 +17157,391 @@ app.delete(
 
       return res.status(500).json({
         message: "Erro ao desativar categoria financeira.",
+      });
+    }
+  }
+);
+
+
+// ======================================================
+// EXCLUSÃO DEFINITIVA ADMINISTRATIVA
+// ======================================================
+
+app.delete(
+  "/finance/fixed-costs/:id/permanent",
+  authMiddleware,
+  requireRoles(["PROGRAMADOR"]),
+  async (req: any, res) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        message: "ID do custo fixo inválido.",
+      });
+    }
+
+    try {
+      const result = await prisma.$transaction(
+        async (tx) => {
+          const item =
+            await tx.fixedCost.findUnique({
+              where: { id },
+            });
+
+          if (!item) {
+            return null;
+          }
+
+          await tx.fixedCost.delete({
+            where: { id },
+          });
+
+          await tx.auditLog.create({
+            data: {
+              userId:
+                req.user?.id || null,
+
+              userName:
+                req.user?.name || null,
+
+              userEmail:
+                req.user?.email || null,
+
+              userRole:
+                req.user?.role || null,
+
+              action:
+                "PERMANENT_DELETE_FIXED_COST",
+
+              entity:
+                "FixedCost",
+
+              entityId:
+                String(item.id),
+
+              description:
+                `Custo fixo ${item.description} excluído definitivamente.`,
+
+              ipAddress:
+                req.ip,
+
+              metadata:
+                JSON.stringify({
+                  id:
+                    item.id,
+
+                  description:
+                    item.description,
+
+                  amount:
+                    item.amount,
+
+                  amountCents:
+                    item.amountCents,
+
+                  dueDay:
+                    item.dueDay,
+
+                  categoryId:
+                    item.categoryId,
+
+                  active:
+                    item.active,
+                }),
+            },
+          });
+
+          return item;
+        }
+      );
+
+      if (!result) {
+        return res.status(404).json({
+          message:
+            "Custo fixo não encontrado.",
+        });
+      }
+
+      return res.status(200).json({
+        deleted: true,
+        id: result.id,
+      });
+    } catch (error) {
+      console.error(
+        "Erro ao excluir definitivamente custo fixo:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Erro ao excluir definitivamente o custo fixo.",
+      });
+    }
+  }
+);
+
+app.delete(
+  "/finance/salaries/:id/permanent",
+  authMiddleware,
+  requireRoles(["PROGRAMADOR"]),
+  async (req: any, res) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        message: "ID do salário inválido.",
+      });
+    }
+
+    try {
+      const result = await prisma.$transaction(
+        async (tx) => {
+          const item =
+            await tx.employeeSalary.findUnique({
+              where: { id },
+            });
+
+          if (!item) {
+            return null;
+          }
+
+          await tx.employeeSalary.delete({
+            where: { id },
+          });
+
+          await tx.auditLog.create({
+            data: {
+              userId:
+                req.user?.id || null,
+
+              userName:
+                req.user?.name || null,
+
+              userEmail:
+                req.user?.email || null,
+
+              userRole:
+                req.user?.role || null,
+
+              action:
+                "PERMANENT_DELETE_EMPLOYEE_SALARY",
+
+              entity:
+                "EmployeeSalary",
+
+              entityId:
+                String(item.id),
+
+              description:
+                `Salário de ${item.employeeName} excluído definitivamente.`,
+
+              ipAddress:
+                req.ip,
+
+              metadata:
+                JSON.stringify({
+                  id:
+                    item.id,
+
+                  employeeName:
+                    item.employeeName,
+
+                  roleDescription:
+                    item.roleDescription,
+
+                  amount:
+                    item.amount,
+
+                  amountCents:
+                    item.amountCents,
+
+                  dueDay:
+                    item.dueDay,
+
+                  categoryId:
+                    item.categoryId,
+
+                  active:
+                    item.active,
+                }),
+            },
+          });
+
+          return item;
+        }
+      );
+
+      if (!result) {
+        return res.status(404).json({
+          message:
+            "Salário não encontrado.",
+        });
+      }
+
+      return res.status(200).json({
+        deleted: true,
+        id: result.id,
+      });
+    } catch (error) {
+      console.error(
+        "Erro ao excluir definitivamente salário:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Erro ao excluir definitivamente o salário.",
+      });
+    }
+  }
+);
+
+app.delete(
+  "/finance/categories/:id/permanent",
+  authMiddleware,
+  requireRoles(["PROGRAMADOR"]),
+  async (req: any, res) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        message:
+          "ID da categoria inválido.",
+      });
+    }
+
+    try {
+      const result = await prisma.$transaction(
+        async (tx) => {
+          const category =
+            await tx.financialCategory.findUnique({
+              where: { id },
+
+              include: {
+                _count: {
+                  select: {
+                    transactions: true,
+                    fixedCosts: true,
+                    salaries: true,
+                  },
+                },
+              },
+            });
+
+          if (!category) {
+            return {
+              status: 404,
+              body: {
+                message:
+                  "Categoria não encontrada.",
+              },
+            };
+          }
+
+          const dependencies =
+            category._count.transactions +
+            category._count.fixedCosts +
+            category._count.salaries;
+
+          if (dependencies > 0) {
+            return {
+              status: 409,
+              body: {
+                code:
+                  "FINANCIAL_CATEGORY_IN_USE",
+
+                message:
+                  "Esta categoria não pode ser excluída definitivamente porque ainda está vinculada a registros financeiros.",
+
+                dependencies: {
+                  transactions:
+                    category._count.transactions,
+
+                  fixedCosts:
+                    category._count.fixedCosts,
+
+                  salaries:
+                    category._count.salaries,
+                },
+              },
+            };
+          }
+
+          await tx.financialCategory.delete({
+            where: { id },
+          });
+
+          await tx.auditLog.create({
+            data: {
+              userId:
+                req.user?.id || null,
+
+              userName:
+                req.user?.name || null,
+
+              userEmail:
+                req.user?.email || null,
+
+              userRole:
+                req.user?.role || null,
+
+              action:
+                "PERMANENT_DELETE_FINANCIAL_CATEGORY",
+
+              entity:
+                "FinancialCategory",
+
+              entityId:
+                String(category.id),
+
+              description:
+                `Categoria financeira ${category.name} excluída definitivamente.`,
+
+              ipAddress:
+                req.ip,
+
+              metadata:
+                JSON.stringify({
+                  id:
+                    category.id,
+
+                  name:
+                    category.name,
+
+                  type:
+                    category.type,
+
+                  color:
+                    category.color,
+
+                  active:
+                    category.active,
+                }),
+            },
+          });
+
+          return {
+            status: 200,
+            body: {
+              deleted: true,
+              id: category.id,
+            },
+          };
+        }
+      );
+
+      return res
+        .status(result.status)
+        .json(result.body);
+    } catch (error) {
+      console.error(
+        "Erro ao excluir definitivamente categoria financeira:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Erro ao excluir definitivamente a categoria financeira.",
       });
     }
   }
