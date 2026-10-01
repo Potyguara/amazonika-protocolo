@@ -11721,13 +11721,16 @@ function FinancePage() {
 
       closeChargeReadinessForm();
 
+      const chargeLabel =
+        !obligation.installmentGroupId
+          ? "pagamento único"
+          : obligation.installmentNumber === 0
+            ? "entrada"
+            : `parcela ${obligation.installmentNumber}`;
+
       const confirmed =
         window.confirm(
-          `Deseja processar agora a cobrança de ${
-            obligation.installmentNumber === 0
-              ? "Entrada"
-              : `Parcela ${obligation.installmentNumber}`
-          }? Esta ação poderá gerar uma cobrança real no Banco do Brasil.`
+          `Deseja gerar agora o Pix BB para ${chargeLabel}? Esta ação poderá criar uma cobrança real no Banco do Brasil.`
         );
 
       if (!confirmed) {
@@ -11826,9 +11829,11 @@ function FinancePage() {
 
       setSuccess(
         Number(resultObject.created || 0) > 0
-          ? "Cobrança processada com sucesso."
-          : "Cobrança existente recuperada com sucesso."
+          ? "Pix BB gerado com sucesso."
+          : "Cobrança Pix BB existente recuperada com sucesso."
       );
+
+      await loadFinance();
     } catch (error) {
       setSuccess("");
 
@@ -15757,6 +15762,30 @@ async function handleDeleteSalary(id: number) {
                                 }
                               >
                                 Pagar
+                              </button>
+                            )}
+
+                          {item.status === "PENDENTE" &&
+                            (item.type === "ENTRADA" ||
+                              item.type === "PARCELA") &&
+                            !item.billingCharge &&
+                            !item.providerTxId && (
+                              <button
+                                className="mini-button"
+                                type="button"
+                                disabled={
+                                  processingChargeTransactionId ===
+                                    item.id ||
+                                  processingBankChargeInProgress
+                                }
+                                onClick={() =>
+                                  processTransactionChargeNow(item)
+                                }
+                              >
+                                {processingChargeTransactionId ===
+                                item.id
+                                  ? "Processando Pix..."
+                                  : "Gerar Pix BB"}
                               </button>
                             )}
 
