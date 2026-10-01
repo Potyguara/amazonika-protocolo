@@ -15613,7 +15613,6 @@ async function handleDeleteSalary(id: number) {
                   <th>Vencimento</th>
                   <th>Valor</th>
                   <th>Status</th>
-                  <th>Ações</th>
                 </tr>
               </thead>
 
@@ -15699,23 +15698,10 @@ async function handleDeleteSalary(id: number) {
                         </span>
                       </td>
 
-                      <td className="finance-action-summary">
-                        {isFinanceTransactionProtected(item) ? (
-                          <span className="finance-lock-label">
-                            {isFinanceTransactionConsolidated(item)
-                              ? "🔒 Consolidado"
-                              : "🔒 Protegido"}
-                          </span>
-                        ) : (
-                          <span className="finance-action-hint">
-                            Ações abaixo
-                          </span>
-                        )}
-                      </td>
                     </tr>
 
                     <tr className="finance-transaction-actions-row">
-                      <td colSpan={9}>
+                      <td colSpan={8}>
                         <div className="finance-transaction-actions">
                           {isFinanceTransactionProtected(item) && (
                             <span className="mini-button finance-action-state">

@@ -8531,32 +8531,6 @@ select:focus {
   min-width: 115px;
 }
 
-.finance-action-summary {
-  min-width: 125px;
-}
-
-.finance-lock-label,
-.finance-action-hint {
-  display: inline-flex;
-  align-items: center;
-  min-height: 32px;
-  padding: 6px 10px;
-  border-radius: 999px;
-  font-size: 0.76rem;
-  font-weight: 800;
-  line-height: 1.2;
-}
-
-.finance-lock-label {
-  background: #eef6f1;
-  color: #315848;
-}
-
-.finance-action-hint {
-  background: #f7faf8;
-  color: #78857e;
-}
-
 .finance-transaction-actions-row td {
   border-bottom: 1px solid #dfe9e4;
   padding: 0 12px 15px;
@@ -8605,7 +8579,4 @@ select:focus {
     text-align: center;
   }
 
-  .finance-action-summary {
-    min-width: 105px;
-  }
 }
