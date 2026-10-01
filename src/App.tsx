@@ -1375,6 +1375,48 @@ function formatOptionalMoneyCents(
   return value == null ? "Valor canônico indisponível" : formatMoneyCents(value);
 }
 
+function formatFinanceTransactionAmount(
+  amountCents: number | null | undefined,
+  legacyAmount: number | null | undefined
+) {
+  if (amountCents != null) {
+    return formatMoneyCents(amountCents);
+  }
+
+  if (
+    legacyAmount != null &&
+    Number.isFinite(Number(legacyAmount))
+  ) {
+    return Number(legacyAmount).toLocaleString(
+      "pt-BR",
+      {
+        style: "currency",
+        currency: "BRL",
+      }
+    );
+  }
+
+  return "Valor indisponível";
+}
+
+function financeTransactionFormAmount(
+  amountCents: number | null | undefined,
+  legacyAmount: number | null | undefined
+) {
+  if (amountCents != null) {
+    return centsToReaisFormValue(amountCents);
+  }
+
+  if (
+    legacyAmount != null &&
+    Number.isFinite(Number(legacyAmount))
+  ) {
+    return String(legacyAmount);
+  }
+
+  return "";
+}
+
 function optionalReaisFormValue(
   value: number | null | undefined,
   label: string
@@ -10864,6 +10906,11 @@ function FinancePage() {
   const [editingTransaction, setEditingTransaction] =
     useState<BackendFinanceTransaction | null>(null);
 
+  const [
+    viewingLegacyTransaction,
+    setViewingLegacyTransaction,
+  ] = useState<BackendFinanceTransaction | null>(null);
+
   const [transactionType, setTransactionType] =
     useState<FinanceTransactionType>("ENTRADA");
   const [transactionSource, setTransactionSource] =
@@ -12145,9 +12192,9 @@ function FinancePage() {
        * ====================================================
        */
       setTransactionAmount(
-        optionalReaisFormValue(
+        financeTransactionFormAmount(
           item.amountCents,
-          "O lançamento"
+          item.amount
         )
       );
 
@@ -13306,6 +13353,156 @@ async function handleDeleteSalary(id: number) {
 
       {success && <div className="panel success-panel">{success}</div>}
       {error && <div className="panel error-panel">{error}</div>}
+
+
+      {viewingLegacyTransaction && (
+        <div className="modal-backdrop">
+          <div className="protocol-modal">
+            <div className="panel-header">
+              <div>
+                <span className="eyebrow">
+                  Registro histórico
+                </span>
+
+                <h2>
+                  Lançamento financeiro legado
+                </h2>
+
+                <p>
+                  Consulta somente leitura. Nenhuma informação será alterada.
+                </p>
+              </div>
+            </div>
+
+            <div className="detail-list">
+              <div>
+                <span>Descrição</span>
+                <strong>
+                  {viewingLegacyTransaction.description}
+                </strong>
+              </div>
+
+              <div>
+                <span>Valor original</span>
+                <strong>
+                  {formatFinanceTransactionAmount(
+                    viewingLegacyTransaction.amountCents,
+                    viewingLegacyTransaction.amount
+                  )}
+                </strong>
+
+                <small className="table-small">
+                  Valor legado preservado
+                </small>
+              </div>
+
+              <div>
+                <span>Tipo</span>
+                <strong>
+                  {viewingLegacyTransaction.type === "SAIDA"
+                    ? "Saída"
+                    : viewingLegacyTransaction.type === "PARCELA"
+                      ? "Parcela"
+                      : "Entrada"}
+                </strong>
+              </div>
+
+              <div>
+                <span>Origem</span>
+                <strong>
+                  {viewingLegacyTransaction.source}
+                </strong>
+              </div>
+
+              <div>
+                <span>Status</span>
+                <strong>
+                  {viewingLegacyTransaction.status}
+                </strong>
+              </div>
+
+              <div>
+                <span>Vencimento</span>
+                <strong>
+                  {viewingLegacyTransaction.dueDate
+                    ? viewingLegacyTransaction.dueDate
+                        .slice(0, 10)
+                        .split("-")
+                        .reverse()
+                        .join("/")
+                    : "-"}
+                </strong>
+              </div>
+
+              <div>
+                <span>Data do pagamento</span>
+                <strong>
+                  {viewingLegacyTransaction.paidAt
+                    ? viewingLegacyTransaction.paidAt
+                        .slice(0, 10)
+                        .split("-")
+                        .reverse()
+                        .join("/")
+                    : "-"}
+                </strong>
+              </div>
+
+              <div>
+                <span>Cliente</span>
+                <strong>
+                  {viewingLegacyTransaction.clientName ||
+                    viewingLegacyTransaction.protocol?.client?.name ||
+                    "-"}
+                </strong>
+              </div>
+
+              <div>
+                <span>Protocolo</span>
+                <strong>
+                  {viewingLegacyTransaction.protocol?.protocolNumber ||
+                    "-"}
+                </strong>
+              </div>
+
+              <div>
+                <span>Serviço</span>
+                <strong>
+                  {viewingLegacyTransaction.catalogService?.name ||
+                    viewingLegacyTransaction.protocol?.serviceType?.name ||
+                    "-"}
+                </strong>
+              </div>
+
+              <div>
+                <span>Categoria</span>
+                <strong>
+                  {viewingLegacyTransaction.category?.name ||
+                    "-"}
+                </strong>
+              </div>
+
+              <div>
+                <span>Observações</span>
+                <strong>
+                  {viewingLegacyTransaction.notes || "-"}
+                </strong>
+              </div>
+            </div>
+
+            <div className="form-actions">
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() =>
+                  setViewingLegacyTransaction(null)
+                }
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="settings-tabs finance-tabs">
         <button
@@ -15464,7 +15661,18 @@ async function handleDeleteSalary(id: number) {
                         ? item.dueDate.slice(0, 10).split("-").reverse().join("/")
                         : "-"}
                     </td>
-                    <td>{formatOptionalMoneyCents(item.amountCents)}</td>
+                    <td>
+                      {formatFinanceTransactionAmount(
+                        item.amountCents,
+                        item.amount
+                      )}
+
+                      {item.amountCents == null && (
+                        <small className="table-small">
+                          Valor legado
+                        </small>
+                      )}
+                    </td>
 
                     <td>
                       <span
@@ -15481,6 +15689,21 @@ async function handleDeleteSalary(id: number) {
         {isFinanceTransactionConsolidated(item) ? "🔒 Consolidado" : "🔒 Protegido"}
       </span>
     )}
+
+    {item.amountCents == null &&
+      isFinanceTransactionProtected(item) &&
+      !item.installmentGroupId && (
+        <button
+          className="mini-button"
+          type="button"
+          onClick={() =>
+            setViewingLegacyTransaction(item)
+          }
+        >
+          Visualizar
+        </button>
+      )}
+
     {item.installmentGroupId ? (
       <button className="mini-button" type="button" onClick={() => startEditTransaction(item)}>Ver plano</button>
     ) : !isFinanceTransactionProtected(item) && (
