@@ -50,7 +50,7 @@ import {
   Eye,
   EyeOff,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import {
   Link,
   NavLink,
@@ -15619,108 +15619,190 @@ async function handleDeleteSalary(id: number) {
 
               <tbody>
                 {transactions.map((item) => (
-                  <tr key={item.id}>
-                    <td>{item.type === "SAIDA" ? "Saída" : item.type === "PARCELA" ? "Parcela" : "Entrada"}</td>
+                  <Fragment key={item.id}>
+                    <tr className="finance-transaction-row">
+                      <td>
+                        {item.type === "SAIDA"
+                          ? "Saída"
+                          : item.type === "PARCELA"
+                            ? "Parcela"
+                            : "Entrada"}
+                      </td>
 
-                    <td>
-                      <strong>
-                        {item.description}
-                      </strong>
+                      <td>
+                        <strong>
+                          {item.description}
+                        </strong>
 
-                      <small className="table-small">
-                        {item.source}
-
-                        {item.installmentNumber &&
-                        item.totalInstallments
-                          ? ` · Parcela ${item.installmentNumber}/${item.totalInstallments}`
-                          : ""}
-                      </small>
-                    </td>
-
-                    <td>
-                      {item.clientName || item.protocol?.client?.name || "-"}
-                      {item.protocol && (
                         <small className="table-small">
-                          {item.protocol.protocolNumber}
+                          {item.source}
+
+                          {item.installmentNumber &&
+                          item.totalInstallments
+                            ? ` · Parcela ${item.installmentNumber}/${item.totalInstallments}`
+                            : ""}
                         </small>
-                      )}
-                    </td>
+                      </td>
 
-                    <td>
-                      {item.catalogService?.name ||
-                        item.protocol?.serviceType?.name ||
-                        "-"}
-                    </td>
+                      <td>
+                        {item.clientName ||
+                          item.protocol?.client?.name ||
+                          "-"}
 
-                    <td>
-                      {item.category?.name || "-"}
-                    </td>
+                        {item.protocol && (
+                          <small className="table-small">
+                            {item.protocol.protocolNumber}
+                          </small>
+                        )}
+                      </td>
 
-                    <td>
-                      {item.dueDate
-                        ? item.dueDate.slice(0, 10).split("-").reverse().join("/")
-                        : "-"}
-                    </td>
-                    <td>
-                      {formatFinanceTransactionAmount(
-                        item.amountCents,
-                        item.amount
-                      )}
+                      <td>
+                        {item.catalogService?.name ||
+                          item.protocol?.serviceType?.name ||
+                          "-"}
+                      </td>
 
-                      {item.amountCents == null && (
-                        <small className="table-small">
-                          Valor legado
-                        </small>
-                      )}
-                    </td>
+                      <td>
+                        {item.category?.name || "-"}
+                      </td>
 
-                    <td>
-                      <span
-                        className={`badge payment-${item.status.toLowerCase()}`}
-                      >
-                        {item.status}
-                      </span>
-                    </td>
+                      <td>
+                        {item.dueDate
+                          ? item.dueDate
+                              .slice(0, 10)
+                              .split("-")
+                              .reverse()
+                              .join("/")
+                          : "-"}
+                      </td>
 
-<td>
-  <div className="table-actions">
-    {isFinanceTransactionProtected(item) && (
-      <span className="mini-button">
-        {isFinanceTransactionConsolidated(item) ? "🔒 Consolidado" : "🔒 Protegido"}
-      </span>
-    )}
+                      <td className="finance-value-cell">
+                        <strong>
+                          {formatFinanceTransactionAmount(
+                            item.amountCents,
+                            item.amount
+                          )}
+                        </strong>
 
-    {item.amountCents == null &&
-      isFinanceTransactionProtected(item) &&
-      !item.installmentGroupId && (
-        <button
-          className="mini-button"
-          type="button"
-          onClick={() =>
-            setViewingLegacyTransaction(item)
-          }
-        >
-          Visualizar
-        </button>
-      )}
+                        {item.amountCents == null && (
+                          <small className="table-small">
+                            Valor legado
+                          </small>
+                        )}
+                      </td>
 
-    {item.installmentGroupId ? (
-      <button className="mini-button" type="button" onClick={() => startEditTransaction(item)}>Ver plano</button>
-    ) : !isFinanceTransactionProtected(item) && (
-      <button className="mini-button" type="button" onClick={() => startEditTransaction(item)}>Editar</button>
-    )}
-    {!isFinanceTransactionProtected(item) && item.status === "PENDENTE" && (
-      <button className="mini-button" type="button" onClick={() => handlePayTransaction(item)}>Pagar</button>
-    )}
-    {!isFinanceTransactionProtected(item) && !item.installmentGroupId && (
-      <>
-        <button className="mini-button" type="button" disabled title="Cancelamento indisponível nesta etapa para preservar o histórico financeiro.">Cancelar indisponível</button>
-        <button className="mini-button danger" type="button" onClick={() => handleDeleteTransaction(item.id)}>Excluir</button>
-      </>
-    )}
-  </div>
-</td>
-                  </tr>
+                      <td>
+                        <span
+                          className={`badge payment-${item.status.toLowerCase()}`}
+                        >
+                          {item.status}
+                        </span>
+                      </td>
+
+                      <td className="finance-action-summary">
+                        {isFinanceTransactionProtected(item) ? (
+                          <span className="finance-lock-label">
+                            {isFinanceTransactionConsolidated(item)
+                              ? "🔒 Consolidado"
+                              : "🔒 Protegido"}
+                          </span>
+                        ) : (
+                          <span className="finance-action-hint">
+                            Ações abaixo
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+
+                    <tr className="finance-transaction-actions-row">
+                      <td colSpan={9}>
+                        <div className="finance-transaction-actions">
+                          {isFinanceTransactionProtected(item) && (
+                            <span className="mini-button finance-action-state">
+                              {isFinanceTransactionConsolidated(item)
+                                ? "🔒 Consolidado"
+                                : "🔒 Protegido"}
+                            </span>
+                          )}
+
+                          {item.amountCents == null &&
+                            isFinanceTransactionProtected(item) &&
+                            !item.installmentGroupId && (
+                              <button
+                                className="mini-button"
+                                type="button"
+                                onClick={() =>
+                                  setViewingLegacyTransaction(item)
+                                }
+                              >
+                                Visualizar
+                              </button>
+                            )}
+
+                          {item.installmentGroupId ? (
+                            <button
+                              className="mini-button"
+                              type="button"
+                              onClick={() =>
+                                startEditTransaction(item)
+                              }
+                            >
+                              Ver plano
+                            </button>
+                          ) : !isFinanceTransactionProtected(item) && (
+                            <button
+                              className="mini-button"
+                              type="button"
+                              onClick={() =>
+                                startEditTransaction(item)
+                              }
+                            >
+                              Editar
+                            </button>
+                          )}
+
+                          {!isFinanceTransactionProtected(item) &&
+                            item.status === "PENDENTE" && (
+                              <button
+                                className="mini-button"
+                                type="button"
+                                onClick={() =>
+                                  handlePayTransaction(item)
+                                }
+                              >
+                                Pagar
+                              </button>
+                            )}
+
+                          {!isFinanceTransactionProtected(item) &&
+                            !item.installmentGroupId && (
+                              <>
+                                <button
+                                  className="mini-button"
+                                  type="button"
+                                  disabled
+                                  title="Cancelamento indisponível nesta etapa para preservar o histórico financeiro."
+                                >
+                                  Cancelar indisponível
+                                </button>
+
+                                <button
+                                  className="mini-button danger"
+                                  type="button"
+                                  onClick={() =>
+                                    handleDeleteTransaction(
+                                      item.id
+                                    )
+                                  }
+                                >
+                                  Excluir
+                                </button>
+                              </>
+                            )}
+                        </div>
+                      </td>
+                    </tr>
+                  </Fragment>
                 ))}
               </tbody>
             </table>
