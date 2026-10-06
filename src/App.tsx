@@ -10800,6 +10800,24 @@ type BackendFinanceAutoChargeSettings = {
   sendEmail: boolean;
   sendWhatsapp: boolean;
   defaultFiscalMode: "NOTA_FISCAL_ANTES" | "RECIBO_POSTERIOR";
+
+  schedulerTimeZone: string;
+
+  chargeRunHour: number;
+  chargeRunMinute: number;
+
+  noticeRunHour: number;
+  noticeRunMinute: number;
+
+  lastChargeRunStartedAt?: string | null;
+  lastChargeRunCompletedAt?: string | null;
+  lastChargeRunStatus?: string | null;
+  lastChargeRunSummary?: string | null;
+
+  lastNoticeRunStartedAt?: string | null;
+  lastNoticeRunCompletedAt?: string | null;
+  lastNoticeRunStatus?: string | null;
+  lastNoticeRunSummary?: string | null;
 };
 
 type BackendFinanceAutoChargeNoticeResult = {
@@ -10818,6 +10836,69 @@ type BackendFinanceAutoChargeNoticeResult = {
     publicUrl?: string | null;
   }>;
 };
+
+type BackendFinanceAutoChargeSchedulerStatus = {
+  automation: {
+    enabled: boolean;
+    bbEnvironment: string;
+    timeZone: string;
+    serverLocalDate: string;
+    serverLocalTime: string;
+  };
+
+  chargeSchedule: {
+    hour: number;
+    minute: number;
+    lastStartedAt?: string | null;
+    lastCompletedAt?: string | null;
+    lastStatus?: string | null;
+    lastSummary?: string | null;
+  };
+
+  noticeSchedule: {
+    hour: number;
+    minute: number;
+    lastStartedAt?: string | null;
+    lastCompletedAt?: string | null;
+    lastStatus?: string | null;
+    lastSummary?: string | null;
+  };
+
+  emailDelivery: {
+    terminology: string;
+
+    summary: {
+      acceptedBySmtp: number;
+      failed: number;
+      pending: number;
+      disabled: number;
+    };
+
+    recent: Array<{
+      billingChargeId: number;
+      financialTransactionId?: number | null;
+      description: string;
+      chargeStatus: string;
+      dueDate: string;
+      createdAt: string;
+      clientName?: string | null;
+      clientEmail?: string | null;
+      emailStatus:
+        | "ACCEPTED_BY_SMTP"
+        | "ERROR"
+        | "PENDING"
+        | "DISABLED";
+      attemptCount: number;
+      lastAttemptAt?: string | null;
+      acceptedAt?: string | null;
+      messageId?: string | null;
+      accepted?: string | null;
+      rejected?: string | null;
+      error?: string | null;
+    }>;
+  };
+};
+
 
 type BackendFinanceAutoChargeProcessResult = {
   today: string;
@@ -11057,6 +11138,12 @@ function FinancePage() {
   ] = useState<BackendFinanceAutoChargeNoticeResult | null>(null);
 
 
+  const [
+    autoChargeSchedulerStatus,
+    setAutoChargeSchedulerStatus,
+  ] = useState<BackendFinanceAutoChargeSchedulerStatus | null>(null);
+
+
   /*
    * FINANCEIRO V2
    * O campo transactionAmount representa
@@ -11146,6 +11233,7 @@ function FinancePage() {
         salariesData,
         catalogServicesData,
         autoChargeSettingsData,
+        autoChargeSchedulerStatusData,
       ] = await Promise.all([
         api.financeSummary(month) as Promise<BackendFinanceSummary>,
         api.financeCategories() as Promise<BackendFinanceCategory[]>,
@@ -11161,6 +11249,8 @@ function FinancePage() {
           includeInactive: false,
         }) as Promise<BackendFinanceCatalogService[]>,
         api.financeAutoChargeSettings() as Promise<BackendFinanceAutoChargeSettings>,
+
+        api.financeAutoChargeSchedulerStatus() as Promise<BackendFinanceAutoChargeSchedulerStatus>,
       ]);
 
       setSummary(summaryData);
@@ -11169,6 +11259,7 @@ function FinancePage() {
       setFixedCosts(fixedCostsData);
       setSalaries(salariesData);
       setAutoChargeSettings(autoChargeSettingsData);
+      setAutoChargeSchedulerStatus(autoChargeSchedulerStatusData);
 
       setFinanceCatalogServices(
         Array.isArray(catalogServicesData)
@@ -11187,6 +11278,26 @@ function FinancePage() {
   useEffect(() => {
     loadFinance();
   }, [month]);
+
+  async function handleRefreshAutoChargeSchedulerStatus() {
+    try {
+      setError("");
+
+      const schedulerStatus =
+        (await api.financeAutoChargeSchedulerStatus()) as BackendFinanceAutoChargeSchedulerStatus;
+
+      setAutoChargeSchedulerStatus(
+        schedulerStatus
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao atualizar monitoramento das cobranças automáticas."
+      );
+    }
+  }
+
 
   async function handleSaveAutoChargeSettings() {
     if (!autoChargeSettings) return;
@@ -11209,9 +11320,32 @@ function FinancePage() {
           sendEmail: autoChargeSettings.sendEmail,
           sendWhatsapp: autoChargeSettings.sendWhatsapp,
           defaultFiscalMode: autoChargeSettings.defaultFiscalMode,
+
+          schedulerTimeZone:
+            autoChargeSettings.schedulerTimeZone,
+
+          chargeRunHour:
+            Number(autoChargeSettings.chargeRunHour),
+
+          chargeRunMinute:
+            Number(autoChargeSettings.chargeRunMinute),
+
+          noticeRunHour:
+            Number(autoChargeSettings.noticeRunHour),
+
+          noticeRunMinute:
+            Number(autoChargeSettings.noticeRunMinute),
         })) as BackendFinanceAutoChargeSettings;
 
       setAutoChargeSettings(updated);
+
+      const schedulerStatus =
+        (await api.financeAutoChargeSchedulerStatus()) as BackendFinanceAutoChargeSchedulerStatus;
+
+      setAutoChargeSchedulerStatus(
+        schedulerStatus
+      );
+
       setSuccess("Configurações de cobranças automáticas salvas com sucesso.");
     } catch (err) {
       setError(
@@ -13632,6 +13766,126 @@ async function handleDeleteSalary(id: number) {
               </button>
             </div>
 
+            <div className="panel soft-panel" style={{ marginBottom: 18 }}>
+              <div className="panel-header">
+                <div>
+                  <h3>Agendador automático</h3>
+                  <p>
+                    O CRON desperta o SIS periodicamente e o sistema decide se
+                    cada rotina deve executar conforme os horários abaixo.
+                  </p>
+                </div>
+
+                {autoChargeSchedulerStatus && (
+                  <div>
+                    <span
+                      className={`badge ${
+                        autoChargeSchedulerStatus.automation.bbEnvironment === "production"
+                          ? "concluido"
+                          : "em_execucao"
+                      }`}
+                    >
+                      BB: {autoChargeSchedulerStatus.automation.bbEnvironment.toUpperCase()}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <div className="protocol-form-grid">
+                <div className="form-section">
+                  <label>
+                    Fuso horário
+                    <input
+                      value={autoChargeSettings.schedulerTimeZone}
+                      onChange={(event) =>
+                        setAutoChargeSettings({
+                          ...autoChargeSettings,
+                          schedulerTimeZone: event.target.value,
+                        })
+                      }
+                    />
+                  </label>
+
+                  <label>
+                    Horário de emissão automática do Pix
+                    <input
+                      type="time"
+                      value={`${String(autoChargeSettings.chargeRunHour).padStart(2, "0")}:${String(autoChargeSettings.chargeRunMinute).padStart(2, "0")}`}
+                      onChange={(event) => {
+                        const [hour, minute] =
+                          event.target.value
+                            .split(":")
+                            .map(Number);
+
+                        setAutoChargeSettings({
+                          ...autoChargeSettings,
+                          chargeRunHour: hour,
+                          chargeRunMinute: minute,
+                        });
+                      }}
+                    />
+                  </label>
+
+                  <label>
+                    Horário dos lembretes
+                    <input
+                      type="time"
+                      value={`${String(autoChargeSettings.noticeRunHour).padStart(2, "0")}:${String(autoChargeSettings.noticeRunMinute).padStart(2, "0")}`}
+                      onChange={(event) => {
+                        const [hour, minute] =
+                          event.target.value
+                            .split(":")
+                            .map(Number);
+
+                        setAutoChargeSettings({
+                          ...autoChargeSettings,
+                          noticeRunHour: hour,
+                          noticeRunMinute: minute,
+                        });
+                      }}
+                    />
+                  </label>
+                </div>
+
+                <div className="form-section">
+                  <strong>Estado operacional</strong>
+
+                  <p>
+                    Ambiente BB:{" "}
+                    <strong>
+                      {autoChargeSchedulerStatus?.automation.bbEnvironment?.toUpperCase() ||
+                        "-"}
+                    </strong>
+                  </p>
+
+                  <p>
+                    Hora atual do scheduler:{" "}
+                    <strong>
+                      {autoChargeSchedulerStatus
+                        ? `${autoChargeSchedulerStatus.automation.serverLocalDate} ${autoChargeSchedulerStatus.automation.serverLocalTime}`
+                        : "-"}
+                    </strong>
+                  </p>
+
+                  <p>
+                    Última emissão:{" "}
+                    <strong>
+                      {autoChargeSchedulerStatus?.chargeSchedule.lastStatus ||
+                        "Ainda não executada"}
+                    </strong>
+                  </p>
+
+                  <p>
+                    Últimos avisos:{" "}
+                    <strong>
+                      {autoChargeSchedulerStatus?.noticeSchedule.lastStatus ||
+                        "Ainda não executados"}
+                    </strong>
+                  </p>
+                </div>
+              </div>
+            </div>
+
             <div className="protocol-form-grid">
               <div className="form-section">
                 <label className="checkbox-line">
@@ -13820,6 +14074,281 @@ async function handleDeleteSalary(id: number) {
                 </div>
               </div>
             </div>
+
+            {autoChargeSchedulerStatus && (
+              <div
+                className="panel soft-panel"
+                style={{ marginBottom: 18 }}
+              >
+                <div className="panel-header">
+                  <div>
+                    <h3>Monitoramento dos e-mails de cobrança</h3>
+
+                    <p>
+                      A situação abaixo registra a resposta técnica do servidor
+                      de e-mail. "Aceito pelo SMTP" não significa que o cliente
+                      abriu, leu ou necessariamente recebeu a mensagem na caixa
+                      de entrada.
+                    </p>
+                  </div>
+
+                  <button
+                    className="secondary-action"
+                    type="button"
+                    onClick={handleRefreshAutoChargeSchedulerStatus}
+                  >
+                    Atualizar monitoramento
+                  </button>
+                </div>
+
+                <div className="metrics-grid four">
+                  <div className="metric-card">
+                    <span>Aceitos pelo SMTP</span>
+
+                    <strong>
+                      {
+                        autoChargeSchedulerStatus
+                          .emailDelivery
+                          .summary
+                          .acceptedBySmtp
+                      }
+                    </strong>
+
+                    <small>
+                      Servidor de e-mail aceitou a mensagem
+                    </small>
+                  </div>
+
+                  <div className="metric-card">
+                    <span>Falhas</span>
+
+                    <strong>
+                      {
+                        autoChargeSchedulerStatus
+                          .emailDelivery
+                          .summary
+                          .failed
+                      }
+                    </strong>
+
+                    <small>
+                      Tentativa registrada com erro
+                    </small>
+                  </div>
+
+                  <div className="metric-card">
+                    <span>Pendentes</span>
+
+                    <strong>
+                      {
+                        autoChargeSchedulerStatus
+                          .emailDelivery
+                          .summary
+                          .pending
+                      }
+                    </strong>
+
+                    <small>
+                      Ainda sem confirmação SMTP
+                    </small>
+                  </div>
+
+                  <div className="metric-card">
+                    <span>Desativados</span>
+
+                    <strong>
+                      {
+                        autoChargeSchedulerStatus
+                          .emailDelivery
+                          .summary
+                          .disabled
+                      }
+                    </strong>
+
+                    <small>
+                      Envio automático desligado
+                    </small>
+                  </div>
+                </div>
+
+                <div
+                  className="panel"
+                  style={{
+                    marginTop: 16,
+                    marginBottom: 16,
+                  }}
+                >
+                  <strong>Critério de confirmação</strong>
+
+                  <p style={{ marginBottom: 0 }}>
+                    {
+                      autoChargeSchedulerStatus
+                        .emailDelivery
+                        .terminology
+                    }
+                  </p>
+                </div>
+
+                {autoChargeSchedulerStatus.emailDelivery.recent.length > 0 ? (
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Cobrança</th>
+                          <th>Cliente</th>
+                          <th>Status do e-mail</th>
+                          <th>Tentativas</th>
+                          <th>Última tentativa</th>
+                          <th>Evidência</th>
+                        </tr>
+                      </thead>
+
+                      <tbody>
+                        {autoChargeSchedulerStatus.emailDelivery.recent.map(
+                          (item) => {
+                            const statusLabel =
+                              item.emailStatus === "ACCEPTED_BY_SMTP"
+                                ? "Aceito pelo SMTP"
+                                : item.emailStatus === "ERROR"
+                                ? "Falha"
+                                : item.emailStatus === "DISABLED"
+                                ? "Desativado"
+                                : "Pendente";
+
+                            const statusClass =
+                              item.emailStatus === "ACCEPTED_BY_SMTP"
+                                ? "concluido"
+                                : item.emailStatus === "ERROR"
+                                ? "cancelado"
+                                : item.emailStatus === "PENDING"
+                                ? "em_execucao"
+                                : "rascunho";
+
+                            const lastAttempt =
+                              item.lastAttemptAt
+                                ? new Date(
+                                    item.lastAttemptAt
+                                  ).toLocaleString(
+                                    "pt-BR",
+                                    {
+                                      timeZone:
+                                        autoChargeSchedulerStatus
+                                          .automation
+                                          .timeZone,
+                                    }
+                                  )
+                                : "-";
+
+                            return (
+                              <tr key={item.billingChargeId}>
+                                <td>
+                                  <strong>
+                                    #{item.billingChargeId}
+                                  </strong>
+
+                                  <br />
+
+                                  <small>
+                                    {item.description || "-"}
+                                  </small>
+                                </td>
+
+                                <td>
+                                  {item.clientName || "-"}
+
+                                  <br />
+
+                                  <small>
+                                    {item.clientEmail || "Sem e-mail"}
+                                  </small>
+                                </td>
+
+                                <td>
+                                  <span
+                                    className={`badge ${statusClass}`}
+                                  >
+                                    {statusLabel}
+                                  </span>
+
+                                  {item.emailStatus ===
+                                    "ACCEPTED_BY_SMTP" && (
+                                    <>
+                                      <br />
+
+                                      <small>
+                                        Entrega final não confirmada
+                                      </small>
+                                    </>
+                                  )}
+
+                                  {item.emailStatus === "ERROR" &&
+                                    item.error && (
+                                      <>
+                                        <br />
+
+                                        <small>
+                                          {item.error}
+                                        </small>
+                                      </>
+                                    )}
+                                </td>
+
+                                <td>
+                                  {item.attemptCount}
+                                </td>
+
+                                <td>
+                                  {lastAttempt}
+                                </td>
+
+                                <td>
+                                  {item.emailStatus ===
+                                  "ACCEPTED_BY_SMTP" ? (
+                                    <>
+                                      <strong>
+                                        SMTP aceitou
+                                      </strong>
+
+                                      <br />
+
+                                      <small>
+                                        Message ID:{" "}
+                                        {item.messageId || "-"}
+                                      </small>
+                                    </>
+                                  ) : item.emailStatus ===
+                                    "ERROR" ? (
+                                    <>
+                                      <strong>
+                                        Falha registrada
+                                      </strong>
+
+                                      <br />
+
+                                      <small>
+                                        Nova tentativa poderá ocorrer
+                                        automaticamente.
+                                      </small>
+                                    </>
+                                  ) : (
+                                    "-"
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          }
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p>
+                    Nenhuma cobrança bancária recente encontrada para
+                    monitoramento de e-mail.
+                  </p>
+                )}
+              </div>
+            )}
 
             <div className="panel soft-panel">
               <div className="panel-header">

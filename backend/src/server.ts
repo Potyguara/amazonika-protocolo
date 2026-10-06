@@ -10873,6 +10873,12 @@ type FinanceAutoChargeSettingsPayload = {
   sendEmail?: boolean;
   sendWhatsapp?: boolean;
   defaultFiscalMode?: "NOTA_FISCAL_ANTES" | "RECIBO_POSTERIOR";
+
+  schedulerTimeZone?: string;
+  chargeRunHour?: number;
+  chargeRunMinute?: number;
+  noticeRunHour?: number;
+  noticeRunMinute?: number;
 };
 
 function clampAutoChargeInteger(
@@ -10895,6 +10901,34 @@ function clampAutoChargeInteger(
     )
   );
 }
+
+function normalizeFinanceSchedulerTimeZone(
+  value: unknown,
+  fallback: string
+) {
+  const candidate =
+    String(
+      value ||
+      fallback ||
+      "America/Belem"
+    ).trim();
+
+  try {
+    new Intl.DateTimeFormat(
+      "en-US",
+      {
+        timeZone:
+          candidate,
+      }
+    ).format(new Date());
+
+    return candidate;
+  } catch {
+    return fallback ||
+      "America/Belem";
+  }
+}
+
 
 async function getFinanceAutoChargeSettings() {
   return prisma.financeAutoChargeSettings.upsert({
@@ -10921,6 +10955,27 @@ type FinanceAutoChargeResult = {
     | "ERROR";
   reason?: string;
   txid?: string | null;
+
+  initialEmailStatus?:
+    | "ACCEPTED_BY_SMTP"
+    | "SKIPPED"
+    | "ERROR";
+
+  initialEmailReason?: string;
+};
+
+type FinanceInitialChargeEmailResult = {
+  status:
+    | "ACCEPTED_BY_SMTP"
+    | "SKIPPED"
+    | "ERROR";
+
+  reason?: string;
+
+  messageId?: string | null;
+
+  accepted?: unknown[];
+  rejected?: unknown[];
 };
 
 function normalizeFinanceDocument(
@@ -11115,6 +11170,528 @@ function financeDaysBetween(
   );
 }
 
+async function sendFinanceInitialChargeEmail(
+  transactionId: number
+): Promise<FinanceInitialChargeEmailResult> {
+  const transaction =
+    await prisma.financialTransaction.findUnique({
+      where: {
+        id:
+          transactionId,
+      },
+
+      include: {
+        client:
+          true,
+
+        billingCharge: {
+          include: {
+            client:
+              true,
+          },
+        },
+      },
+    });
+
+  if (!transaction) {
+    return {
+      status:
+        "SKIPPED",
+
+      reason:
+        "Lançamento financeiro não encontrado.",
+    };
+  }
+
+  const charge =
+    transaction.billingCharge;
+
+  if (!charge) {
+    return {
+      status:
+        "SKIPPED",
+
+      reason:
+        "Cobrança bancária ainda não vinculada ao lançamento.",
+    };
+  }
+
+  /*
+   * Idempotência:
+   *
+   * Se o SMTP já aceitou o envio inicial anteriormente,
+   * nunca reenviamos automaticamente a mesma mensagem.
+   */
+  if (charge.initialEmailSentAt) {
+    return {
+      status:
+        "SKIPPED",
+
+      reason:
+        "Envio inicial já aceito anteriormente pelo servidor SMTP.",
+
+      messageId:
+        charge.initialEmailMessageId,
+    };
+  }
+
+  const settings =
+    await getFinanceAutoChargeSettings();
+
+  if (!settings.sendEmail) {
+    return {
+      status:
+        "SKIPPED",
+
+      reason:
+        "Envio automático de e-mail está desativado nas configurações.",
+    };
+  }
+
+  if (
+    transaction.emailNotificationEnabled ===
+    false
+  ) {
+    return {
+      status:
+        "SKIPPED",
+
+      reason:
+        "E-mail automático está desativado para este lançamento.",
+    };
+  }
+
+  const client =
+    transaction.client ||
+    charge.client ||
+    null;
+
+  const attemptedAt =
+    new Date();
+
+  /*
+   * A partir daqui existe uma tentativa operacional real.
+   */
+  const registerFailure =
+    async (
+      message: string,
+      accepted: unknown[] = [],
+      rejected: unknown[] = []
+    ) => {
+      await prisma.billingCharge.update({
+        where: {
+          id:
+            charge.id,
+        },
+
+        data: {
+          initialEmailLastAttemptAt:
+            attemptedAt,
+
+          initialEmailAttemptCount: {
+            increment:
+              1,
+          },
+
+          initialEmailAcceptedJson:
+            safeJson(
+              accepted
+            ),
+
+          initialEmailRejectedJson:
+            safeJson(
+              rejected
+            ),
+
+          initialEmailError:
+            message.slice(
+              0,
+              2000
+            ),
+        },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          userId:
+            null,
+
+          userName:
+            "SIS Amazonika",
+
+          userEmail:
+            null,
+
+          userRole:
+            "SYSTEM",
+
+          action:
+            "FINANCE_INITIAL_CHARGE_EMAIL_ERROR",
+
+          entity:
+            "BillingCharge",
+
+          entityId:
+            String(
+              charge.id
+            ),
+
+          description:
+            `Falha no envio inicial da cobrança do lançamento financeiro ${transaction.id}.`,
+
+          metadata:
+            JSON.stringify({
+              transactionId:
+                transaction.id,
+
+              billingChargeId:
+                charge.id,
+
+              error:
+                message,
+
+              accepted,
+
+              rejected,
+            }),
+        },
+      }).catch(
+        () => undefined
+      );
+    };
+
+  if (!client?.email) {
+    const message =
+      "Cliente sem e-mail cadastrado.";
+
+    await registerFailure(
+      message
+    );
+
+    return {
+      status:
+        "ERROR",
+
+      reason:
+        message,
+    };
+  }
+
+  try {
+    const transporter =
+      await createTransporterFromSettings();
+
+    if (!transporter) {
+      const message =
+        "SMTP não configurado para envio da cobrança.";
+
+      await registerFailure(
+        message
+      );
+
+      return {
+        status:
+          "ERROR",
+
+        reason:
+          message,
+      };
+    }
+
+    const company =
+      await getCompanySettings();
+
+    const smtp =
+      await getSmtpSettings();
+
+    const publicUrl =
+      getChargePublicUrl(
+        charge
+      );
+
+    const amount =
+      formatCurrencyBRFromCents(
+        requireCanonicalCents(
+          charge.amountCents,
+          "Valor da cobrança inicial"
+        )
+      );
+
+    const dueDate =
+      new Intl.DateTimeFormat(
+        "pt-BR",
+        {
+          timeZone:
+            "America/Belem",
+        }
+      ).format(
+        charge.dueDate
+      );
+
+    const subject =
+      `Nova cobrança - ${
+        company.companyName ||
+        "Amazonika Engenharia"
+      }`;
+
+    const html =
+      buildEmailLayout(
+        `
+          <p>
+            Prezado(a)
+            <strong>${escapeHtml(client.name)}</strong>,
+          </p>
+
+          <p>
+            Uma nova cobrança está disponível para pagamento.
+          </p>
+
+          <p>
+            <strong>Cobrança:</strong>
+            ${escapeHtml(charge.description)}
+          </p>
+
+          <p>
+            <strong>Valor:</strong>
+            ${escapeHtml(amount)}
+          </p>
+
+          <p>
+            <strong>Vencimento:</strong>
+            ${escapeHtml(dueDate)}
+          </p>
+
+          <p style="text-align:center;margin:28px 0;">
+            <a
+              href="${escapeHtml(publicUrl)}"
+              style="
+                display:inline-block;
+                background:#0f4f3a;
+                color:#ffffff;
+                text-decoration:none;
+                padding:14px 24px;
+                border-radius:999px;
+                font-weight:bold;
+              "
+            >
+              Acessar cobrança
+            </a>
+          </p>
+
+          <p style="font-size:13px;color:#66766e;">
+            A aceitação desta mensagem pelo servidor de e-mail
+            não representa confirmação de leitura pelo destinatário.
+          </p>
+        `,
+        {
+          eyebrow:
+            "Financeiro",
+
+          title:
+            "Nova cobrança disponível",
+
+          subtitle:
+            company.companyName ||
+            "Amazonika Engenharia",
+        }
+      );
+
+    const info =
+      await transporter.sendMail({
+        from:
+          smtp.smtpFrom,
+
+        to:
+          client.email,
+
+        subject,
+
+        html,
+      });
+
+    const accepted =
+      Array.isArray(
+        info.accepted
+      )
+        ? info.accepted
+        : [];
+
+    const rejected =
+      Array.isArray(
+        info.rejected
+      )
+        ? info.rejected
+        : [];
+
+    /*
+     * O SMTP precisa realmente aceitar ao menos um
+     * destinatário. Apenas receber messageId não basta.
+     */
+    if (
+      accepted.length === 0
+    ) {
+      const message =
+        rejected.length > 0
+          ? "Servidor SMTP rejeitou o destinatário."
+          : "Servidor SMTP não confirmou aceitação do destinatário.";
+
+      await registerFailure(
+        message,
+        accepted,
+        rejected
+      );
+
+      return {
+        status:
+          "ERROR",
+
+        reason:
+          message,
+
+        messageId:
+          info.messageId ||
+          null,
+
+        accepted,
+        rejected,
+      };
+    }
+
+    const sentAt =
+      new Date();
+
+    await prisma.billingCharge.update({
+      where: {
+        id:
+          charge.id,
+      },
+
+      data: {
+        status:
+          charge.status === "EMITIDA"
+            ? "ENVIADA"
+            : charge.status,
+
+        sentToClientAt:
+          charge.sentToClientAt ||
+          sentAt,
+
+        initialEmailSentAt:
+          sentAt,
+
+        initialEmailLastAttemptAt:
+          sentAt,
+
+        initialEmailAttemptCount: {
+          increment:
+            1,
+        },
+
+        initialEmailMessageId:
+          info.messageId ||
+          null,
+
+        initialEmailAcceptedJson:
+          safeJson(
+            accepted
+          ),
+
+        initialEmailRejectedJson:
+          safeJson(
+            rejected
+          ),
+
+        initialEmailError:
+          null,
+      },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        userId:
+          null,
+
+        userName:
+          "SIS Amazonika",
+
+        userEmail:
+          null,
+
+        userRole:
+          "SYSTEM",
+
+        action:
+          "FINANCE_INITIAL_CHARGE_EMAIL_ACCEPTED",
+
+        entity:
+          "BillingCharge",
+
+        entityId:
+          String(
+            charge.id
+          ),
+
+        description:
+          `Servidor SMTP aceitou o envio inicial da cobrança do lançamento financeiro ${transaction.id}.`,
+
+        metadata:
+          JSON.stringify({
+            transactionId:
+              transaction.id,
+
+            billingChargeId:
+              charge.id,
+
+            messageId:
+              info.messageId,
+
+            accepted,
+
+            rejected,
+
+            publicUrl,
+          }),
+      },
+    });
+
+    return {
+      status:
+        "ACCEPTED_BY_SMTP",
+
+      reason:
+        "Mensagem aceita pelo servidor SMTP. Entrega final e leitura não confirmadas.",
+
+      messageId:
+        info.messageId ||
+        null,
+
+      accepted,
+      rejected,
+    };
+  } catch (error: any) {
+    const message =
+      String(
+        error?.message ||
+        "Erro desconhecido no envio inicial da cobrança."
+      );
+
+    await registerFailure(
+      message
+    ).catch(
+      () => undefined
+    );
+
+    return {
+      status:
+        "ERROR",
+
+      reason:
+        message,
+    };
+  }
+}
+
+
 async function processFinanceAutoCharges(
   options?: {
     daysAhead?: number;
@@ -11304,17 +11881,31 @@ async function processFinanceAutoCharges(
       if (
         transaction.providerTxId
       ) {
+        const initialEmail =
+          await sendFinanceInitialChargeEmail(
+            transaction.id
+          );
+
         skipped += 1;
 
         results.push({
           transactionId:
             transaction.id,
+
           status:
             "SKIPPED",
+
           reason:
             "A transação já possui TXID Pix.",
+
           txid:
             transaction.providerTxId,
+
+          initialEmailStatus:
+            initialEmail.status,
+
+          initialEmailReason:
+            initialEmail.reason,
         });
 
         continue;
@@ -11701,6 +12292,11 @@ async function processFinanceAutoCharges(
           },
         });
 
+        const initialEmail =
+          await sendFinanceInitialChargeEmail(
+            transaction.id
+          );
+
         skipped += 1;
 
         results.push({
@@ -11716,6 +12312,12 @@ async function processFinanceAutoCharges(
           txid:
             billingCharge.txid ||
             txid,
+
+          initialEmailStatus:
+            initialEmail.status,
+
+          initialEmailReason:
+            initialEmail.reason,
         });
 
         continue;
@@ -11983,6 +12585,18 @@ async function processFinanceAutoCharges(
         created += 1;
       }
 
+      /*
+       * O Pix já foi criado/recuperado com sucesso.
+       *
+       * A partir daqui o e-mail é independente:
+       * uma falha SMTP não pode transformar uma
+       * cobrança bancária válida em erro bancário.
+       */
+      const initialEmail =
+        await sendFinanceInitialChargeEmail(
+          transaction.id
+        );
+
       results.push({
         transactionId:
           transaction.id,
@@ -12000,6 +12614,12 @@ async function processFinanceAutoCharges(
         txid:
           billingCharge.txid ||
           effectiveTxid,
+
+        initialEmailStatus:
+          initialEmail.status,
+
+        initialEmailReason:
+          initialEmail.reason,
       });
     } catch (error: any) {
       errors += 1;
@@ -12109,6 +12729,312 @@ app.get(
   }
 );
 
+app.get(
+  "/finance/auto-charge-scheduler-status",
+  authMiddleware,
+  requireRoles([
+    "GERENTE",
+    "PROGRAMADOR",
+  ]),
+  async (_req: any, res) => {
+    try {
+      const settings =
+        await getFinanceAutoChargeSettings();
+
+      const timeZone =
+        normalizeFinanceSchedulerTimeZone(
+          settings.schedulerTimeZone,
+          "America/Belem"
+        );
+
+      const local =
+        financeSchedulerLocalParts(
+          new Date(),
+          timeZone
+        );
+
+      const recentCharges =
+        await prisma.billingCharge.findMany({
+          where: {
+            provider:
+              "BANCO_DO_BRASIL",
+
+            status: {
+              in: [
+                "EMITIDA",
+                "ENVIADA",
+                "PAGA",
+                "VENCIDA",
+              ],
+            },
+          },
+
+          select: {
+            id:
+              true,
+
+            financialTransactionId:
+              true,
+
+            description:
+              true,
+
+            status:
+              true,
+
+            dueDate:
+              true,
+
+            createdAt:
+              true,
+
+            initialEmailSentAt:
+              true,
+
+            initialEmailLastAttemptAt:
+              true,
+
+            initialEmailAttemptCount:
+              true,
+
+            initialEmailMessageId:
+              true,
+
+            initialEmailAcceptedJson:
+              true,
+
+            initialEmailRejectedJson:
+              true,
+
+            initialEmailError:
+              true,
+
+            client: {
+              select: {
+                name:
+                  true,
+
+                email:
+                  true,
+              },
+            },
+
+            financialTransaction: {
+              select: {
+                emailNotificationEnabled:
+                  true,
+              },
+            },
+          },
+
+          orderBy: {
+            updatedAt:
+              "desc",
+          },
+
+          take:
+            25,
+        });
+
+      const emailSummary = {
+        acceptedBySmtp:
+          0,
+
+        failed:
+          0,
+
+        pending:
+          0,
+
+        disabled:
+          0,
+      };
+
+      const emailRows =
+        recentCharges.map(
+          (charge) => {
+            let emailStatus:
+              | "ACCEPTED_BY_SMTP"
+              | "ERROR"
+              | "PENDING"
+              | "DISABLED";
+
+            if (
+              !settings.sendEmail ||
+              charge.financialTransaction
+                ?.emailNotificationEnabled ===
+              false
+            ) {
+              emailStatus =
+                "DISABLED";
+
+              emailSummary.disabled +=
+                1;
+            } else if (
+              charge.initialEmailSentAt
+            ) {
+              emailStatus =
+                "ACCEPTED_BY_SMTP";
+
+              emailSummary.acceptedBySmtp +=
+                1;
+            } else if (
+              charge.initialEmailLastAttemptAt &&
+              charge.initialEmailError
+            ) {
+              emailStatus =
+                "ERROR";
+
+              emailSummary.failed +=
+                1;
+            } else {
+              emailStatus =
+                "PENDING";
+
+              emailSummary.pending +=
+                1;
+            }
+
+            return {
+              billingChargeId:
+                charge.id,
+
+              financialTransactionId:
+                charge.financialTransactionId,
+
+              description:
+                charge.description,
+
+              chargeStatus:
+                charge.status,
+
+              dueDate:
+                charge.dueDate,
+
+              createdAt:
+                charge.createdAt,
+
+              clientName:
+                charge.client?.name ||
+                null,
+
+              clientEmail:
+                charge.client?.email ||
+                null,
+
+              emailStatus,
+
+              attemptCount:
+                charge.initialEmailAttemptCount,
+
+              lastAttemptAt:
+                charge.initialEmailLastAttemptAt,
+
+              acceptedAt:
+                charge.initialEmailSentAt,
+
+              messageId:
+                charge.initialEmailMessageId,
+
+              accepted:
+                charge.initialEmailAcceptedJson,
+
+              rejected:
+                charge.initialEmailRejectedJson,
+
+              error:
+                charge.initialEmailError,
+            };
+          }
+        );
+
+      return res.json({
+        automation: {
+          enabled:
+            settings.enabled,
+
+          bbEnvironment:
+            String(
+              process.env.BB_ENV ||
+              "sandbox"
+            ).toLowerCase(),
+
+          timeZone,
+
+          serverLocalDate:
+            local.dateKey,
+
+          serverLocalTime:
+            `${String(local.hour).padStart(2, "0")}:${String(local.minute).padStart(2, "0")}`,
+        },
+
+        chargeSchedule: {
+          hour:
+            settings.chargeRunHour,
+
+          minute:
+            settings.chargeRunMinute,
+
+          lastStartedAt:
+            settings.lastChargeRunStartedAt,
+
+          lastCompletedAt:
+            settings.lastChargeRunCompletedAt,
+
+          lastStatus:
+            settings.lastChargeRunStatus,
+
+          lastSummary:
+            settings.lastChargeRunSummary,
+        },
+
+        noticeSchedule: {
+          hour:
+            settings.noticeRunHour,
+
+          minute:
+            settings.noticeRunMinute,
+
+          lastStartedAt:
+            settings.lastNoticeRunStartedAt,
+
+          lastCompletedAt:
+            settings.lastNoticeRunCompletedAt,
+
+          lastStatus:
+            settings.lastNoticeRunStatus,
+
+          lastSummary:
+            settings.lastNoticeRunSummary,
+        },
+
+        emailDelivery: {
+          terminology:
+            "ACCEPTED_BY_SMTP significa que o servidor SMTP aceitou a mensagem. Não confirma entrega final, leitura ou visualização pelo destinatário.",
+
+          summary:
+            emailSummary,
+
+          recent:
+            emailRows,
+        },
+      });
+    } catch (error: any) {
+      console.error(
+        "Erro ao consultar monitoramento do scheduler financeiro:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          error?.message ||
+          "Erro ao consultar monitoramento do scheduler financeiro.",
+      });
+    }
+  }
+);
+
+
 app.put(
   "/finance/auto-charge-settings",
   authMiddleware,
@@ -12206,6 +13132,44 @@ app.put(
                 : current.sendWhatsapp,
 
             defaultFiscalMode,
+
+            schedulerTimeZone:
+              normalizeFinanceSchedulerTimeZone(
+                body.schedulerTimeZone,
+                current.schedulerTimeZone
+              ),
+
+            chargeRunHour:
+              clampAutoChargeInteger(
+                body.chargeRunHour,
+                current.chargeRunHour,
+                0,
+                23
+              ),
+
+            chargeRunMinute:
+              clampAutoChargeInteger(
+                body.chargeRunMinute,
+                current.chargeRunMinute,
+                0,
+                59
+              ),
+
+            noticeRunHour:
+              clampAutoChargeInteger(
+                body.noticeRunHour,
+                current.noticeRunHour,
+                0,
+                23
+              ),
+
+            noticeRunMinute:
+              clampAutoChargeInteger(
+                body.noticeRunMinute,
+                current.noticeRunMinute,
+                0,
+                59
+              ),
 
             updatedById:
               req.user?.id ||
@@ -12979,6 +13943,497 @@ app.post(
 
 
 
+function financeSchedulerLocalParts(
+  date: Date,
+  timeZone: string
+) {
+  const parts =
+    new Intl.DateTimeFormat(
+      "en-CA",
+      {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      }
+    ).formatToParts(date);
+
+  const values =
+    Object.fromEntries(
+      parts.map(
+        (part) => [
+          part.type,
+          part.value,
+        ]
+      )
+    );
+
+  return {
+    dateKey:
+      `${values.year}-${values.month}-${values.day}`,
+
+    hour:
+      Number(values.hour),
+
+    minute:
+      Number(values.minute),
+  };
+}
+
+function financeSchedulerDateKey(
+  value: Date | null | undefined,
+  timeZone: string
+) {
+  if (!value) {
+    return null;
+  }
+
+  return financeSchedulerLocalParts(
+    value,
+    timeZone
+  ).dateKey;
+}
+
+function shouldRunFinanceSchedulerJob(params: {
+  now: Date;
+  timeZone: string;
+  hour: number;
+  minute: number;
+  lastStartedAt?: Date | null;
+  lastCompletedAt?: Date | null;
+  lastStatus?: string | null;
+}) {
+  const {
+    now,
+    timeZone,
+    hour,
+    minute,
+    lastStartedAt,
+    lastCompletedAt,
+    lastStatus,
+  } = params;
+
+  const local =
+    financeSchedulerLocalParts(
+      now,
+      timeZone
+    );
+
+  const currentMinutes =
+    local.hour * 60 +
+    local.minute;
+
+  const scheduledMinutes =
+    hour * 60 +
+    minute;
+
+  if (
+    currentMinutes <
+    scheduledMinutes
+  ) {
+    return {
+      shouldRun:
+        false,
+
+      reason:
+        "Horário programado ainda não alcançado.",
+    };
+  }
+
+  const completedToday =
+    financeSchedulerDateKey(
+      lastCompletedAt,
+      timeZone
+    ) ===
+    local.dateKey;
+
+  if (
+    completedToday &&
+    lastStatus ===
+      "SUCCESS"
+  ) {
+    return {
+      shouldRun:
+        false,
+
+      reason:
+        "Execução de hoje já concluída com sucesso.",
+    };
+  }
+
+  /*
+   * Proteção contra concorrência.
+   *
+   * Depois de uma tentativa com erro/parcial,
+   * o scheduler aguarda 30 minutos antes
+   * de uma nova tentativa.
+   */
+  if (
+    lastStartedAt &&
+    financeSchedulerDateKey(
+      lastStartedAt,
+      timeZone
+    ) ===
+      local.dateKey
+  ) {
+    const elapsed =
+      now.getTime() -
+      lastStartedAt.getTime();
+
+    if (
+      elapsed <
+      30 * 60 * 1000
+    ) {
+      return {
+        shouldRun:
+          false,
+
+        reason:
+          "Execução recente; aguardando janela de segurança.",
+      };
+    }
+  }
+
+  return {
+    shouldRun:
+      true,
+
+    reason:
+      completedToday
+        ? "Nova tentativa autorizada após falha ou execução parcial."
+        : "Job elegível para execução.",
+  };
+}
+
+
+async function processFinanceSchedulerTick() {
+  const settings =
+    await getFinanceAutoChargeSettings();
+
+  const now =
+    new Date();
+
+  const timeZone =
+    normalizeFinanceSchedulerTimeZone(
+      settings.schedulerTimeZone,
+      "America/Belem"
+    );
+
+  const local =
+    financeSchedulerLocalParts(
+      now,
+      timeZone
+    );
+
+  const result: any = {
+    automationEnabled:
+      settings.enabled,
+
+    timeZone,
+
+    localDate:
+      local.dateKey,
+
+    localTime:
+      `${String(local.hour).padStart(2, "0")}:${String(local.minute).padStart(2, "0")}`,
+
+    charge:
+      null,
+
+    notices:
+      null,
+  };
+
+  if (!settings.enabled) {
+    result.charge = {
+      executed:
+        false,
+
+      reason:
+        "Automação financeira desativada.",
+    };
+
+    result.notices = {
+      executed:
+        false,
+
+      reason:
+        "Automação financeira desativada.",
+    };
+
+    return result;
+  }
+
+  /*
+   * ============================================
+   * COBRANÇAS
+   * ============================================
+   */
+
+  const chargeDecision =
+    shouldRunFinanceSchedulerJob({
+      now,
+      timeZone,
+
+      hour:
+        settings.chargeRunHour,
+
+      minute:
+        settings.chargeRunMinute,
+
+      lastStartedAt:
+        settings.lastChargeRunStartedAt,
+
+      lastCompletedAt:
+        settings.lastChargeRunCompletedAt,
+
+      lastStatus:
+        settings.lastChargeRunStatus,
+    });
+
+  if (chargeDecision.shouldRun) {
+    await prisma.financeAutoChargeSettings.update({
+      where: {
+        id: 1,
+      },
+
+      data: {
+        lastChargeRunStartedAt:
+          now,
+
+        lastChargeRunStatus:
+          "RUNNING",
+      },
+    });
+
+    try {
+      const chargeResult =
+        await processFinanceAutoCharges();
+
+      const status =
+        chargeResult.errors > 0
+          ? "PARTIAL"
+          : "SUCCESS";
+
+      await prisma.financeAutoChargeSettings.update({
+        where: {
+          id: 1,
+        },
+
+        data: {
+          lastChargeRunCompletedAt:
+            new Date(),
+
+          lastChargeRunStatus:
+            status,
+
+          lastChargeRunSummary:
+            JSON.stringify(
+              chargeResult
+            ),
+        },
+      });
+
+      result.charge = {
+        executed:
+          true,
+
+        status,
+
+        result:
+          chargeResult,
+      };
+    } catch (error: any) {
+      const message =
+        String(
+          error?.message ||
+          "Erro desconhecido na emissão automática."
+        ).slice(
+          0,
+          2000
+        );
+
+      await prisma.financeAutoChargeSettings.update({
+        where: {
+          id: 1,
+        },
+
+        data: {
+          lastChargeRunCompletedAt:
+            new Date(),
+
+          lastChargeRunStatus:
+            "ERROR",
+
+          lastChargeRunSummary:
+            JSON.stringify({
+              error:
+                message,
+            }),
+        },
+      });
+
+      result.charge = {
+        executed:
+          true,
+
+        status:
+          "ERROR",
+
+        error:
+          message,
+      };
+    }
+  } else {
+    result.charge = {
+      executed:
+        false,
+
+      reason:
+        chargeDecision.reason,
+    };
+  }
+
+  /*
+   * ============================================
+   * AVISOS
+   * ============================================
+   */
+
+  const refreshed =
+    await getFinanceAutoChargeSettings();
+
+  const noticeDecision =
+    shouldRunFinanceSchedulerJob({
+      now,
+      timeZone,
+
+      hour:
+        refreshed.noticeRunHour,
+
+      minute:
+        refreshed.noticeRunMinute,
+
+      lastStartedAt:
+        refreshed.lastNoticeRunStartedAt,
+
+      lastCompletedAt:
+        refreshed.lastNoticeRunCompletedAt,
+
+      lastStatus:
+        refreshed.lastNoticeRunStatus,
+    });
+
+  if (noticeDecision.shouldRun) {
+    await prisma.financeAutoChargeSettings.update({
+      where: {
+        id: 1,
+      },
+
+      data: {
+        lastNoticeRunStartedAt:
+          now,
+
+        lastNoticeRunStatus:
+          "RUNNING",
+      },
+    });
+
+    try {
+      const noticeResult =
+        await processFinanceAutoChargeEmailNotices();
+
+      const status =
+        noticeResult.errors > 0
+          ? "PARTIAL"
+          : "SUCCESS";
+
+      await prisma.financeAutoChargeSettings.update({
+        where: {
+          id: 1,
+        },
+
+        data: {
+          lastNoticeRunCompletedAt:
+            new Date(),
+
+          lastNoticeRunStatus:
+            status,
+
+          lastNoticeRunSummary:
+            JSON.stringify(
+              noticeResult
+            ),
+        },
+      });
+
+      result.notices = {
+        executed:
+          true,
+
+        status,
+
+        result:
+          noticeResult,
+      };
+    } catch (error: any) {
+      const message =
+        String(
+          error?.message ||
+          "Erro desconhecido nos avisos automáticos."
+        ).slice(
+          0,
+          2000
+        );
+
+      await prisma.financeAutoChargeSettings.update({
+        where: {
+          id: 1,
+        },
+
+        data: {
+          lastNoticeRunCompletedAt:
+            new Date(),
+
+          lastNoticeRunStatus:
+            "ERROR",
+
+          lastNoticeRunSummary:
+            JSON.stringify({
+              error:
+                message,
+            }),
+        },
+      });
+
+      result.notices = {
+        executed:
+          true,
+
+        status:
+          "ERROR",
+
+        error:
+          message,
+      };
+    }
+  } else {
+    result.notices = {
+      executed:
+        false,
+
+      reason:
+        noticeDecision.reason,
+    };
+  }
+
+  return result;
+}
+
+
 function validateCronSecret(req: any, res: any) {
   const expected =
     process.env.CRON_SECRET;
@@ -13010,6 +14465,89 @@ function validateCronSecret(req: any, res: any) {
 
   return true;
 }
+
+app.post(
+  "/internal/cron/finance-scheduler-tick",
+  async (req: any, res) => {
+    try {
+      if (!validateCronSecret(req, res)) {
+        return;
+      }
+
+      const result =
+        await processFinanceSchedulerTick();
+
+      const hasExecution =
+        Boolean(
+          result?.charge?.executed ||
+          result?.notices?.executed
+        );
+
+      if (hasExecution) {
+        await prisma.auditLog.create({
+          data: {
+            userId:
+              null,
+
+            userName:
+              "CRON",
+
+            userEmail:
+              null,
+
+            userRole:
+              "SYSTEM",
+
+            action:
+              "CRON_FINANCE_SCHEDULER_TICK",
+
+            entity:
+              "FinanceAutoChargeSettings",
+
+            entityId:
+              "1",
+
+            description:
+              "Scheduler financeiro executou uma ou mais rotinas automáticas.",
+
+            metadata:
+              JSON.stringify(
+                result
+              ),
+          },
+        });
+      }
+
+      return res.json({
+        ok:
+          true,
+
+        source:
+          "CRON",
+
+        job:
+          "finance-scheduler-tick",
+
+        ...result,
+      });
+    } catch (error: any) {
+      console.error(
+        "Erro no scheduler financeiro:",
+        error
+      );
+
+      return res.status(500).json({
+        ok:
+          false,
+
+        message:
+          error?.message ||
+          "Erro no scheduler financeiro.",
+      });
+    }
+  }
+);
+
 
 app.post(
   "/internal/cron/finance-auto-charges",

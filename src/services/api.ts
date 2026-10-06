@@ -613,6 +613,12 @@ financeTransactions(params?: {
     sendEmail?: boolean;
     sendWhatsapp?: boolean;
     defaultFiscalMode?: "NOTA_FISCAL_ANTES" | "RECIBO_POSTERIOR";
+
+    schedulerTimeZone?: string;
+    chargeRunHour?: number;
+    chargeRunMinute?: number;
+    noticeRunHour?: number;
+    noticeRunMinute?: number;
   }) {
     return request("/finance/auto-charge-settings", {
       method: "PUT",
@@ -663,6 +669,13 @@ financeTransactions(params?: {
     return request("/finance/auto-charges/send-notices", {
       method: "POST",
     });
+  },
+
+
+  financeAutoChargeSchedulerStatus() {
+    return request(
+      "/finance/auto-charge-scheduler-status"
+    );
   },
 
 

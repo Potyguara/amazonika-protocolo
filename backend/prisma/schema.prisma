@@ -919,6 +919,25 @@ model BillingCharge {
   sentToClientAt DateTime?
 
   // =====================================================
+  // ENVIO INICIAL AUTOMÁTICO DA COBRANÇA
+  // =====================================================
+
+  // Diferente dos lembretes de vencimento.
+  // Registra especificamente a entrega inicial após
+  // emissão/recuperação da cobrança no Banco do Brasil.
+  initialEmailSentAt        DateTime?
+  initialEmailLastAttemptAt DateTime?
+  initialEmailAttemptCount  Int       @default(0)
+
+  // Evidência da resposta do servidor SMTP.
+  // Não significa entrega final na caixa do destinatário.
+  initialEmailMessageId    String?
+  initialEmailAcceptedJson String?
+  initialEmailRejectedJson String?
+
+  initialEmailError String?
+
+  // =====================================================
   // DOCUMENTO OFICIAL DE COBRANÇA / AUTENTICIDADE
   // =====================================================
 
@@ -1364,6 +1383,32 @@ model FinanceAutoChargeSettings {
 
   // Política fiscal padrão das cobranças automáticas.
   defaultFiscalMode BillingFiscalMode @default(RECIBO_POSTERIOR)
+
+  // =====================================================
+  // AGENDADOR AUTOMÁTICO
+  // =====================================================
+
+  // Horários administráveis pela interface.
+  // O cron do Linux apenas desperta o scheduler;
+  // a decisão de executar fica no SIS.
+  schedulerTimeZone String @default("America/Belem")
+
+  chargeRunHour   Int @default(7)
+  chargeRunMinute Int @default(0)
+
+  noticeRunHour   Int @default(8)
+  noticeRunMinute Int @default(0)
+
+  // Estado operacional da última execução.
+  lastChargeRunStartedAt   DateTime?
+  lastChargeRunCompletedAt DateTime?
+  lastChargeRunStatus      String?
+  lastChargeRunSummary     String?
+
+  lastNoticeRunStartedAt   DateTime?
+  lastNoticeRunCompletedAt DateTime?
+  lastNoticeRunStatus      String?
+  lastNoticeRunSummary     String?
 
   createdById Int?
   updatedById Int?
