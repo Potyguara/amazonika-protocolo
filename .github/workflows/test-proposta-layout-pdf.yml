@@ -1,0 +1,32 @@
+name: Validar proposta PDF
+on:
+  push:
+    branches:
+      - feat/proposta-layout-editorial-modelo-20261111
+  pull_request:
+    paths:
+      - 'backend/src/modules/standalone-proposals/standalone-proposal-pdf*.ts'
+      - '.github/workflows/test-proposta-layout-pdf.yml'
+permissions:
+  contents: read
+jobs:
+  pdf-smoke:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Generate Prisma client
+        run: npx prisma generate
+      - name: Validate TypeScript
+        run: npx tsc --noEmit
+      - name: Generate simulated proposal PDF
+        run: node --require ts-node/register --test src/modules/standalone-proposals/standalone-proposal-pdf-layout.test.ts
