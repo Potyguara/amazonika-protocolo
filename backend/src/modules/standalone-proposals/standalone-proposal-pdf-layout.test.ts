@@ -63,6 +63,15 @@ test("PDF de proposta editorial gera arquivo válido com dados dinâmicos", asyn
       findUnique: async () => proposal,
       update: async ({ data }: any) => ({ ...proposal, ...data }),
     },
+    systemSetting: {
+      findMany: async () => [
+        { key: "PROPOSAL_BANK_NAME", value: "Banco de Teste" },
+        { key: "PROPOSAL_BANK_AGENCY", value: "1234" },
+        { key: "PROPOSAL_BANK_ACCOUNT", value: "56789-0" },
+        { key: "PROPOSAL_BANK_HOLDER", value: "AMAZONIKA ENGENHARIA LTDA" },
+        { key: "PROPOSAL_PIX_KEY", value: "pix-teste@example.org" },
+      ],
+    },
     companySettings: {
       findFirst: async () => ({
         companyName: "AMAZONIKA ENGENHARIA LTDA",
@@ -79,6 +88,12 @@ test("PDF de proposta editorial gera arquivo válido com dados dinâmicos", asyn
     assert.equal(buffer.subarray(0, 5).toString(), "%PDF-");
     assert.ok(buffer.length > 3000);
     assert.equal(result.proposal.generatedPdfName, "PAV-2026-000008.pdf");
+    const snapshot = JSON.parse(result.proposal.rawSnapshot);
+    assert.equal(snapshot.bankDetails.bank, "Banco de Teste");
+    assert.equal(snapshot.bankDetails.pixKey, "pix-teste@example.org");
+    assert.equal(snapshot.bankDetails.agency, "1234");
+    assert.ok(!("pixQrCode" in snapshot.bankDetails));
+
     const previewDir = process.env.PDF_PREVIEW_DIR;
     if (previewDir) {
       const destination = path.resolve(cwd, previewDir);
