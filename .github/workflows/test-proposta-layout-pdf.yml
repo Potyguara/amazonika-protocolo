@@ -6,11 +6,14 @@ on:
   pull_request:
     paths:
       - 'backend/src/modules/standalone-proposals/standalone-proposal-pdf*.ts'
+      - 'backend/package.json'
+      - 'backend/package-lock.json'
       - 'backend/src/server.ts'
       - 'src/App.tsx'
+      - 'src/pages/StandaloneProposalPublicPage.tsx'
       - '.github/workflows/test-proposta-layout-pdf.yml'
 permissions:
-  contents: read
+  contents: write
 jobs:
   pdf-smoke:
     runs-on: ubuntu-24.04
@@ -24,6 +27,17 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: backend/package-lock.json
+      - name: Sync backend lockfile for QR dependency
+        if: github.event_name == 'push'
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          if ! git diff --quiet -- package-lock.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add package-lock.json
+            git commit -m "build: synchronize QR dependency lockfile [skip ci]"
+            git push origin HEAD:feat/proposta-layout-editorial-modelo-20261111
+          fi
       - name: Install dependencies
         run: npm ci
       - name: Generate Prisma client
