@@ -191,16 +191,16 @@ function drawInstitutionalPage(
   if (firstPage) {
     if (logo) {
       try {
-        doc.image(logo, PAGE_LEFT, 27, { fit: [58, 58] });
+        doc.image(logo, PAGE_LEFT, 23, { fit: [50, 50] });
       } catch { /* preserva PDF sem logomarca se necessário */ }
     }
     doc.font("Helvetica-Bold").fontSize(8.4).fillColor(GREEN)
-      .text("AMAZONIKA ENGENHARIA LTDA", PAGE_LEFT + 71, 40, {
+      .text("AMAZONIKA ENGENHARIA LTDA", PAGE_LEFT + 64, 34, {
         width: 194, lineBreak: false,
       });
     doc.font("Helvetica").fontSize(6.9).fillColor(MUTED)
       .text("T O P O G R A F I A  E  M E I O  A M B I E N T E",
-        PAGE_LEFT + 71, 55, { width: 190, lineBreak: false });
+        PAGE_LEFT + 64, 49, { width: 190, lineBreak: false });
 
     const headerLines = [
       "AMAZONIKA ENGENHARIA LTDA",
@@ -215,13 +215,13 @@ function drawInstitutionalPage(
       doc.font(index === 0 ? "Helvetica-Bold" : "Helvetica")
         .fontSize(index === 0 ? 7.0 : 6.2)
         .fillColor(index === 0 ? GREEN : MUTED)
-        .text(value, 322, 17 + index * 12, {
+        .text(value, 322, 11 + index * 11.5, {
           width: 221, align: "right", lineBreak: false,
         });
     });
-    doc.rect(PAGE_LEFT, 112, 93, 2).fill("#C5A045");
-    doc.moveTo(PAGE_LEFT + 93, 113)
-      .lineTo(doc.page.width - PAGE_RIGHT, 113)
+    doc.rect(PAGE_LEFT, 95, 93, 2).fill("#C5A045");
+    doc.moveTo(PAGE_LEFT + 93, 96)
+      .lineTo(doc.page.width - PAGE_RIGHT, 96)
       .strokeColor(GREEN).lineWidth(0.5).stroke();
   } else {
     // Cabeçalho compacto das páginas seguintes, como no PDF de referência.
@@ -457,8 +457,8 @@ function sectionTitle(
   doc: PDFKit.PDFDocument,
   title: string
 ) {
-  ensureSpace(doc, 55);
-  doc.moveDown(0.85);
+  ensureSpace(doc, 105);
+  doc.moveDown(0.55);
   const y = doc.y;
   const match = title.match(/^([IVX]+)\s*[–-]\s*(.*)$/);
   const numeral = match ? match[1] : "•";
@@ -505,7 +505,7 @@ function drawHeader(
   proposal: any
 ) {
   doc.x = PAGE_LEFT;
-  doc.y = CONTENT_TOP + 45;
+  doc.y = CONTENT_TOP + 13;
   const y = doc.y;
 
   doc.font("Helvetica-Bold").fontSize(7.4).fillColor("#B69137")
@@ -1634,7 +1634,7 @@ export async function generateStandaloneProposalPdf(
 
   ensureSpace(
     doc,
-    125
+    65
   );
 
   doc.moveDown(0.8);
