@@ -71,6 +71,12 @@ test("PDF de proposta editorial gera arquivo válido com dados dinâmicos", asyn
     assert.equal(buffer.subarray(0, 5).toString(), "%PDF-");
     assert.ok(buffer.length > 3000);
     assert.equal(result.proposal.generatedPdfName, "PAV-2026-000008.pdf");
+    const previewDir = process.env.PDF_PREVIEW_DIR;
+    if (previewDir) {
+      const destination = path.resolve(cwd, previewDir);
+      fs.mkdirSync(destination, { recursive: true });
+      fs.copyFileSync(result.filePath, path.join(destination, result.fileName));
+    }
   } finally {
     process.chdir(cwd);
     fs.rmSync(tmp, { recursive: true, force: true });
