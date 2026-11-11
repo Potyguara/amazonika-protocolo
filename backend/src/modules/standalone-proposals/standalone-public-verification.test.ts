@@ -7,6 +7,31 @@ import crypto from "node:crypto";
 import express from "express";
 import type { AddressInfo } from "node:net";
 import { registerStandaloneProposalRoutes } from "./standalone-proposals.routes";
+import { blockStandaloneProposalStaticAccess } from "./standalone-upload-guard";
+
+test("PDF oficial não é acessível pela pasta pública de uploads", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "amazonika-upload-guard-"));
+  const officialDir = path.join(root, "standalone-proposals");
+  fs.mkdirSync(officialDir, { recursive: true });
+  fs.writeFileSync(path.join(officialDir, "PAV-2026-000008.pdf"), "%PDF-1.4");
+  fs.writeFileSync(path.join(root, "public.txt"), "arquivo público");
+  const app = express();
+  blockStandaloneProposalStaticAccess(app);
+  app.use("/uploads", express.static(root));
+  const server = app.listen(0, "127.0.0.1");
+  try {
+    await new Promise<void>(resolve => server.once("listening", resolve));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/uploads`;
+    const forbidden = await fetch(`${base}/standalone-proposals/PAV-2026-000008.pdf`);
+    assert.equal(forbidden.status, 404);
+    assert.equal((await fetch(`${base}/public.txt`)).status, 200);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close(error => error ? reject(error) : resolve())
+    );
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("consulta pública exige token, documento emitido e SHA-256 válido", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "amazonika-public-proposal-"));
