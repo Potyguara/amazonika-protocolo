@@ -1,5 +1,6 @@
 import "./App.css";
 import StandaloneProposalsPage from "./pages/StandaloneProposalsPage";
+import StandaloneProposalPublicPage from "./pages/StandaloneProposalPublicPage";
 import FieldSchedulePage from "./pages/FieldSchedulePage";
 import FieldTravelMapPage from "./pages/FieldTravelMapPage";
 import StandaloneProposalEditorPage from "./pages/StandaloneProposalEditorPage";
@@ -15817,6 +15818,7 @@ function App() {
           element={<ResetPasswordPage />}
         />
       <Route path="/proposta/:token" element={<PublicProposalPage />} />
+      <Route path="/proposta-avulsa/:token" element={<StandaloneProposalPublicPage />} />
       <Route path="/contrato/:token" element={<PublicContractPage />} />
       <Route path="/cobranca/:token" element={<PublicBillingChargePage />} />
 
