@@ -1,6 +1,7 @@
 import { assertMoneyCents, formatBRL } from "../../lib/money";
 import { standaloneDocumentTerms } from "./standalone-money";
 import PDFDocument from "pdfkit";
+import QRCode from "qrcode";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
@@ -1233,7 +1234,7 @@ function drawBankDetails(doc: PDFKit.PDFDocument, bank: ProposalBankDetails) {
     ["CPF/CNPJ do favorecido", bank.holderDocument],
     ["Chave Pix", bank.pixKey],
   ] satisfies Array<[string, string]>;
-  const visibleFields = fields.filter(([, value]) => Boolean(value));(([, value]) => Boolean(value));
+  const visibleFields = fields.filter(([, value]) => Boolean(value));
 
   if (!visibleFields.length) return;
 
@@ -1274,6 +1275,65 @@ function drawBankDetails(doc: PDFKit.PDFDocument, bank: ProposalBankDetails) {
   });
   doc.x = PAGE_LEFT;
   doc.y = y + cardHeight + 10;
+}
+
+function publicStandaloneProposalUrl(publicToken: string): string {
+  const raw = process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL ||
+    (process.env.NODE_ENV === "production" ? "" : "http://localhost:5173");
+  if (!raw) {
+    throw new Error("Configure PUBLIC_APP_URL com a URL pública do frontend antes de emitir propostas com QR.");
+  }
+  const base = new URL(raw);
+  if (process.env.NODE_ENV === "production" && base.protocol !== "https:") {
+    throw new Error("PUBLIC_APP_URL precisa utilizar HTTPS em produção.");
+  }
+  return new URL(`/proposta-avulsa/${encodeURIComponent(publicToken)}`, base).toString();
+}
+
+// QR de verificação documental, não de pagamento. Desenhado vetorialmente
+// para manter legibilidade na impressão sem arquivos de imagem externos.
+function drawProposalVerification(doc: PDFKit.PDFDocument, proposal: any, url: string) {
+  const qr = QRCode.create(url, { errorCorrectionLevel: "M" });
+  const yPadding = 12;
+  const height = 156;
+  ensureSpace(doc, height + 15);
+  const y = doc.y + 5;
+  doc.roundedRect(PAGE_LEFT, y, CONTENT_WIDTH, height, 7)
+    .fillAndStroke("#F3F7F5", BORDER);
+  doc.rect(PAGE_LEFT, y, 5, height).fill("#C5A045");
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(GREEN)
+    .text("VERIFICAÇÃO E RASTREABILIDADE", PAGE_LEFT + 15, y + 13, {
+      width: CONTENT_WIDTH - 30, lineBreak: false,
+    });
+  const codeX = PAGE_LEFT + 16;
+  const codeY = y + 37;
+  const square = 107;
+  const quietZone = 4;
+  const moduleScale = square / (qr.modules.size + 2 * quietZone);
+  doc.rect(codeX, codeY, square, square).fill("#FFFFFF");
+  doc.fillColor(GREEN);
+  for (let row = 0; row < qr.modules.size; row++) {
+    for (let col = 0; col < qr.modules.size; col++) {
+      if (qr.modules.get(row, col)) {
+        doc.rect(codeX + (col + quietZone) * moduleScale,
+          codeY + (row + quietZone) * moduleScale,
+          moduleScale + 0.04, moduleScale + 0.04).fill();
+      }
+    }
+  }
+  const tx = codeX + square + 17;
+  const width = CONTENT_WIDTH - (tx - PAGE_LEFT) - 22;
+  doc.font("Helvetica-Bold").fontSize(7).fillColor("#9A7D37")
+    .text("CÓDIGO DA PROPOSTA", tx, codeY + 2, { width, lineBreak: false });
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(GREEN)
+    .text(proposal.proposalNumber, tx, codeY + 17, { width, lineBreak: false });
+  doc.font("Helvetica").fontSize(7.4).fillColor(DARK)
+    .text("Aponte a câmera para verificar esta proposta e baixar o PDF oficial.",
+      tx, codeY + 42, { width, lineGap: 3 });
+  doc.font("Helvetica").fontSize(6.2).fillColor(MUTED)
+    .text(url, tx, codeY + 84, { width, lineGap: 2 });
+  doc.x = PAGE_LEFT;
+  doc.y = y + height + yPadding;
 }
 
 function drawTotals(
@@ -1377,6 +1437,7 @@ export async function generateStandaloneProposalPdf(
 
   const paymentTerms = standaloneDocumentTerms(proposal);
   const bankDetails = await loadProposalBankDetails(prisma);
+  const publicUrl = publicStandaloneProposalUrl(proposal.publicToken);
 
   if (
     proposal.items.length === 0
@@ -1728,6 +1789,8 @@ export async function generateStandaloneProposalPdf(
     );
   }
 
+  drawProposalVerification(doc, proposal, publicUrl);
+
   ensureSpace(
     doc,
     65
@@ -1815,6 +1878,7 @@ export async function generateStandaloneProposalPdf(
         proposal.totalAmount,
       paymentTerms,
       bankDetails,
+      publicVerificationUrl: publicUrl,
       generatedAt:
         new Date().toISOString(),
       hash,
