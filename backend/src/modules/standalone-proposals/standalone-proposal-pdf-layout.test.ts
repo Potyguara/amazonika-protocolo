@@ -17,11 +17,14 @@ test("PDF de proposta editorial gera arquivo válido com dados dinâmicos", asyn
       fs.copyFileSync(original, path.join(assetDir, file));
   }
   process.chdir(tmp);
+  const previousPublicUrl = process.env.PUBLIC_APP_URL;
+  process.env.PUBLIC_APP_URL = "https://example.org";
 
   const proposal = {
     id: 8,
     title: "Prestação de Serviços Técnicos",
     proposalNumber: "PAV-2026-000008",
+    publicToken: "a".repeat(64),
     clientName: "BENEDITO LIMA MORAES",
     generatedAt: new Date("2026-10-21T12:00:00Z"),
     paymentMode: "A_VISTA",
@@ -93,6 +96,8 @@ test("PDF de proposta editorial gera arquivo válido com dados dinâmicos", asyn
     assert.equal(snapshot.bankDetails.pixKey, "pix-teste@example.org");
     assert.equal(snapshot.bankDetails.agency, "1234");
     assert.ok(!("pixQrCode" in snapshot.bankDetails));
+    assert.equal(snapshot.publicVerificationUrl,
+      `https://example.org/proposta-avulsa/${"a".repeat(64)}`);
 
     const previewDir = process.env.PDF_PREVIEW_DIR;
     if (previewDir) {
@@ -101,6 +106,8 @@ test("PDF de proposta editorial gera arquivo válido com dados dinâmicos", asyn
       fs.copyFileSync(result.filePath, path.join(destination, result.fileName));
     }
   } finally {
+    if (previousPublicUrl === undefined) delete process.env.PUBLIC_APP_URL;
+    else process.env.PUBLIC_APP_URL = previousPublicUrl;
     process.chdir(cwd);
     fs.rmSync(tmp, { recursive: true, force: true });
   }
