@@ -1,5 +1,6 @@
 import "./App.css";
 import StandaloneProposalsPage from "./pages/StandaloneProposalsPage";
+import StandaloneProposalPublicPage from "./pages/StandaloneProposalPublicPage";
 import FieldSchedulePage from "./pages/FieldSchedulePage";
 import FieldTravelMapPage from "./pages/FieldTravelMapPage";
 import StandaloneProposalEditorPage from "./pages/StandaloneProposalEditorPage";
@@ -695,6 +696,13 @@ type BackendCompanySettings = {
   companyState: string;
   companyZipCode: string;
   companyFooterText: string;
+  bankName: string;
+  bankAgency: string;
+  bankAccount: string;
+  bankAccountType: string;
+  bankHolder: string;
+  bankHolderDocument: string;
+  pixKey: string;
 };
 
 
@@ -15191,6 +15199,13 @@ function CompanySettingsPanel() {
   const [companyState, setCompanyState] = useState("");
   const [companyZipCode, setCompanyZipCode] = useState("");
   const [companyFooterText, setCompanyFooterText] = useState("");
+  const [bankName, setBankName] = useState("");
+  const [bankAgency, setBankAgency] = useState("");
+  const [bankAccount, setBankAccount] = useState("");
+  const [bankAccountType, setBankAccountType] = useState("");
+  const [bankHolder, setBankHolder] = useState("");
+  const [bankHolderDocument, setBankHolderDocument] = useState("");
+  const [pixKey, setPixKey] = useState("");
 
   async function loadCompanySettings() {
     try {
@@ -15211,6 +15226,13 @@ function CompanySettingsPanel() {
       setCompanyState(data.companyState || "");
       setCompanyZipCode(data.companyZipCode || "");
       setCompanyFooterText(data.companyFooterText || "");
+      setBankName(data.bankName || "");
+      setBankAgency(data.bankAgency || "");
+      setBankAccount(data.bankAccount || "");
+      setBankAccountType(data.bankAccountType || "");
+      setBankHolder(data.bankHolder || "");
+      setBankHolderDocument(data.bankHolderDocument || "");
+      setPixKey(data.pixKey || "");
     } catch (err) {
       setError(
         err instanceof Error
@@ -15253,6 +15275,13 @@ function CompanySettingsPanel() {
         companyState,
         companyZipCode,
         companyFooterText,
+        bankName,
+        bankAgency,
+        bankAccount,
+        bankAccountType,
+        bankHolder,
+        bankHolderDocument,
+        pixKey,
       })) as {
         message?: string;
         settings?: BackendCompanySettings;
@@ -15273,6 +15302,13 @@ function CompanySettingsPanel() {
         setCompanyState(response.settings.companyState || "");
         setCompanyZipCode(response.settings.companyZipCode || "");
         setCompanyFooterText(response.settings.companyFooterText || "");
+        setBankName(response.settings.bankName || "");
+        setBankAgency(response.settings.bankAgency || "");
+        setBankAccount(response.settings.bankAccount || "");
+        setBankAccountType(response.settings.bankAccountType || "");
+        setBankHolder(response.settings.bankHolder || "");
+        setBankHolderDocument(response.settings.bankHolderDocument || "");
+        setPixKey(response.settings.pixKey || "");
       }
     } catch (err) {
       setError(
@@ -15435,6 +15471,46 @@ function CompanySettingsPanel() {
               />
             </label>
           </div>
+        </div>
+
+        <div className="form-section flat company-address-section">
+          <h3>Dados bancários e chave Pix</h3>
+          <p>Estas informações aparecerão nas propostas comerciais. Nenhum QR Code Pix será gerado.</p>
+          <label>Banco
+            <input value={bankName} onChange={(event) => setBankName(event.target.value)}
+              placeholder="Nome ou número do banco" maxLength={120} />
+          </label>
+          <div className="form-row">
+            <label>Agência
+              <input value={bankAgency} onChange={(event) => setBankAgency(event.target.value)}
+                placeholder="Agência com dígito, se houver" maxLength={30} />
+            </label>
+            <label>Conta
+              <input value={bankAccount} onChange={(event) => setBankAccount(event.target.value)}
+                placeholder="Conta com dígito" maxLength={40} />
+            </label>
+            <label>Tipo de conta
+              <select value={bankAccountType} onChange={(event) => setBankAccountType(event.target.value)}>
+                <option value="">Não informado</option>
+                <option value="Conta corrente">Conta corrente</option>
+                <option value="Conta poupança">Conta poupança</option>
+                <option value="Conta de pagamento">Conta de pagamento</option>
+              </select>
+            </label>
+          </div>
+          <label>Favorecido / titular
+            <input value={bankHolder} onChange={(event) => setBankHolder(event.target.value)}
+              placeholder="Razão social ou nome do titular" maxLength={150} />
+          </label>
+          <label>CPF/CNPJ do favorecido
+            <input value={bankHolderDocument} onChange={(event) => setBankHolderDocument(event.target.value)}
+              placeholder="Documento do titular" maxLength={20} />
+          </label>
+          <label>Chave Pix
+            <input value={pixKey} onChange={(event) => setPixKey(event.target.value)}
+              placeholder="CPF/CNPJ, e-mail, telefone ou chave aleatória" maxLength={160} />
+          </label>
+          <small>Somente os campos preenchidos serão exibidos no PDF da proposta. Confira os dados antes de salvar.</small>
         </div>
 
         <div className="company-preview-card">
@@ -15742,6 +15818,7 @@ function App() {
           element={<ResetPasswordPage />}
         />
       <Route path="/proposta/:token" element={<PublicProposalPage />} />
+      <Route path="/proposta-avulsa/:token" element={<StandaloneProposalPublicPage />} />
       <Route path="/contrato/:token" element={<PublicContractPage />} />
       <Route path="/cobranca/:token" element={<PublicBillingChargePage />} />
 

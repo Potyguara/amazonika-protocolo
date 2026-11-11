@@ -1,0 +1,66 @@
+name: Validar proposta PDF
+on:
+  push:
+    branches:
+      - feat/proposta-layout-editorial-modelo-20261111
+  pull_request:
+    paths:
+      - 'backend/src/modules/standalone-proposals/standalone-proposal-pdf*.ts'
+      - 'backend/package.json'
+      - 'backend/package-lock.json'
+      - 'backend/src/server.ts'
+      - 'backend/src/modules/standalone-proposals/standalone-proposals.routes.ts'
+      - 'backend/src/modules/standalone-proposals/standalone-public-verification.test.ts'
+      - 'src/App.tsx'
+      - 'src/pages/StandaloneProposalPublicPage.tsx'
+      - '.github/workflows/test-proposta-layout-pdf.yml'
+permissions:
+  contents: read
+jobs:
+  pdf-smoke:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Generate Prisma client
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+        run: npx prisma generate
+      - name: Validate TypeScript
+        run: npx tsc --noEmit
+      - name: Verify public proposal access and PDF integrity
+        run: node --require ts-node/register --test src/modules/standalone-proposals/standalone-public-verification.test.ts
+      - name: Generate simulated proposal PDF
+        env:
+          PDF_PREVIEW_DIR: pdf-preview
+        run: node --require ts-node/register --test src/modules/standalone-proposals/standalone-proposal-pdf-layout.test.ts
+      - name: Upload visual PDF preview
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proposta-pdf-preview
+          path: backend/pdf-preview/*.pdf
+          if-no-files-found: warn
+
+  frontend-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Compile and build frontend
+        run: npm run build

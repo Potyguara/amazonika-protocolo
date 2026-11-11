@@ -1,6 +1,7 @@
 import { assertMoneyCents, formatBRL } from "../../lib/money";
 import { standaloneDocumentTerms } from "./standalone-money";
 import PDFDocument from "pdfkit";
+import QRCode from "qrcode";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
@@ -15,7 +16,7 @@ const BORDER = "#D9E4DF";
 const PAGE_LEFT = 52;
 const PAGE_RIGHT = 52;
 
-const CONTENT_TOP = 136;
+const CONTENT_TOP = 92;
 const CONTENT_BOTTOM = 742;
 
 const CONTENT_WIDTH =
@@ -120,7 +121,8 @@ function ensureSpace(
 function drawInstitutionalPage(
   doc: PDFKit.PDFDocument,
   proposal: any,
-  company: any
+  company: any,
+  firstPage: boolean
 ) {
   const savedX = doc.x;
   const savedY = doc.y;
@@ -184,57 +186,65 @@ function drawInstitutionalPage(
   // CABEÇALHO
   // -----------------------------------------------------
 
-  if (logo) {
-    try {
-      doc.image(
-        logo,
-        PAGE_LEFT,
-        27,
-        {
-          fit: [58, 58],
-        }
-      );
-    } catch {
-      // segue sem logo
+  doc.rect(0, 0, 112, 6).fill("#C5A045");
+  doc.rect(112, 0, doc.page.width - 112, 6).fill(GREEN);
+
+  if (firstPage) {
+    if (logo) {
+      try {
+        doc.image(logo, PAGE_LEFT, 23, { fit: [50, 50] });
+      } catch { /* preserva PDF sem logomarca se necessário */ }
     }
-  }
-
-  // Identificação institucional fixa em todas as páginas.
-  // Título, número e data da proposta pertencem ao corpo do documento.
-  const headerLines = [
-    "AMAZONIKA ENGENHARIA LTDA",
-    "Av. Almirante Barroso 620-B - CEP 68900-401",
-    "Bairro: Central - Macapá/AP",
-    "CNPJ: 49.158.834/0001-19",
-    "Contato: 96 98803-6439 / 96 9141-0943",
-    "www.amazonikaengenharia.com.br",
-    "amazonika@amazonikaengenharia.com.br",
-  ];
-
-  headerLines.forEach((value, index) => {
-    doc
-      .font(index === 0 ? "Helvetica-Bold" : "Helvetica")
-      .fontSize(index === 0 ? 7.4 : 6.7)
-      .fillColor(index === 0 ? GREEN : MUTED)
-      .text(value, 206, 20 + index * 12, {
-        width: 337,
-        align: "right",
-        lineBreak: false,
+    doc.font("Helvetica-Bold").fontSize(8.4).fillColor(GREEN)
+      .text("AMAZONIKA ENGENHARIA LTDA", PAGE_LEFT + 64, 34, {
+        width: 194, lineBreak: false,
       });
-  });
+    doc.font("Helvetica").fontSize(6.9).fillColor(MUTED)
+      .text("T O P O G R A F I A  E  M E I O  A M B I E N T E",
+        PAGE_LEFT + 64, 49, { width: 190, lineBreak: false });
 
-  doc
-    .moveTo(
-      PAGE_LEFT,
-      115
-    )
-    .lineTo(
-      doc.page.width - PAGE_RIGHT,
-      115
-    )
-    .strokeColor(BORDER)
-    .lineWidth(0.5)
-    .stroke();
+    const headerLines = [
+      "AMAZONIKA ENGENHARIA LTDA",
+      "Av. Almirante Barroso 620-B - CEP 68900-401",
+      "Bairro: Central - Macapá/AP",
+      "CNPJ: 49.158.834/0001-19",
+      "Contato: 96 98803-6439 / 96 9141-0943",
+      "www.amazonikaengenharia.com.br",
+      "amazonika@amazonikaengenharia.com.br",
+    ];
+    headerLines.forEach((value, index) => {
+      doc.font(index === 0 ? "Helvetica-Bold" : "Helvetica")
+        .fontSize(index === 0 ? 7.0 : 6.2)
+        .fillColor(index === 0 ? GREEN : MUTED)
+        .text(value, 322, 11 + index * 11.5, {
+          width: 221, align: "right", lineBreak: false,
+        });
+    });
+    doc.rect(PAGE_LEFT, 95, 93, 2).fill("#C5A045");
+    doc.moveTo(PAGE_LEFT + 93, 96)
+      .lineTo(doc.page.width - PAGE_RIGHT, 96)
+      .strokeColor(GREEN).lineWidth(0.5).stroke();
+  } else {
+    // Cabeçalho compacto das páginas seguintes, como no PDF de referência.
+    if (logo) {
+      try {
+        doc.image(logo, PAGE_LEFT, 25, { fit: [33, 33] });
+      } catch { /* sem interrupção da emissão */ }
+    }
+    doc.font("Helvetica-Bold").fontSize(7.8).fillColor(GREEN)
+      .text("AMAZONIKA ENGENHARIA", PAGE_LEFT + 40, 38, {
+        width: 174, lineBreak: false,
+      });
+    doc.font("Helvetica").fontSize(6.1).fillColor(MUTED)
+      .text(`PROPOSTA DE PRESTAÇÃO DE SERVIÇOS TÉCNICOS  ·  ${proposal.proposalNumber}`,
+        285, 39, {
+          width: 258, align: "right", lineBreak: false,
+        });
+    doc.rect(PAGE_LEFT, 68, 80, 2).fill("#C5A045");
+    doc.moveTo(PAGE_LEFT + 80, 69)
+      .lineTo(doc.page.width - PAGE_RIGHT, 69)
+      .strokeColor(BORDER).lineWidth(0.5).stroke();
+  }
 
   // -----------------------------------------------------
   // RODAPÉ INSTITUCIONAL
@@ -376,7 +386,8 @@ function drawInstitutionalPages(
     drawInstitutionalPage(
       doc,
       proposal,
-      company
+      company,
+      index === 0
     );
   }
 }
@@ -447,21 +458,25 @@ function sectionTitle(
   doc: PDFKit.PDFDocument,
   title: string
 ) {
-  ensureSpace(doc, 45);
-
+  ensureSpace(doc, 105);
   doc.moveDown(0.55);
+  const y = doc.y;
+  const match = title.match(/^([IVX]+)\s*[–-]\s*(.*)$/);
+  const numeral = match ? match[1] : "•";
+  const heading = match ? match[2] : title;
 
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(11)
-    .fillColor(GREEN)
-    .text(title.toUpperCase(), {
-      continued: false,
+  doc.roundedRect(PAGE_LEFT, y, 24, 24, 5).fill(GREEN);
+  doc.font("Helvetica-Bold").fontSize(10).fillColor("#FFFFFF")
+    .text(numeral, PAGE_LEFT, y + 6, { width: 24, align: "center", lineBreak: false });
+  doc.font("Helvetica-Bold").fontSize(10.2).fillColor(GREEN)
+    .text(heading.toUpperCase(), PAGE_LEFT + 34, y + 6, {
+      width: CONTENT_WIDTH - 42, lineBreak: false,
     });
-
-  doc.moveDown(0.25);
-  line(doc);
-  doc.moveDown(0.55);
+  doc.moveTo(PAGE_LEFT + 34, y + 26)
+    .lineTo(PAGE_LEFT + CONTENT_WIDTH, y + 26)
+    .strokeColor(BORDER).lineWidth(0.7).stroke();
+  doc.x = PAGE_LEFT;
+  doc.y = y + 35;
 }
 
 function paragraph(
@@ -491,97 +506,58 @@ function drawHeader(
   proposal: any
 ) {
   doc.x = PAGE_LEFT;
-  doc.y = CONTENT_TOP;
+  doc.y = CONTENT_TOP + 13;
+  const y = doc.y;
 
-  // Identificação da proposta no corpo, antes de DESTINATÁRIO.
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(8)
-    .fillColor(MUTED)
-    .text("PROPOSTA DE PRESTAÇÃO DE SERVIÇOS TÉCNICOS", {
-      width: CONTENT_WIDTH,
-      align: "center",
+  doc.font("Helvetica-Bold").fontSize(7.4).fillColor("#B69137")
+    .text("P R O P O S T A    C O M E R C I A L",
+      PAGE_LEFT, y, { width: 320, lineBreak: false });
+
+  doc.font("Helvetica").fontSize(6.8).fillColor(MUTED)
+    .text("Nº DA PROPOSTA", 410, y, { width: 133, align: "right", lineBreak: false });
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(GREEN)
+    .text(proposal.proposalNumber, 385, y + 13, {
+      width: 158, align: "right", lineBreak: false,
     });
 
-  doc.moveDown(0.15);
+  doc.font("Times-Bold").fontSize(23).fillColor(GREEN)
+    .text("Prestação de Serviços Técnicos", PAGE_LEFT, y + 23,
+      { width: 465, lineBreak: false });
 
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(12)
-    .fillColor(GREEN)
-    .text(proposal.proposalNumber, {
-      width: CONTENT_WIDTH,
-      align: "center",
-    });
+  const cardY = y + 71;
+  const leftW = 302;
+  const rightX = PAGE_LEFT + leftW + 12;
+  const rightW = CONTENT_WIDTH - leftW - 12;
 
-  doc.moveDown(0.1);
+  doc.roundedRect(PAGE_LEFT, cardY, leftW, 76, 8)
+    .fillAndStroke("#FFFFFF", BORDER);
+  doc.rect(PAGE_LEFT, cardY + 9, 4, 58).fill("#B69137");
+  doc.font("Helvetica-Bold").fontSize(7).fillColor("#9A7D37")
+    .text("D E S T I N A T Á R I O", PAGE_LEFT + 17, cardY + 14,
+      { width: leftW - 31, lineBreak: false });
+  doc.font("Times-Bold").fontSize(15).fillColor(GREEN)
+    .text(safeText(proposal.clientName), PAGE_LEFT + 17, cardY + 34,
+      { width: leftW - 32, height: 23, ellipsis: true });
+  doc.font("Helvetica").fontSize(6.7).fillColor(MUTED)
+    .text(`Emissão: ${formatDate(proposal.generatedAt || new Date())}   •   Proposta nº ${proposal.proposalNumber}`,
+      PAGE_LEFT + 17, cardY + 63, { width: leftW - 27, lineBreak: false });
 
-  doc
-    .font("Helvetica")
-    .fontSize(8)
-    .fillColor(MUTED)
-    .text(`Emissão: ${formatDate(proposal.generatedAt || new Date())}`, {
-      width: CONTENT_WIDTH,
-      align: "center",
-    });
-
-  doc.moveDown(0.8);
-
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(6.8)
-    .fillColor(MUTED)
-    .text(
-      "DESTINATÁRIO",
-      PAGE_LEFT,
-      doc.y,
-      {
-        width: CONTENT_WIDTH,
-      }
-    );
-
-  doc.moveDown(0.3);
-
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(12)
-    .fillColor(DARK)
-    .text(
-      proposal.clientName,
-      PAGE_LEFT,
-      doc.y,
-      {
-        width: CONTENT_WIDTH,
-      }
-    );
-
-  const clientDetails = [
-    proposal.clientCpfCnpj,
-    proposal.clientCity &&
-    proposal.clientState
-      ? `${proposal.clientCity}/${proposal.clientState}`
-      : proposal.clientCity ||
-        proposal.clientState,
-  ]
-    .filter(Boolean)
-    .join(" • ");
-
-  if (clientDetails) {
-    doc
-      .font("Helvetica")
-      .fontSize(8)
-      .fillColor(MUTED)
-      .text(
-        clientDetails,
-        PAGE_LEFT,
-        doc.y,
-        {
-          width: CONTENT_WIDTH,
-        }
-      );
+  doc.roundedRect(rightX, cardY, rightW, 76, 8).fill(GREEN);
+  doc.rect(rightX, cardY, rightW, 5).fill("#C5A045");
+  doc.font("Helvetica-Bold").fontSize(7).fillColor("#E7D1A1")
+    .text("V A L O R   T O T A L", rightX + 15, cardY + 16,
+      { width: rightW - 30, lineBreak: false });
+  doc.font("Times-Bold").fontSize(18).fillColor("#FFFFFF")
+    .text(money(proposal.totalAmount), rightX + 15, cardY + 34,
+      { width: rightW - 30, lineBreak: false });
+  if (proposal.validUntil) {
+    doc.font("Helvetica").fontSize(6.8).fillColor("#D6E6DD")
+      .text(`Válida até ${formatDate(proposal.validUntil)}`,
+        rightX + 15, cardY + 62, { width: rightW - 30, lineBreak: false });
   }
 
-  doc.moveDown(0.65);
+  doc.x = PAGE_LEFT;
+  doc.y = cardY + 82;
 }
 
 function drawItemsTable(
@@ -1068,10 +1044,12 @@ function drawServiceNarratives(
 
       doc.moveDown(0.28);
 
-      paragraph(
-        doc,
-        content
-      );
+      if (field === "legalText") {
+        drawLegalPanel(doc, content);
+      } else if (field !== "technicalDescription" ||
+                 !drawTechnicalTimeline(doc, content)) {
+        paragraph(doc, content);
+      }
 
       if (
         index <
@@ -1083,154 +1061,337 @@ function drawServiceNarratives(
   );
 }
 
+// Linha do tempo editorial; detecta apenas fases explicitamente registradas.
+function drawTechnicalTimeline(doc: PDFKit.PDFDocument, content: string): boolean {
+  const normalized = content.replace(/\r\n/g, "\n");
+  const matcher = /^\s*FASE\s+(\d+)\s*[-:–]?\s*([^\n]*)/gim;
+  const phases = Array.from(normalized.matchAll(matcher));
+  if (phases.length === 0) return false;
+
+  const introduction = normalized.slice(0, phases[0].index).trim();
+  if (introduction) paragraph(doc, introduction);
+
+  phases.forEach((phase, index) => {
+    const begin = (phase.index || 0) + phase[0].length;
+    const end = index + 1 < phases.length
+      ? phases[index + 1].index || normalized.length
+      : normalized.length;
+    const lines = normalized.slice(begin, end).trim()
+      .split("\n").map((v) => v.trim()).filter(Boolean);
+    const title = phase[2]?.trim() || lines.shift() || `Fase ${phase[1]}`;
+    ensureSpace(doc, 90);
+    const y = doc.y + 6;
+    doc.circle(PAGE_LEFT + 16, y + 10, 11).fill("#C5A045");
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(GREEN)
+      .text(phase[1], PAGE_LEFT + 7, y + 7, {
+        width: 18, align: "center", lineBreak: false,
+      });
+    doc.font("Helvetica-Bold").fontSize(6.5).fillColor("#9A7D37")
+      .text(`F A S E  ${phase[1]}`, PAGE_LEFT + 37, y, {
+        width: CONTENT_WIDTH - 45, lineBreak: false,
+      });
+    doc.font("Helvetica-Bold").fontSize(9).fillColor(GREEN)
+      .text(title, PAGE_LEFT + 37, y + 11, {
+        width: CONTENT_WIDTH - 47,
+      });
+    doc.x = PAGE_LEFT + 37;
+    doc.y = Math.max(y + 34, doc.y + 3);
+    if (lines.length > 0) {
+      lines.forEach((line) => {
+        ensureSpace(doc, 36);
+        const cleaned = line.replace(/^[-•●]\s*/, "");
+        doc.font("Helvetica").fontSize(8.3).fillColor(DARK)
+          .text("•  " + cleaned, PAGE_LEFT + 42, doc.y, {
+            width: CONTENT_WIDTH - 53, lineGap: 2,
+          });
+        doc.moveDown(0.25);
+      });
+    }
+    doc.x = PAGE_LEFT;
+    doc.y += 9;
+  });
+  return true;
+}
+
+// Box verde-claro para a fundamentação legal, sem perder o texto original.
+function drawLegalPanel(doc: PDFKit.PDFDocument, content: string) {
+  const width = CONTENT_WIDTH - 40;
+  const textHeight = doc.font("Helvetica").fontSize(8.6)
+    .heightOfString(content, { width, lineGap: 3 });
+  const cardHeight = textHeight + 46;
+
+  if (cardHeight > CONTENT_BOTTOM - CONTENT_TOP - 25) {
+    paragraph(doc, content);
+    return;
+  }
+  ensureSpace(doc, cardHeight + 15);
+  const y = doc.y + 4;
+  doc.roundedRect(PAGE_LEFT, y, CONTENT_WIDTH, cardHeight, 7)
+    .fillAndStroke("#EDF5F1", BORDER);
+  doc.rect(PAGE_LEFT, y, 5, cardHeight).fill("#307D5D");
+  doc.circle(PAGE_LEFT + 21, y + 19, 9).fill("#307D5D");
+  doc.font("Helvetica-Bold").fontSize(8).fillColor("#FFFFFF")
+    .text("i", PAGE_LEFT + 17, y + 15, {
+      width: 8, align: "center", lineBreak: false,
+    });
+  doc.font("Helvetica-Bold").fontSize(7.3).fillColor("#307D5D")
+    .text("FUNDAMENTAÇÃO TÉCNICA E NORMATIVA",
+      PAGE_LEFT + 38, y + 15, { width: CONTENT_WIDTH - 49, lineBreak: false });
+  doc.font("Helvetica").fontSize(8.6).fillColor(DARK)
+    .text(content, PAGE_LEFT + 19, y + 36, {
+      width, lineGap: 3,
+    });
+  doc.x = PAGE_LEFT;
+  doc.y = y + cardHeight + 8;
+}
+
+function drawPaymentPanel(
+  doc: PDFKit.PDFDocument,
+  proposal: any,
+  terms: { paymentText?: string | null }
+) {
+  ensureSpace(doc, 135);
+  const y = doc.y + 4;
+  const leftWidth = 306;
+  const rightX = PAGE_LEFT + leftWidth + 12;
+  const rightWidth = CONTENT_WIDTH - leftWidth - 12;
+  doc.roundedRect(PAGE_LEFT, y, leftWidth, 112, 7)
+    .fillAndStroke("#FFFFFF", BORDER);
+  doc.rect(PAGE_LEFT, y, leftWidth, 24).fill(GREEN);
+  doc.rect(PAGE_LEFT, y, 5, 24).fill("#C5A045");
+  doc.font("Helvetica-Bold").fontSize(7.2).fillColor("#FFFFFF")
+    .text("FORMA DE PAGAMENTO", PAGE_LEFT + 13, y + 8,
+      { width: leftWidth - 24, lineBreak: false });
+  doc.font("Helvetica").fontSize(8.4).fillColor(DARK)
+    .text(terms.paymentText || "Conforme condições comerciais acordadas.",
+      PAGE_LEFT + 14, y + 35, {
+        width: leftWidth - 28, lineGap: 3,
+      });
+  doc.font("Helvetica-Bold").fontSize(7).fillColor("#9A7D37")
+    .text(safeText(proposal.paymentMode).replace(/_/g, " "),
+      PAGE_LEFT + 14, y + 92, {
+        width: leftWidth - 28, lineBreak: false,
+      });
+  doc.roundedRect(rightX, y, rightWidth, 112, 7).fill(GREEN);
+  doc.rect(rightX, y, rightWidth, 5).fill("#C5A045");
+  doc.font("Helvetica-Bold").fontSize(7.3).fillColor("#DCC38C")
+    .text("VALOR DA PROPOSTA", rightX + 13, y + 22,
+      { width: rightWidth - 26, lineBreak: false });
+  doc.font("Times-Bold").fontSize(17).fillColor("#FFFFFF")
+    .text(money(proposal.totalAmount), rightX + 13, y + 43,
+      { width: rightWidth - 26, lineBreak: false });
+  doc.font("Helvetica").fontSize(7).fillColor("#D8E7DE")
+    .text("Pagamento conforme as condições acordadas.",
+      rightX + 13, y + 76, { width: rightWidth - 26 });
+  doc.x = PAGE_LEFT;
+  doc.y = y + 120;
+}
+
+type ProposalBankDetails = {
+  bank: string;
+  agency: string;
+  account: string;
+  accountType: string;
+  holder: string;
+  holderDocument: string;
+  pixKey: string;
+};
+
+async function loadProposalBankDetails(prisma: PrismaClient): Promise<ProposalBankDetails> {
+  // Configuração persistida no próprio sistema; nenhuma credencial
+  // ou conta fictícia é incorporada ao código ou aos PDFs.
+  const keys = [
+    "PROPOSAL_BANK_NAME", "PROPOSAL_BANK_AGENCY",
+    "PROPOSAL_BANK_ACCOUNT", "PROPOSAL_BANK_ACCOUNT_TYPE",
+    "PROPOSAL_BANK_HOLDER", "PROPOSAL_BANK_HOLDER_DOCUMENT",
+    "PROPOSAL_PIX_KEY",
+  ];
+  const settings = await prisma.systemSetting.findMany({
+    where: { key: { in: keys } },
+    select: { key: true, value: true },
+  });
+  const values = new Map(settings.map((item) => [
+    item.key, safeText(item.value),
+  ]));
+  return {
+    bank: values.get(keys[0]) || "",
+    agency: values.get(keys[1]) || "",
+    account: values.get(keys[2]) || "",
+    accountType: values.get(keys[3]) || "",
+    holder: values.get(keys[4]) || "",
+    holderDocument: values.get(keys[5]) || "",
+    pixKey: values.get(keys[6]) || "",
+  };
+}
+
+function drawBankDetails(doc: PDFKit.PDFDocument, bank: ProposalBankDetails) {
+  const fields: Array<[string, string]> = [
+    ["Banco", bank.bank],
+    ["Agência", bank.agency],
+    ["Conta", bank.account],
+    ["Tipo de conta", bank.accountType],
+    ["Favorecido", bank.holder],
+    ["CPF/CNPJ do favorecido", bank.holderDocument],
+    ["Chave Pix", bank.pixKey],
+  ] satisfies Array<[string, string]>;
+  const visibleFields = fields.filter(([, value]) => Boolean(value));
+
+  if (!visibleFields.length) return;
+
+  const contentWidth = CONTENT_WIDTH - 32;
+  const rowHeights = visibleFields.map(([, value]) => {
+    const height = doc.font("Helvetica").fontSize(8.3)
+      .heightOfString(value, { width: contentWidth - 160 });
+    return Math.max(23, height + 10);
+  });
+  const cardHeight = 39 + rowHeights.reduce((sum, height) => sum + height, 0) + 8;
+  ensureSpace(doc, cardHeight + 14);
+  const y = doc.y + 5;
+
+  doc.roundedRect(PAGE_LEFT, y, CONTENT_WIDTH, cardHeight, 7)
+    .fillAndStroke("#F3F7F5", BORDER);
+  doc.rect(PAGE_LEFT, y, 5, cardHeight).fill("#C5A045");
+  doc.font("Helvetica-Bold").fontSize(8.5).fillColor(GREEN)
+    .text("DADOS BANCÁRIOS E PIX PARA PAGAMENTO", PAGE_LEFT + 16, y + 14, {
+      width: contentWidth, lineBreak: false,
+    });
+
+  let rowY = y + 39;
+  visibleFields.forEach(([label, value], index) => {
+    if (index > 0) {
+      doc.moveTo(PAGE_LEFT + 16, rowY)
+        .lineTo(PAGE_LEFT + CONTENT_WIDTH - 16, rowY)
+        .strokeColor(BORDER).lineWidth(0.4).stroke();
+    }
+    doc.font("Helvetica-Bold").fontSize(7.7).fillColor(MUTED)
+      .text(label.toUpperCase(), PAGE_LEFT + 17, rowY + 6, {
+        width: 145, lineBreak: false,
+      });
+    doc.font("Helvetica").fontSize(8.3).fillColor(DARK)
+      .text(value, PAGE_LEFT + 171, rowY + 5, {
+        width: contentWidth - 160,
+      });
+    rowY += rowHeights[index];
+  });
+  doc.x = PAGE_LEFT;
+  doc.y = y + cardHeight + 10;
+}
+
+function publicStandaloneProposalUrl(publicToken: string): string {
+  const raw = process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL ||
+    (process.env.NODE_ENV === "production" ? "" : "http://localhost:5173");
+  if (!raw) {
+    throw new Error("Configure PUBLIC_APP_URL com a URL pública do frontend antes de emitir propostas com QR.");
+  }
+  const base = new URL(raw);
+  if (process.env.NODE_ENV === "production" && base.protocol !== "https:") {
+    throw new Error("PUBLIC_APP_URL precisa utilizar HTTPS em produção.");
+  }
+  return new URL(`/proposta-avulsa/${encodeURIComponent(publicToken)}`, base).toString();
+}
+
+// QR de verificação documental, não de pagamento. Desenhado vetorialmente
+// para manter legibilidade na impressão sem arquivos de imagem externos.
+function drawProposalVerification(doc: PDFKit.PDFDocument, proposal: any, url: string) {
+  const qr = QRCode.create(url, { errorCorrectionLevel: "M" });
+  const yPadding = 12;
+  const height = 156;
+  ensureSpace(doc, height + 15);
+  const y = doc.y + 5;
+  doc.roundedRect(PAGE_LEFT, y, CONTENT_WIDTH, height, 7)
+    .fillAndStroke("#F3F7F5", BORDER);
+  doc.rect(PAGE_LEFT, y, 5, height).fill("#C5A045");
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(GREEN)
+    .text("VERIFICAÇÃO E RASTREABILIDADE", PAGE_LEFT + 15, y + 13, {
+      width: CONTENT_WIDTH - 30, lineBreak: false,
+    });
+  const codeX = PAGE_LEFT + 16;
+  const codeY = y + 37;
+  const square = 107;
+  const quietZone = 4;
+  const moduleScale = square / (qr.modules.size + 2 * quietZone);
+  doc.rect(codeX, codeY, square, square).fill("#FFFFFF");
+  doc.fillColor(GREEN);
+  for (let row = 0; row < qr.modules.size; row++) {
+    for (let col = 0; col < qr.modules.size; col++) {
+      if (qr.modules.get(row, col)) {
+        doc.rect(codeX + (col + quietZone) * moduleScale,
+          codeY + (row + quietZone) * moduleScale,
+          moduleScale + 0.04, moduleScale + 0.04).fill();
+      }
+    }
+  }
+  const tx = codeX + square + 17;
+  const width = CONTENT_WIDTH - (tx - PAGE_LEFT) - 22;
+  doc.font("Helvetica-Bold").fontSize(7).fillColor("#9A7D37")
+    .text("CÓDIGO DA PROPOSTA", tx, codeY + 2, { width, lineBreak: false });
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(GREEN)
+    .text(proposal.proposalNumber, tx, codeY + 17, { width, lineBreak: false });
+  doc.font("Helvetica").fontSize(7.4).fillColor(DARK)
+    .text("Aponte a câmera para verificar esta proposta e baixar o PDF oficial.",
+      tx, codeY + 42, { width, lineGap: 3 });
+  doc.font("Helvetica").fontSize(6.2).fillColor(MUTED)
+    .text(url, tx, codeY + 84, { width, lineGap: 2 });
+  doc.x = PAGE_LEFT;
+  doc.y = y + height + yPadding;
+}
+
 function drawTotals(
   doc: PDFKit.PDFDocument,
   proposal: any
 ) {
-  const x = 325;
-  const width = 225;
-
-  const rows: Array<
-    [string, string, boolean]
-  > = [
-    [
-      "Subtotal",
-      money(
-        proposal.subtotalAmount
-      ),
-      false,
-    ],
+  const rows: Array<[string, string]> = [
+    ["Subtotal", money(proposal.subtotalAmount)],
   ];
+  if (proposal.discountAmount > 0)
+    rows.push(["Desconto", "- " + money(proposal.discountAmount)]);
+  if (proposal.additionAmount > 0)
+    rows.push(["Acréscimos", money(proposal.additionAmount)]);
 
-  if (
-    proposal.discountAmount > 0
-  ) {
-    rows.push([
-      "Desconto",
-      `- ${money(
-        proposal.discountAmount
-      )}`,
-      false,
-    ]);
-  }
+  const totalRowsHeight = rows.length * 22 + 35;
+  ensureSpace(doc, totalRowsHeight + 12);
+  const y = doc.y + 4;
 
-  if (
-    proposal.additionAmount > 0
-  ) {
-    rows.push([
-      "Acréscimos",
-      money(
-        proposal.additionAmount
-      ),
-      false,
-    ]);
-  }
+  // À esquerda, condição comercial com a tarja dourada do modelo.
+  doc.font("Helvetica-Bold").fontSize(6.8).fillColor("#9A7D37")
+    .text("C O N D I Ç Ã O", PAGE_LEFT, y + 9, {
+      width: 195, lineBreak: false,
+    });
+  const mode = safeText(proposal.paymentMode).replace(/_/g, " ");
+  doc.roundedRect(PAGE_LEFT, y + 29, 150, 21, 10)
+    .fillAndStroke("#FFF5D9", "#D8BC6B");
+  doc.font("Helvetica-Bold").fontSize(7).fillColor("#9A7D37")
+    .text(mode, PAGE_LEFT + 10, y + 36, {
+      width: 130, lineBreak: false,
+    });
 
-  rows.push([
-    "VALOR TOTAL",
-    money(
-      proposal.totalAmount
-    ),
-    true,
-  ]);
-
-  /*
-   * Altura real do quadro financeiro.
-   *
-   * Linha comum:
-   *   22 pt + 3 pt de intervalo = 25
-   *
-   * Total:
-   *   28 pt + 3 pt de intervalo = 31
-   *
-   * Só o quadro de totais muda de página,
-   * nunca as linhas anteriores da tabela.
-   */
-  const totalsHeight =
-    rows.reduce(
-      (
-        height,
-        [, , total]
-      ) =>
-        height +
-        (
-          total
-            ? 31
-            : 25
-        ),
-      0
-    ) + 8;
-
-  if (
-    doc.y + totalsHeight >
-    CONTENT_BOTTOM
-  ) {
-    doc.addPage();
-
-    doc.x = PAGE_LEFT;
-    doc.y = CONTENT_TOP;
-  }
-
-  for (
-    const [label, value, total]
-    of rows
-  ) {
-    const y = doc.y;
-
-    doc
-      .rect(
-        x,
-        y,
-        width,
-        total ? 28 : 22
-      )
-      .fill(
-        total
-          ? GREEN
-          : LIGHT
-      );
-
-    doc
-      .font(
-        total
-          ? "Helvetica-Bold"
-          : "Helvetica"
-      )
-      .fontSize(
-        total ? 9 : 8
-      )
-      .fillColor(
-        total
-          ? "#FFFFFF"
-          : DARK
-      )
-      .text(
-        label,
-        x + 8,
-        y + (total ? 9 : 7),
-        {
-          width: 95,
-        }
-      );
-
-    doc
-      .font("Helvetica-Bold")
-      .text(
-        value,
-        x + 105,
-        y + (total ? 9 : 7),
-        {
-          width: 110,
-          align: "right",
-        }
-      );
-
-    doc.y =
-      y +
-      (total ? 31 : 25);
-  }
-
-  doc.moveDown(0.5);
+  const x = 332;
+  const width = PAGE_LEFT + CONTENT_WIDTH - x;
+  rows.forEach(([label, value], index) => {
+    const rowY = y + index * 22;
+    doc.rect(x, rowY, width, 22).fill(index % 2 ? "#F8FAF9" : LIGHT);
+    doc.font("Helvetica").fontSize(8).fillColor(DARK)
+      .text(label, x + 12, rowY + 7, {
+        width: 93, lineBreak: false,
+      });
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(DARK)
+      .text(value, x + 105, rowY + 7, {
+        width: width - 116, align: "right", lineBreak: false,
+      });
+  });
+  const totalY = y + rows.length * 22;
+  doc.rect(x, totalY, width, 35).fill(GREEN);
+  doc.rect(x, totalY, 5, 35).fill("#C5A045");
+  doc.font("Helvetica-Bold").fontSize(8).fillColor("#FFFFFF")
+    .text("VALOR TOTAL", x + 11, totalY + 13, {
+      width: 98, lineBreak: false,
+    });
+  doc.font("Times-Bold").fontSize(13.5).fillColor("#DCC38C")
+    .text(money(proposal.totalAmount), x + 100, totalY + 10, {
+      width: width - 112, align: "right", lineBreak: false,
+    });
+  doc.x = PAGE_LEFT;
+  doc.y = totalY + 44;
 }
 
 export async function generateStandaloneProposalPdf(
@@ -1275,6 +1436,8 @@ export async function generateStandaloneProposalPdf(
   }
 
   const paymentTerms = standaloneDocumentTerms(proposal);
+  const bankDetails = await loadProposalBankDetails(prisma);
+  const publicUrl = publicStandaloneProposalUrl(proposal.publicToken);
 
   if (
     proposal.items.length === 0
@@ -1523,23 +1686,39 @@ export async function generateStandaloneProposalPdf(
     nextSection("Condições de Pagamento")
   );
 
-  paragraph(
-    doc,
-    paymentTerms.paymentText || "Pagamento conforme condições comerciais acordadas entre as partes."
-  );
+  drawPaymentPanel(doc, proposal, paymentTerms);
+  drawBankDetails(doc, bankDetails);
 
-  sectionTitle(
-    doc,
-    nextSection("Observações")
-  );
+  if (proposal.validUntil || safeText(proposal.notes)) {
+    // Reserva título + início do conteúdo para evitar cabeçalho órfão.
+    ensureSpace(doc, proposal.validUntil ? 157 : 124);
+    sectionTitle(
+      doc,
+      nextSection("Observações")
+    );
+  }
 
   if (proposal.validUntil) {
-    paragraph(
-      doc,
-      `Validade da proposta: até ${formatDate(
-        proposal.validUntil
-      )}. Após esse período, valores, prazos e condições poderão ser reavaliados.`
-    );
+    const notice = `Após esse período, valores, prazos e condições poderão ser reavaliados.`;
+    ensureSpace(doc, 91);
+    const y = doc.y + 3;
+    doc.roundedRect(PAGE_LEFT, y, CONTENT_WIDTH, 79, 7)
+      .fillAndStroke("#FFF5D9", "#D8BC6B");
+    doc.rect(PAGE_LEFT, y, 5, 79).fill("#947829");
+    doc.circle(PAGE_LEFT + 22, y + 21, 9).fill("#947829");
+    doc.font("Helvetica-Bold").fontSize(8).fillColor("#FFFFFF")
+      .text("!", PAGE_LEFT + 18, y + 17, {
+        width: 8, align: "center", lineBreak: false,
+      });
+    doc.font("Helvetica-Bold").fontSize(8).fillColor("#947829")
+      .text(`VALIDADE DA PROPOSTA: ATÉ ${formatDate(proposal.validUntil)}`,
+        PAGE_LEFT + 40, y + 17,
+        { width: CONTENT_WIDTH - 58, lineBreak: false });
+    doc.font("Helvetica").fontSize(8.2).fillColor(DARK)
+      .text(notice, PAGE_LEFT + 19, y + 47,
+        { width: CONTENT_WIDTH - 35 });
+    doc.x = PAGE_LEFT;
+    doc.y = y + 87;
   }
 
   if (
@@ -1610,9 +1789,11 @@ export async function generateStandaloneProposalPdf(
     );
   }
 
+  drawProposalVerification(doc, proposal, publicUrl);
+
   ensureSpace(
     doc,
-    125
+    65
   );
 
   doc.moveDown(0.8);
@@ -1696,6 +1877,8 @@ export async function generateStandaloneProposalPdf(
       totalAmount:
         proposal.totalAmount,
       paymentTerms,
+      bankDetails,
+      publicVerificationUrl: publicUrl,
       generatedAt:
         new Date().toISOString(),
       hash,
