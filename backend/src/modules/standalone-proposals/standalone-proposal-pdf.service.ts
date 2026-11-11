@@ -1160,150 +1160,58 @@ function drawTotals(
   doc: PDFKit.PDFDocument,
   proposal: any
 ) {
-  const x = 325;
-  const width = 225;
-
-  const rows: Array<
-    [string, string, boolean]
-  > = [
-    [
-      "Subtotal",
-      money(
-        proposal.subtotalAmount
-      ),
-      false,
-    ],
+  const rows: Array<[string, string]> = [
+    ["Subtotal", money(proposal.subtotalAmount)],
   ];
+  if (proposal.discountAmount > 0)
+    rows.push(["Desconto", "- " + money(proposal.discountAmount)]);
+  if (proposal.additionAmount > 0)
+    rows.push(["Acréscimos", money(proposal.additionAmount)]);
 
-  if (
-    proposal.discountAmount > 0
-  ) {
-    rows.push([
-      "Desconto",
-      `- ${money(
-        proposal.discountAmount
-      )}`,
-      false,
-    ]);
-  }
+  const totalRowsHeight = rows.length * 22 + 35;
+  ensureSpace(doc, totalRowsHeight + 12);
+  const y = doc.y + 4;
 
-  if (
-    proposal.additionAmount > 0
-  ) {
-    rows.push([
-      "Acréscimos",
-      money(
-        proposal.additionAmount
-      ),
-      false,
-    ]);
-  }
+  // À esquerda, condição comercial com a tarja dourada do modelo.
+  doc.font("Helvetica-Bold").fontSize(6.8).fillColor("#9A7D37")
+    .text("C O N D I Ç Ã O", PAGE_LEFT, y + 9, {
+      width: 195, lineBreak: false,
+    });
+  const mode = safeText(proposal.paymentMode).replace(/_/g, " ");
+  doc.roundedRect(PAGE_LEFT, y + 29, 150, 21, 10)
+    .fillAndStroke("#FFF5D9", "#D8BC6B");
+  doc.font("Helvetica-Bold").fontSize(7).fillColor("#9A7D37")
+    .text(mode, PAGE_LEFT + 10, y + 36, {
+      width: 130, lineBreak: false,
+    });
 
-  rows.push([
-    "VALOR TOTAL",
-    money(
-      proposal.totalAmount
-    ),
-    true,
-  ]);
-
-  /*
-   * Altura real do quadro financeiro.
-   *
-   * Linha comum:
-   *   22 pt + 3 pt de intervalo = 25
-   *
-   * Total:
-   *   28 pt + 3 pt de intervalo = 31
-   *
-   * Só o quadro de totais muda de página,
-   * nunca as linhas anteriores da tabela.
-   */
-  const totalsHeight =
-    rows.reduce(
-      (
-        height,
-        [, , total]
-      ) =>
-        height +
-        (
-          total
-            ? 31
-            : 25
-        ),
-      0
-    ) + 8;
-
-  if (
-    doc.y + totalsHeight >
-    CONTENT_BOTTOM
-  ) {
-    doc.addPage();
-
-    doc.x = PAGE_LEFT;
-    doc.y = CONTENT_TOP;
-  }
-
-  for (
-    const [label, value, total]
-    of rows
-  ) {
-    const y = doc.y;
-
-    doc
-      .rect(
-        x,
-        y,
-        width,
-        total ? 28 : 22
-      )
-      .fill(
-        total
-          ? GREEN
-          : LIGHT
-      );
-
-    doc
-      .font(
-        total
-          ? "Helvetica-Bold"
-          : "Helvetica"
-      )
-      .fontSize(
-        total ? 9 : 8
-      )
-      .fillColor(
-        total
-          ? "#FFFFFF"
-          : DARK
-      )
-      .text(
-        label,
-        x + 8,
-        y + (total ? 9 : 7),
-        {
-          width: 95,
-        }
-      );
-
-    doc
-      .font("Helvetica-Bold")
-      .text(
-        value,
-        x + 105,
-        y + (total ? 9 : 7),
-        {
-          width: 110,
-          align: "right",
-        }
-      );
-
-    doc.y =
-      y +
-      (total ? 31 : 25);
-  }
-
-  doc.moveDown(0.5);
+  const x = 332;
+  const width = PAGE_LEFT + CONTENT_WIDTH - x;
+  rows.forEach(([label, value], index) => {
+    const rowY = y + index * 22;
+    doc.rect(x, rowY, width, 22).fill(index % 2 ? "#F8FAF9" : LIGHT);
+    doc.font("Helvetica").fontSize(8).fillColor(DARK)
+      .text(label, x + 12, rowY + 7, {
+        width: 93, lineBreak: false,
+      });
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(DARK)
+      .text(value, x + 105, rowY + 7, {
+        width: width - 116, align: "right", lineBreak: false,
+      });
+  });
+  const totalY = y + rows.length * 22;
+  doc.rect(x, totalY, width, 35).fill(GREEN);
+  doc.rect(x, totalY, 5, 35).fill("#C5A045");
+  doc.font("Helvetica-Bold").fontSize(8).fillColor("#FFFFFF")
+    .text("VALOR TOTAL", x + 11, totalY + 13, {
+      width: 98, lineBreak: false,
+    });
+  doc.font("Times-Bold").fontSize(13.5).fillColor("#DCC38C")
+    .text(money(proposal.totalAmount), x + 100, totalY + 10, {
+      width: width - 112, align: "right", lineBreak: false,
+    });
+  doc.x = PAGE_LEFT;
+  doc.y = totalY + 44;
 }
 
 export async function generateStandaloneProposalPdf(
