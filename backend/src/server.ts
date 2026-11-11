@@ -18,6 +18,7 @@ import crypto from "crypto";
 import { registerPartnerRoutes } from "./modules/partners/partners.routes";
 import { registerCatalogRoutes } from "./modules/catalog/catalog.routes";
 import { registerStandaloneProposalRoutes } from "./modules/standalone-proposals/standalone-proposals.routes";
+import { blockStandaloneProposalStaticAccess } from "./modules/standalone-proposals/standalone-upload-guard";
 import { registerFieldScheduleRoutes } from "./modules/field-schedule/field-schedule.routes";
 import { registerPartnerReferralRoutes } from "./modules/partners/partner-referrals.routes";
 import { registerPartnerCommissionRoutes } from "./modules/partners/partner-commissions.routes";
@@ -74,12 +75,7 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// Propostas avulsas têm acesso público exclusivamente pelo token
-// /public/standalone-proposals/:token/pdf e acesso interno autenticado.
-// Não permitir acesso direto por nomes de arquivo previsíveis.
-app.use("/uploads/standalone-proposals", (_req, res) =>
-  res.status(404).end()
-);
+blockStandaloneProposalStaticAccess(app);
 app.use("/uploads", express.static(path.resolve(process.cwd(), "uploads")));
 
 const storage = multer.diskStorage({
