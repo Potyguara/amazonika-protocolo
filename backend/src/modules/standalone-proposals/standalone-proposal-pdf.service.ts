@@ -15,7 +15,7 @@ const BORDER = "#D9E4DF";
 const PAGE_LEFT = 52;
 const PAGE_RIGHT = 52;
 
-const CONTENT_TOP = 115;
+const CONTENT_TOP = 92;
 const CONTENT_BOTTOM = 742;
 
 const CONTENT_WIDTH =
@@ -120,7 +120,8 @@ function ensureSpace(
 function drawInstitutionalPage(
   doc: PDFKit.PDFDocument,
   proposal: any,
-  company: any
+  company: any,
+  firstPage: boolean
 ) {
   const savedX = doc.x;
   const savedY = doc.y;
@@ -184,71 +185,65 @@ function drawInstitutionalPage(
   // CABEÇALHO
   // -----------------------------------------------------
 
-  if (logo) {
-    try {
-      doc.image(
-        logo,
-        PAGE_LEFT,
-        27,
-        {
-          fit: [58, 58],
-        }
-      );
-    } catch {
-      // segue sem logo
-    }
-  }
-
-  // Identificação institucional fixa em todas as páginas.
-  // Título, número e data da proposta pertencem ao corpo do documento.
-  const headerLines = [
-    "AMAZONIKA ENGENHARIA LTDA",
-    "Av. Almirante Barroso 620-B - CEP 68900-401",
-    "Bairro: Central - Macapá/AP",
-    "CNPJ: 49.158.834/0001-19",
-    "Contato: 96 98803-6439 / 96 9141-0943",
-    "www.amazonikaengenharia.com.br",
-    "amazonika@amazonikaengenharia.com.br",
-  ];
-
-  headerLines.forEach((value, index) => {
-    doc
-      .font(index === 0 ? "Helvetica-Bold" : "Helvetica")
-      .fontSize(index === 0 ? 7.4 : 6.7)
-      .fillColor(index === 0 ? GREEN : MUTED)
-      .text(value, 206, 20 + index * 12, {
-        width: 337,
-        align: "right",
-        lineBreak: false,
-      });
-  });
-
-  doc
-    .moveTo(
-      PAGE_LEFT,
-      115
-    )
-    .lineTo(
-      doc.page.width - PAGE_RIGHT,
-      115
-    )
-    .strokeColor(BORDER)
-    .lineWidth(0.5)
-    .stroke();
-
-  // Filetes editoriais do modelo de referência.
   doc.rect(0, 0, 112, 6).fill("#C5A045");
   doc.rect(112, 0, doc.page.width - 112, 6).fill(GREEN);
-  doc.rect(PAGE_LEFT, 112, 90, 2).fill("#C5A045");
-  doc.rect(PAGE_LEFT + 90, 112, CONTENT_WIDTH - 90, 1).fill(GREEN);
 
-  doc.font("Helvetica-Bold").fontSize(8.4).fillColor(GREEN)
-    .text("AMAZONIKA ENGENHARIA LTDA", PAGE_LEFT + 71, 40, {
-      width: 194, lineBreak: false,
+  if (firstPage) {
+    if (logo) {
+      try {
+        doc.image(logo, PAGE_LEFT, 27, { fit: [58, 58] });
+      } catch { /* preserva PDF sem logomarca se necessário */ }
+    }
+    doc.font("Helvetica-Bold").fontSize(8.4).fillColor(GREEN)
+      .text("AMAZONIKA ENGENHARIA LTDA", PAGE_LEFT + 71, 40, {
+        width: 194, lineBreak: false,
+      });
+    doc.font("Helvetica").fontSize(6.9).fillColor(MUTED)
+      .text("T O P O G R A F I A  E  M E I O  A M B I E N T E",
+        PAGE_LEFT + 71, 55, { width: 190, lineBreak: false });
+
+    const headerLines = [
+      "AMAZONIKA ENGENHARIA LTDA",
+      "Av. Almirante Barroso 620-B - CEP 68900-401",
+      "Bairro: Central - Macapá/AP",
+      "CNPJ: 49.158.834/0001-19",
+      "Contato: 96 98803-6439 / 96 9141-0943",
+      "www.amazonikaengenharia.com.br",
+      "amazonika@amazonikaengenharia.com.br",
+    ];
+    headerLines.forEach((value, index) => {
+      doc.font(index === 0 ? "Helvetica-Bold" : "Helvetica")
+        .fontSize(index === 0 ? 7.0 : 6.2)
+        .fillColor(index === 0 ? GREEN : MUTED)
+        .text(value, 322, 17 + index * 12, {
+          width: 221, align: "right", lineBreak: false,
+        });
     });
-  doc.font("Helvetica").fontSize(6.9).fillColor(MUTED)
-    .text("T O P O G R A F I A  E  M E I O  A M B I E N T E",
-      PAGE_LEFT + 71, 55, { width: 190, lineBreak: false });
+    doc.rect(PAGE_LEFT, 112, 93, 2).fill("#C5A045");
+    doc.moveTo(PAGE_LEFT + 93, 113)
+      .lineTo(doc.page.width - PAGE_RIGHT, 113)
+      .strokeColor(GREEN).lineWidth(0.5).stroke();
+  } else {
+    // Cabeçalho compacto das páginas seguintes, como no PDF de referência.
+    if (logo) {
+      try {
+        doc.image(logo, PAGE_LEFT, 25, { fit: [33, 33] });
+      } catch { /* sem interrupção da emissão */ }
+    }
+    doc.font("Helvetica-Bold").fontSize(7.8).fillColor(GREEN)
+      .text("AMAZONIKA ENGENHARIA", PAGE_LEFT + 40, 38, {
+        width: 174, lineBreak: false,
+      });
+    doc.font("Helvetica").fontSize(6.1).fillColor(MUTED)
+      .text(`PROPOSTA DE PRESTAÇÃO DE SERVIÇOS TÉCNICOS  ·  ${proposal.proposalNumber}`,
+        285, 39, {
+          width: 258, align: "right", lineBreak: false,
+        });
+    doc.rect(PAGE_LEFT, 68, 80, 2).fill("#C5A045");
+    doc.moveTo(PAGE_LEFT + 80, 69)
+      .lineTo(doc.page.width - PAGE_RIGHT, 69)
+      .strokeColor(BORDER).lineWidth(0.5).stroke();
+  }
 
   // -----------------------------------------------------
   // RODAPÉ INSTITUCIONAL
@@ -390,7 +385,8 @@ function drawInstitutionalPages(
     drawInstitutionalPage(
       doc,
       proposal,
-      company
+      company,
+      index === 0
     );
   }
 }
@@ -509,7 +505,7 @@ function drawHeader(
   proposal: any
 ) {
   doc.x = PAGE_LEFT;
-  doc.y = CONTENT_TOP + 22;
+  doc.y = CONTENT_TOP + 45;
   const y = doc.y;
 
   doc.font("Helvetica-Bold").fontSize(7.4).fillColor("#B69137")
