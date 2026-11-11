@@ -9,11 +9,13 @@ on:
       - 'backend/package.json'
       - 'backend/package-lock.json'
       - 'backend/src/server.ts'
+      - 'backend/src/modules/standalone-proposals/standalone-proposals.routes.ts'
+      - 'backend/src/modules/standalone-proposals/standalone-public-verification.test.ts'
       - 'src/App.tsx'
       - 'src/pages/StandaloneProposalPublicPage.tsx'
       - '.github/workflows/test-proposta-layout-pdf.yml'
 permissions:
-  contents: write
+  contents: read
 jobs:
   pdf-smoke:
     runs-on: ubuntu-24.04
@@ -27,17 +29,6 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: backend/package-lock.json
-      - name: Sync backend lockfile for QR dependency
-        if: github.event_name == 'push'
-        run: |
-          npm install --package-lock-only --ignore-scripts
-          if ! git diff --quiet -- package-lock.json; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add package-lock.json
-            git commit -m "build: synchronize QR dependency lockfile [skip ci]"
-            git push origin HEAD:feat/proposta-layout-editorial-modelo-20261111
-          fi
       - name: Install dependencies
         run: npm ci
       - name: Generate Prisma client
@@ -46,6 +37,8 @@ jobs:
         run: npx prisma generate
       - name: Validate TypeScript
         run: npx tsc --noEmit
+      - name: Verify public proposal access and PDF integrity
+        run: node --require ts-node/register --test src/modules/standalone-proposals/standalone-public-verification.test.ts
       - name: Generate simulated proposal PDF
         env:
           PDF_PREVIEW_DIR: pdf-preview
