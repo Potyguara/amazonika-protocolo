@@ -286,6 +286,74 @@ export function registerStandaloneProposalRoutes({
   getEmailImageAttachments,
 }: RegisterStandaloneProposalRoutesParams) {
 
+  // Consulta pública somente para documentos já emitidos.
+  // Token aleatório de 256 bits; nunca aceitar ID sequencial.
+  app.get("/public/standalone-proposals/:token", async (req, res) => {
+    const token = String(req.params.token || "");
+    if (!/^[a-f0-9]{64}$/i.test(token)) {
+      return res.status(404).json({ message: "Proposta não encontrada." });
+    }
+    try {
+      const proposal = await prisma.standaloneProposal.findUnique({
+        where: { publicToken: token },
+        select: {
+          proposalNumber: true, title: true, clientName: true,
+          totalAmount: true, validUntil: true, generatedAt: true,
+          generatedPdfPath: true, generatedPdfHash: true, status: true,
+        },
+      });
+      if (!proposal?.generatedPdfPath || !proposal.generatedPdfHash) {
+        return res.status(404).json({ message: "Proposta não encontrada." });
+      }
+      if (!fs.existsSync(proposal.generatedPdfPath)) {
+        return res.status(404).json({ message: "Documento indisponível." });
+      }
+      return res.set("Cache-Control", "no-store").json({
+        proposalNumber: proposal.proposalNumber,
+        title: proposal.title,
+        clientName: proposal.clientName,
+        totalAmount: proposal.totalAmount,
+        validUntil: proposal.validUntil,
+        generatedAt: proposal.generatedAt,
+        sha256: proposal.generatedPdfHash,
+        status: proposal.status,
+        downloadUrl: `/public/standalone-proposals/${token}/pdf`,
+      });
+    } catch (error) {
+      console.error("Erro na verificação pública da proposta:", error);
+      return res.status(500).json({ message: "Erro ao consultar documento." });
+    }
+  });
+
+  app.get("/public/standalone-proposals/:token/pdf", async (req, res) => {
+    const token = String(req.params.token || "");
+    if (!/^[a-f0-9]{64}$/i.test(token)) {
+      return res.status(404).json({ message: "Proposta não encontrada." });
+    }
+    try {
+      const proposal = await prisma.standaloneProposal.findUnique({
+        where: { publicToken: token },
+        select: {
+          proposalNumber: true, generatedPdfPath: true, generatedPdfName: true,
+          generatedPdfHash: true,
+        },
+      });
+      if (!proposal?.generatedPdfPath || !proposal.generatedPdfHash ||
+          !fs.existsSync(proposal.generatedPdfPath)) {
+        return res.status(404).json({ message: "Documento indisponível." });
+      }
+      res.set("Cache-Control", "no-store");
+      res.set("X-Content-Type-Options", "nosniff");
+      return res.download(
+        proposal.generatedPdfPath,
+        proposal.generatedPdfName || `${proposal.proposalNumber}.pdf`,
+      );
+    } catch (error) {
+      console.error("Erro ao baixar proposta pública:", error);
+      return res.status(500).json({ message: "Erro ao baixar documento." });
+    }
+  });
+
   // =====================================================
   // RESUMO
   // =====================================================
