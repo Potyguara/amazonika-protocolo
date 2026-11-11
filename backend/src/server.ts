@@ -1453,6 +1453,13 @@ type CompanySettings = {
   companyState: string;
   companyZipCode: string;
   companyFooterText: string;
+  bankName: string;
+  bankAgency: string;
+  bankAccount: string;
+  bankAccountType: string;
+  bankHolder: string;
+  bankHolderDocument: string;
+  pixKey: string;
 };
 
 
@@ -1483,6 +1490,13 @@ async function getCompanySettings(): Promise<CompanySettings> {
       "COMPANY_FOOTER_TEXT",
       "Compromisso com soluções sustentáveis e responsabilidade ambiental."
     ),
+    bankName: await getSetting("PROPOSAL_BANK_NAME"),
+    bankAgency: await getSetting("PROPOSAL_BANK_AGENCY"),
+    bankAccount: await getSetting("PROPOSAL_BANK_ACCOUNT"),
+    bankAccountType: await getSetting("PROPOSAL_BANK_ACCOUNT_TYPE"),
+    bankHolder: await getSetting("PROPOSAL_BANK_HOLDER"),
+    bankHolderDocument: await getSetting("PROPOSAL_BANK_HOLDER_DOCUMENT"),
+    pixKey: await getSetting("PROPOSAL_PIX_KEY"),
   };
 }
 
@@ -1500,10 +1514,18 @@ async function saveCompanySettings(data: Partial<CompanySettings>) {
     ["COMPANY_STATE", data.companyState],
     ["COMPANY_ZIP_CODE", data.companyZipCode],
     ["COMPANY_FOOTER_TEXT", data.companyFooterText],
+    ["PROPOSAL_BANK_NAME", data.bankName],
+    ["PROPOSAL_BANK_AGENCY", data.bankAgency],
+    ["PROPOSAL_BANK_ACCOUNT", data.bankAccount],
+    ["PROPOSAL_BANK_ACCOUNT_TYPE", data.bankAccountType],
+    ["PROPOSAL_BANK_HOLDER", data.bankHolder],
+    ["PROPOSAL_BANK_HOLDER_DOCUMENT", data.bankHolderDocument],
+    ["PROPOSAL_PIX_KEY", data.pixKey],
   ];
 
   for (const [key, value] of entries) {
-    await setSetting(key, value || "", "COMPANY");
+    if (value === undefined) continue;
+    await setSetting(key, typeof value === "string" ? value.trim() : "", "COMPANY");
   }
 
   return getCompanySettings();
