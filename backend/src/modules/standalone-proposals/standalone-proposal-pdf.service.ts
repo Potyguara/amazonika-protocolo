@@ -1043,8 +1043,10 @@ function drawServiceNarratives(
 
       doc.moveDown(0.28);
 
-      if (field !== "technicalDescription" ||
-          !drawTechnicalTimeline(doc, content)) {
+      if (field === "legalText") {
+        drawLegalPanel(doc, content);
+      } else if (field !== "technicalDescription" ||
+                 !drawTechnicalTimeline(doc, content)) {
         paragraph(doc, content);
       }
 
@@ -1108,6 +1110,38 @@ function drawTechnicalTimeline(doc: PDFKit.PDFDocument, content: string): boolea
     doc.y += 9;
   });
   return true;
+}
+
+// Box verde-claro para a fundamentação legal, sem perder o texto original.
+function drawLegalPanel(doc: PDFKit.PDFDocument, content: string) {
+  const width = CONTENT_WIDTH - 40;
+  const textHeight = doc.font("Helvetica").fontSize(8.6)
+    .heightOfString(content, { width, lineGap: 3 });
+  const cardHeight = textHeight + 46;
+
+  if (cardHeight > CONTENT_BOTTOM - CONTENT_TOP - 25) {
+    paragraph(doc, content);
+    return;
+  }
+  ensureSpace(doc, cardHeight + 15);
+  const y = doc.y + 4;
+  doc.roundedRect(PAGE_LEFT, y, CONTENT_WIDTH, cardHeight, 7)
+    .fillAndStroke("#EDF5F1", BORDER);
+  doc.rect(PAGE_LEFT, y, 5, cardHeight).fill("#307D5D");
+  doc.circle(PAGE_LEFT + 21, y + 19, 9).fill("#307D5D");
+  doc.font("Helvetica-Bold").fontSize(8).fillColor("#FFFFFF")
+    .text("i", PAGE_LEFT + 17, y + 15, {
+      width: 8, align: "center", lineBreak: false,
+    });
+  doc.font("Helvetica-Bold").fontSize(7.3).fillColor("#307D5D")
+    .text("FUNDAMENTAÇÃO TÉCNICA E NORMATIVA",
+      PAGE_LEFT + 38, y + 15, { width: CONTENT_WIDTH - 49, lineBreak: false });
+  doc.font("Helvetica").fontSize(8.6).fillColor(DARK)
+    .text(content, PAGE_LEFT + 19, y + 36, {
+      width, lineGap: 3,
+    });
+  doc.x = PAGE_LEFT;
+  doc.y = y + cardHeight + 8;
 }
 
 function drawPaymentPanel(
@@ -1508,12 +1542,26 @@ export async function generateStandaloneProposalPdf(
   );
 
   if (proposal.validUntil) {
-    paragraph(
-      doc,
-      `Validade da proposta: até ${formatDate(
-        proposal.validUntil
-      )}. Após esse período, valores, prazos e condições poderão ser reavaliados.`
-    );
+    const notice = `Após esse período, valores, prazos e condições poderão ser reavaliados.`;
+    ensureSpace(doc, 91);
+    const y = doc.y + 3;
+    doc.roundedRect(PAGE_LEFT, y, CONTENT_WIDTH, 79, 7)
+      .fillAndStroke("#FFF5D9", "#D8BC6B");
+    doc.rect(PAGE_LEFT, y, 5, 79).fill("#947829");
+    doc.circle(PAGE_LEFT + 22, y + 21, 9).fill("#947829");
+    doc.font("Helvetica-Bold").fontSize(8).fillColor("#FFFFFF")
+      .text("!", PAGE_LEFT + 18, y + 17, {
+        width: 8, align: "center", lineBreak: false,
+      });
+    doc.font("Helvetica-Bold").fontSize(8).fillColor("#947829")
+      .text(`VALIDADE DA PROPOSTA: ATÉ ${formatDate(proposal.validUntil)}`,
+        PAGE_LEFT + 40, y + 17,
+        { width: CONTENT_WIDTH - 58, lineBreak: false });
+    doc.font("Helvetica").fontSize(8.2).fillColor(DARK)
+      .text(notice, PAGE_LEFT + 19, y + 47,
+        { width: CONTENT_WIDTH - 35 });
+    doc.x = PAGE_LEFT;
+    doc.y = y + 87;
   }
 
   if (
