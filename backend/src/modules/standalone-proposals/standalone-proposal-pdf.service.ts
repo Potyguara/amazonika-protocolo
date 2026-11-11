@@ -1628,10 +1628,14 @@ export async function generateStandaloneProposalPdf(
   drawPaymentPanel(doc, proposal, paymentTerms);
   drawBankDetails(doc, bankDetails);
 
-  sectionTitle(
-    doc,
-    nextSection("Observações")
-  );
+  if (proposal.validUntil || safeText(proposal.notes)) {
+    // Reserva título + início do conteúdo para evitar cabeçalho órfão.
+    ensureSpace(doc, proposal.validUntil ? 157 : 124);
+    sectionTitle(
+      doc,
+      nextSection("Observações")
+    );
+  }
 
   if (proposal.validUntil) {
     const notice = `Após esse período, valores, prazos e condições poderão ser reavaliados.`;
