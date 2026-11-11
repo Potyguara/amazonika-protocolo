@@ -74,6 +74,12 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+// Propostas avulsas têm acesso público exclusivamente pelo token
+// /public/standalone-proposals/:token/pdf e acesso interno autenticado.
+// Não permitir acesso direto por nomes de arquivo previsíveis.
+app.use("/uploads/standalone-proposals", (_req, res) =>
+  res.status(404).end()
+);
 app.use("/uploads", express.static(path.resolve(process.cwd(), "uploads")));
 
 const storage = multer.diskStorage({
