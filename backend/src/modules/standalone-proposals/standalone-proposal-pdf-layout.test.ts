@@ -8,6 +8,14 @@ import { generateStandaloneProposalPdf } from "./standalone-proposal-pdf.service
 test("PDF de proposta editorial gera arquivo válido com dados dinâmicos", async () => {
   const cwd = process.cwd();
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "amazonika-pav-layout-"));
+  // Reutiliza as mesmas imagens institucionais do PDF em produção.
+  const assetDir = path.join(tmp, "assets");
+  fs.mkdirSync(assetDir, { recursive: true });
+  for (const file of ["logo_header.png", "watermark.png"]) {
+    const original = path.join(cwd, "assets", file);
+    if (fs.existsSync(original))
+      fs.copyFileSync(original, path.join(assetDir, file));
+  }
   process.chdir(tmp);
 
   const proposal = {
