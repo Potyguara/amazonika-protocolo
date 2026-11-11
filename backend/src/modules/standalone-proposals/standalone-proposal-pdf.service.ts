@@ -1186,6 +1186,95 @@ function drawPaymentPanel(
   doc.y = y + 120;
 }
 
+type ProposalBankDetails = {
+  bank: string;
+  agency: string;
+  account: string;
+  accountType: string;
+  holder: string;
+  holderDocument: string;
+  pixKey: string;
+};
+
+async function loadProposalBankDetails(prisma: PrismaClient): Promise<ProposalBankDetails> {
+  // Configuração persistida no próprio sistema; nenhuma credencial
+  // ou conta fictícia é incorporada ao código ou aos PDFs.
+  const keys = [
+    "PROPOSAL_BANK_NAME", "PROPOSAL_BANK_AGENCY",
+    "PROPOSAL_BANK_ACCOUNT", "PROPOSAL_BANK_ACCOUNT_TYPE",
+    "PROPOSAL_BANK_HOLDER", "PROPOSAL_BANK_HOLDER_DOCUMENT",
+    "PROPOSAL_PIX_KEY",
+  ];
+  const settings = await prisma.systemSetting.findMany({
+    where: { key: { in: keys } },
+    select: { key: true, value: true },
+  });
+  const values = new Map(settings.map((item) => [
+    item.key, safeText(item.value),
+  ]));
+  return {
+    bank: values.get(keys[0]) || "",
+    agency: values.get(keys[1]) || "",
+    account: values.get(keys[2]) || "",
+    accountType: values.get(keys[3]) || "",
+    holder: values.get(keys[4]) || "",
+    holderDocument: values.get(keys[5]) || "",
+    pixKey: values.get(keys[6]) || "",
+  };
+}
+
+function drawBankDetails(doc: PDFKit.PDFDocument, bank: ProposalBankDetails) {
+  const fields: Array<[string, string]> = [
+    ["Banco", bank.bank],
+    ["Agência", bank.agency],
+    ["Conta", bank.account],
+    ["Tipo de conta", bank.accountType],
+    ["Favorecido", bank.holder],
+    ["CPF/CNPJ do favorecido", bank.holderDocument],
+    ["Chave Pix", bank.pixKey],
+  ].filter(([, value]) => Boolean(value));
+
+  if (!fields.length) return;
+
+  const contentWidth = CONTENT_WIDTH - 32;
+  const rowHeights = fields.map(([label, value]) => {
+    const height = doc.font("Helvetica").fontSize(8.3)
+      .heightOfString(value, { width: contentWidth - 160 });
+    return Math.max(23, height + 10);
+  });
+  const cardHeight = 39 + rowHeights.reduce((sum, height) => sum + height, 0) + 8;
+  ensureSpace(doc, cardHeight + 14);
+  const y = doc.y + 5;
+
+  doc.roundedRect(PAGE_LEFT, y, CONTENT_WIDTH, cardHeight, 7)
+    .fillAndStroke("#F3F7F5", BORDER);
+  doc.rect(PAGE_LEFT, y, 5, cardHeight).fill("#C5A045");
+  doc.font("Helvetica-Bold").fontSize(8.5).fillColor(GREEN)
+    .text("DADOS BANCÁRIOS E PIX PARA PAGAMENTO", PAGE_LEFT + 16, y + 14, {
+      width: contentWidth, lineBreak: false,
+    });
+
+  let rowY = y + 39;
+  fields.forEach(([label, value], index) => {
+    if (index > 0) {
+      doc.moveTo(PAGE_LEFT + 16, rowY)
+        .lineTo(PAGE_LEFT + CONTENT_WIDTH - 16, rowY)
+        .strokeColor(BORDER).lineWidth(0.4).stroke();
+    }
+    doc.font("Helvetica-Bold").fontSize(7.7).fillColor(MUTED)
+      .text(label.toUpperCase(), PAGE_LEFT + 17, rowY + 6, {
+        width: 145, lineBreak: false,
+      });
+    doc.font("Helvetica").fontSize(8.3).fillColor(DARK)
+      .text(value, PAGE_LEFT + 171, rowY + 5, {
+        width: contentWidth - 160,
+      });
+    rowY += rowHeights[index];
+  });
+  doc.x = PAGE_LEFT;
+  doc.y = y + cardHeight + 10;
+}
+
 function drawTotals(
   doc: PDFKit.PDFDocument,
   proposal: any
@@ -1286,6 +1375,7 @@ export async function generateStandaloneProposalPdf(
   }
 
   const paymentTerms = standaloneDocumentTerms(proposal);
+  const bankDetails = await loadProposalBankDetails(prisma);
 
   if (
     proposal.items.length === 0
@@ -1535,6 +1625,7 @@ export async function generateStandaloneProposalPdf(
   );
 
   drawPaymentPanel(doc, proposal, paymentTerms);
+  drawBankDetails(doc, bankDetails);
 
   sectionTitle(
     doc,
@@ -1718,6 +1809,7 @@ export async function generateStandaloneProposalPdf(
       totalAmount:
         proposal.totalAmount,
       paymentTerms,
+      bankDetails,
       generatedAt:
         new Date().toISOString(),
       hash,
