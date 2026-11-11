@@ -1047,10 +1047,10 @@ function drawServiceNarratives(
 
       doc.moveDown(0.28);
 
-      paragraph(
-        doc,
-        content
-      );
+      if (field !== "technicalDescription" ||
+          !drawTechnicalTimeline(doc, content)) {
+        paragraph(doc, content);
+      }
 
       if (
         index <
@@ -1060,6 +1060,100 @@ function drawServiceNarratives(
       }
     }
   );
+}
+
+// Linha do tempo editorial; detecta apenas fases explicitamente registradas.
+function drawTechnicalTimeline(doc: PDFKit.PDFDocument, content: string): boolean {
+  const normalized = content.replace(/\r\n/g, "\n");
+  const matcher = /^\s*FASE\s+(\d+)\s*[-:–]?\s*([^\n]*)/gim;
+  const phases = Array.from(normalized.matchAll(matcher));
+  if (phases.length === 0) return false;
+
+  const introduction = normalized.slice(0, phases[0].index).trim();
+  if (introduction) paragraph(doc, introduction);
+
+  phases.forEach((phase, index) => {
+    const begin = (phase.index || 0) + phase[0].length;
+    const end = index + 1 < phases.length
+      ? phases[index + 1].index || normalized.length
+      : normalized.length;
+    const lines = normalized.slice(begin, end).trim()
+      .split("\n").map((v) => v.trim()).filter(Boolean);
+    const title = phase[2]?.trim() || lines.shift() || `Fase ${phase[1]}`;
+    ensureSpace(doc, 90);
+    const y = doc.y + 6;
+    doc.circle(PAGE_LEFT + 16, y + 10, 11).fill("#C5A045");
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(GREEN)
+      .text(phase[1], PAGE_LEFT + 7, y + 7, {
+        width: 18, align: "center", lineBreak: false,
+      });
+    doc.font("Helvetica-Bold").fontSize(6.5).fillColor("#9A7D37")
+      .text(`F A S E  ${phase[1]}`, PAGE_LEFT + 37, y, {
+        width: CONTENT_WIDTH - 45, lineBreak: false,
+      });
+    doc.font("Helvetica-Bold").fontSize(9).fillColor(GREEN)
+      .text(title, PAGE_LEFT + 37, y + 11, {
+        width: CONTENT_WIDTH - 47,
+      });
+    doc.x = PAGE_LEFT + 37;
+    doc.y = Math.max(y + 34, doc.y + 3);
+    if (lines.length > 0) {
+      lines.forEach((line) => {
+        ensureSpace(doc, 36);
+        const cleaned = line.replace(/^[-•●]\s*/, "");
+        doc.font("Helvetica").fontSize(8.3).fillColor(DARK)
+          .text("•  " + cleaned, PAGE_LEFT + 42, doc.y, {
+            width: CONTENT_WIDTH - 53, lineGap: 2,
+          });
+        doc.moveDown(0.25);
+      });
+    }
+    doc.x = PAGE_LEFT;
+    doc.y += 9;
+  });
+  return true;
+}
+
+function drawPaymentPanel(
+  doc: PDFKit.PDFDocument,
+  proposal: any,
+  terms: { paymentText?: string | null }
+) {
+  ensureSpace(doc, 135);
+  const y = doc.y + 4;
+  const leftWidth = 306;
+  const rightX = PAGE_LEFT + leftWidth + 12;
+  const rightWidth = CONTENT_WIDTH - leftWidth - 12;
+  doc.roundedRect(PAGE_LEFT, y, leftWidth, 112, 7)
+    .fillAndStroke("#FFFFFF", BORDER);
+  doc.rect(PAGE_LEFT, y, leftWidth, 24).fill(GREEN);
+  doc.rect(PAGE_LEFT, y, 5, 24).fill("#C5A045");
+  doc.font("Helvetica-Bold").fontSize(7.2).fillColor("#FFFFFF")
+    .text("FORMA DE PAGAMENTO", PAGE_LEFT + 13, y + 8,
+      { width: leftWidth - 24, lineBreak: false });
+  doc.font("Helvetica").fontSize(8.4).fillColor(DARK)
+    .text(terms.paymentText || "Conforme condições comerciais acordadas.",
+      PAGE_LEFT + 14, y + 35, {
+        width: leftWidth - 28, lineGap: 3,
+      });
+  doc.font("Helvetica-Bold").fontSize(7).fillColor("#9A7D37")
+    .text(safeText(proposal.paymentMode).replace(/_/g, " "),
+      PAGE_LEFT + 14, y + 92, {
+        width: leftWidth - 28, lineBreak: false,
+      });
+  doc.roundedRect(rightX, y, rightWidth, 112, 7).fill(GREEN);
+  doc.rect(rightX, y, rightWidth, 5).fill("#C5A045");
+  doc.font("Helvetica-Bold").fontSize(7.3).fillColor("#DCC38C")
+    .text("VALOR DA PROPOSTA", rightX + 13, y + 22,
+      { width: rightWidth - 26, lineBreak: false });
+  doc.font("Times-Bold").fontSize(17).fillColor("#FFFFFF")
+    .text(money(proposal.totalAmount), rightX + 13, y + 43,
+      { width: rightWidth - 26, lineBreak: false });
+  doc.font("Helvetica").fontSize(7).fillColor("#D8E7DE")
+    .text("Pagamento conforme as condições acordadas.",
+      rightX + 13, y + 76, { width: rightWidth - 26 });
+  doc.x = PAGE_LEFT;
+  doc.y = y + 120;
 }
 
 function drawTotals(
@@ -1502,10 +1596,7 @@ export async function generateStandaloneProposalPdf(
     nextSection("Condições de Pagamento")
   );
 
-  paragraph(
-    doc,
-    paymentTerms.paymentText || "Pagamento conforme condições comerciais acordadas entre as partes."
-  );
+  drawPaymentPanel(doc, proposal, paymentTerms);
 
   sectionTitle(
     doc,
