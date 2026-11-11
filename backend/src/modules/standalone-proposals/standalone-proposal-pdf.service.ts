@@ -15,7 +15,7 @@ const BORDER = "#D9E4DF";
 const PAGE_LEFT = 52;
 const PAGE_RIGHT = 52;
 
-const CONTENT_TOP = 118;
+const CONTENT_TOP = 136;
 const CONTENT_BOTTOM = 742;
 
 const CONTENT_WIDTH =
@@ -199,62 +199,38 @@ function drawInstitutionalPage(
     }
   }
 
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(6.3)
-    .fillColor(MUTED)
-    .text(
-      "PROPOSTA DE PRESTAÇÃO DE SERVIÇOS TÉCNICOS",
-      340,
-      34,
-      {
-        width: 203,
-        align: "right",
-        lineBreak: false,
-      }
-    );
+  // Identificação institucional fixa em todas as páginas.
+  // Título, número e data da proposta pertencem ao corpo do documento.
+  const headerLines = [
+    "AMAZONIKA ENGENHARIA LTDA",
+    "Av. Almirante Barroso 620-B - CEP 68900-401",
+    "Bairro: Central - Macapá/AP",
+    "CNPJ: 49.158.834/0001-19",
+    "Contato: 96 98803-6439 / 96 9141-0943",
+    "www.amazonikaengenharia.com.br",
+    "amazonika@amazonikaengenharia.com.br",
+  ];
 
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(10.5)
-    .fillColor(GREEN)
-    .text(
-      proposal.proposalNumber,
-      340,
-      49,
-      {
-        width: 203,
+  headerLines.forEach((value, index) => {
+    doc
+      .font(index === 0 ? "Helvetica-Bold" : "Helvetica")
+      .fontSize(index === 0 ? 7.4 : 6.7)
+      .fillColor(index === 0 ? GREEN : MUTED)
+      .text(value, 206, 20 + index * 12, {
+        width: 337,
         align: "right",
         lineBreak: false,
-      }
-    );
-
-  doc
-    .font("Helvetica")
-    .fontSize(6.4)
-    .fillColor(MUTED)
-    .text(
-      `Emissão: ${formatDate(
-        proposal.generatedAt ||
-        new Date()
-      )}`,
-      340,
-      65,
-      {
-        width: 203,
-        align: "right",
-        lineBreak: false,
-      }
-    );
+      });
+  });
 
   doc
     .moveTo(
       PAGE_LEFT,
-      98
+      115
     )
     .lineTo(
       doc.page.width - PAGE_RIGHT,
-      98
+      115
     )
     .strokeColor(BORDER)
     .lineWidth(0.5)
@@ -516,6 +492,40 @@ function drawHeader(
 ) {
   doc.x = PAGE_LEFT;
   doc.y = CONTENT_TOP;
+
+  // Identificação da proposta no corpo, antes de DESTINATÁRIO.
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(8)
+    .fillColor(MUTED)
+    .text("PROPOSTA DE PRESTAÇÃO DE SERVIÇOS TÉCNICOS", {
+      width: CONTENT_WIDTH,
+      align: "center",
+    });
+
+  doc.moveDown(0.15);
+
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(12)
+    .fillColor(GREEN)
+    .text(proposal.proposalNumber, {
+      width: CONTENT_WIDTH,
+      align: "center",
+    });
+
+  doc.moveDown(0.1);
+
+  doc
+    .font("Helvetica")
+    .fontSize(8)
+    .fillColor(MUTED)
+    .text(`Emissão: ${formatDate(proposal.generatedAt || new Date())}`, {
+      width: CONTENT_WIDTH,
+      align: "center",
+    });
+
+  doc.moveDown(0.8);
 
   doc
     .font("Helvetica-Bold")
