@@ -6,6 +6,8 @@ on:
   pull_request:
     paths:
       - 'backend/src/modules/standalone-proposals/standalone-proposal-pdf*.ts'
+      - 'backend/src/server.ts'
+      - 'src/App.tsx'
       - '.github/workflows/test-proposta-layout-pdf.yml'
 permissions:
   contents: read
@@ -41,3 +43,17 @@ jobs:
           name: proposta-pdf-preview
           path: backend/pdf-preview/*.pdf
           if-no-files-found: warn
+
+  frontend-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Compile and build frontend
+        run: npm run build
