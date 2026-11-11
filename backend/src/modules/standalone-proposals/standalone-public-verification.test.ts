@@ -38,7 +38,7 @@ test("consulta pública exige token, documento emitido e SHA-256 válido", async
     app, prisma,
     authMiddleware: (_req: unknown, _res: unknown, next: () => void) => next(),
     requireRoles: () => (_req: unknown, _res: unknown, next: () => void) => next(),
-    upload: {},
+    upload: { single: () => (_req: unknown, _res: unknown, next: () => void) => next() },
     createTransporterFromSettings: async () => null,
     getSmtpSettings: async () => ({}),
     getEmailImageAttachments: () => [],
