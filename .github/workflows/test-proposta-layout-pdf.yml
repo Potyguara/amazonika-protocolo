@@ -31,4 +31,13 @@ jobs:
       - name: Validate TypeScript
         run: npx tsc --noEmit
       - name: Generate simulated proposal PDF
+        env:
+          PDF_PREVIEW_DIR: backend/pdf-preview
         run: node --require ts-node/register --test src/modules/standalone-proposals/standalone-proposal-pdf-layout.test.ts
+      - name: Upload visual PDF preview
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proposta-pdf-preview
+          path: backend/pdf-preview/*.pdf
+          if-no-files-found: warn
