@@ -1232,12 +1232,13 @@ function drawBankDetails(doc: PDFKit.PDFDocument, bank: ProposalBankDetails) {
     ["Favorecido", bank.holder],
     ["CPF/CNPJ do favorecido", bank.holderDocument],
     ["Chave Pix", bank.pixKey],
-  ].filter(([, value]) => Boolean(value));
+  ] satisfies Array<[string, string]>;
+  const visibleFields = fields.filter(([, value]) => Boolean(value));(([, value]) => Boolean(value));
 
-  if (!fields.length) return;
+  if (!visibleFields.length) return;
 
   const contentWidth = CONTENT_WIDTH - 32;
-  const rowHeights = fields.map(([label, value]) => {
+  const rowHeights = visibleFields.map(([, value]) => {
     const height = doc.font("Helvetica").fontSize(8.3)
       .heightOfString(value, { width: contentWidth - 160 });
     return Math.max(23, height + 10);
@@ -1255,7 +1256,7 @@ function drawBankDetails(doc: PDFKit.PDFDocument, bank: ProposalBankDetails) {
     });
 
   let rowY = y + 39;
-  fields.forEach(([label, value], index) => {
+  visibleFields.forEach(([label, value], index) => {
     if (index > 0) {
       doc.moveTo(PAGE_LEFT + 16, rowY)
         .lineTo(PAGE_LEFT + CONTENT_WIDTH - 16, rowY)
