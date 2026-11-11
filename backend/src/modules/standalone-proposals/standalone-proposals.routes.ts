@@ -97,6 +97,25 @@ function dateOrNull(value: unknown) {
   return date;
 }
 
+function verifiedStandalonePdf(
+  proposal: { generatedPdfPath: string | null; generatedPdfHash: string | null }
+): boolean {
+  if (!proposal.generatedPdfPath || !proposal.generatedPdfHash ||
+      !/^[a-f0-9]{64}$/i.test(proposal.generatedPdfHash)) return false;
+  try {
+    const stat = fs.statSync(proposal.generatedPdfPath);
+    if (!stat.isFile()) return false;
+    const digest = crypto.createHash("sha256")
+      .update(fs.readFileSync(proposal.generatedPdfPath)).digest("hex");
+    return crypto.timingSafeEqual(
+      Buffer.from(digest, "hex"),
+      Buffer.from(proposal.generatedPdfHash, "hex"),
+    );
+  } catch {
+    return false;
+  }
+}
+
 function generatePublicToken() {
   return crypto.randomBytes(32).toString("hex");
 }
@@ -305,8 +324,8 @@ export function registerStandaloneProposalRoutes({
       if (!proposal?.generatedPdfPath || !proposal.generatedPdfHash) {
         return res.status(404).json({ message: "Proposta não encontrada." });
       }
-      if (!fs.existsSync(proposal.generatedPdfPath)) {
-        return res.status(404).json({ message: "Documento indisponível." });
+      if (!verifiedStandalonePdf(proposal)) {
+        return res.status(409).json({ message: "Integridade do documento não confirmada." });
       }
       return res.set("Cache-Control", "no-store").json({
         proposalNumber: proposal.proposalNumber,
@@ -338,9 +357,11 @@ export function registerStandaloneProposalRoutes({
           generatedPdfHash: true,
         },
       });
-      if (!proposal?.generatedPdfPath || !proposal.generatedPdfHash ||
-          !fs.existsSync(proposal.generatedPdfPath)) {
+      if (!proposal?.generatedPdfPath || !proposal.generatedPdfHash) {
         return res.status(404).json({ message: "Documento indisponível." });
+      }
+      if (!verifiedStandalonePdf(proposal)) {
+        return res.status(409).json({ message: "Integridade do documento não confirmada." });
       }
       res.set("Cache-Control", "no-store");
       res.set("X-Content-Type-Options", "nosniff");
