@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test:money-core": "node --require ts-node/register --test src/lib/money-core-flows.test.ts",
     "test:money-flows": "node --require ts-node/register --test src/lib/money-flows.test.ts",
     "test:money": "node --require ts-node/register --test src/lib/money.test.ts",
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
@@ -26,7 +25,8 @@
     "multer": "^2.1.1",
     "nodemailer": "^8.0.7",
     "pdfkit": "^0.18.0",
-    "qrcode.react": "^4.2.0"
+    "qrcode.react": "^4.2.0",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
@@ -38,6 +38,7 @@
     "@types/pdfkit": "^0.17.6",
     "prisma": "^6.19.3",
     "ts-node-dev": "^2.0.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "@types/qrcode": "^1.5.6"
   }
 }

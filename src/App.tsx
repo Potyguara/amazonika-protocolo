@@ -1,5 +1,6 @@
 import "./App.css";
 import StandaloneProposalsPage from "./pages/StandaloneProposalsPage";
+import StandaloneProposalPublicPage from "./pages/StandaloneProposalPublicPage";
 import FieldSchedulePage from "./pages/FieldSchedulePage";
 import FieldTravelMapPage from "./pages/FieldTravelMapPage";
 import StandaloneProposalEditorPage from "./pages/StandaloneProposalEditorPage";
@@ -149,11 +150,18 @@ function PublicBillingChargePage() {
 
   if (!charge) return null;
 
+  const isStandaloneSinglePayment =
+    charge.chargeType === "ENTRADA" &&
+    !charge.contract &&
+    !charge.protocol;
+
   const publicChargeEyebrow =
     charge.chargeType === "PARCELA"
       ? "Cobrança da parcela"
       : charge.chargeType === "AVULSA"
       ? "Cobrança avulsa"
+      : isStandaloneSinglePayment
+      ? "Cobrança de pagamento único"
       : "Cobrança da entrada";
 
   const publicChargeTitle =
@@ -161,6 +169,8 @@ function PublicBillingChargePage() {
       ? "Pagamento da parcela contratual"
       : charge.chargeType === "AVULSA"
       ? "Pagamento de cobrança avulsa"
+      : isStandaloneSinglePayment
+      ? "Pagamento do serviço"
       : "Pagamento para início dos serviços";
 
   const isPaid = charge.status === "PAGA";
@@ -188,11 +198,15 @@ function PublicBillingChargePage() {
 
             <h1>{publicChargeTitle}</h1>
 
-            <p>
-              Protocolo{" "}
-              <strong>{charge.protocol?.protocolNumber || "-"}</strong> ·{" "}
-              {charge.protocol?.serviceType?.name || "-"}
-            </p>
+            {charge.protocol && (
+                <p>
+                  Protocolo{" "}
+                  <strong>{charge.protocol.protocolNumber}</strong>
+                  {charge.protocol.serviceType?.name
+                    ? ` · ${charge.protocol.serviceType.name}`
+                    : ""}
+                </p>
+              )}
           </div>
 
           <span className={`badge billing-${billingStatusClass(charge.status)}`}>
@@ -215,10 +229,12 @@ function PublicBillingChargePage() {
                 <strong>{formatCivilDate(charge.dueDate)}</strong>
               </div>
 
-              <div>
-                <span>Contrato</span>
-                <strong>{charge.contract?.contractNumber || "-"}</strong>
-              </div>
+              {charge.contract && (
+                  <div>
+                    <span>Contrato</span>
+                    <strong>{charge.contract.contractNumber}</strong>
+                  </div>
+                )}
             </div>
 
             {copySuccess && (
@@ -249,10 +265,12 @@ function PublicBillingChargePage() {
                       <p>
                         Escaneie o QR Code com o aplicativo do seu banco para{" "}
                         {charge.chargeType === "PARCELA"
-                          ? "pagar a parcela."
-                          : charge.chargeType === "ENTRADA"
-                            ? "pagar a entrada."
-                            : "realizar o pagamento."}
+                            ? "pagar a parcela."
+                            : isStandaloneSinglePayment
+                              ? "realizar o pagamento."
+                              : charge.chargeType === "ENTRADA"
+                                ? "pagar a entrada."
+                                : "realizar o pagamento."}
                       </p>
                     </div>
 
@@ -343,22 +361,27 @@ function PublicBillingChargePage() {
 
             <p>
               {charge.chargeType === "PARCELA" ? (
-                <>
-                  Após a confirmação do pagamento, a situação financeira desta
-                  parcela será atualizada no sistema.
-                </>
-              ) : charge.chargeType === "ENTRADA" ? (
-                <>
-                  Após a confirmação do pagamento, a AMAZONIKA libera a
-                  mobilização da equipe técnica e inicia a contagem do prazo
-                  previsto no contrato.
-                </>
-              ) : (
-                <>
-                  Após a confirmação do pagamento, a situação financeira da
-                  cobrança será atualizada no sistema.
-                </>
-              )}
+                  <>
+                    Após a confirmação do pagamento, a situação financeira desta
+                    parcela será atualizada no sistema.
+                  </>
+                ) : isStandaloneSinglePayment ? (
+                  <>
+                    Após a confirmação do pagamento, a situação financeira deste
+                    serviço será atualizada no sistema.
+                  </>
+                ) : charge.chargeType === "ENTRADA" ? (
+                  <>
+                    Após a confirmação do pagamento, a AMAZONIKA libera a
+                    mobilização da equipe técnica e inicia a contagem do prazo
+                    previsto no contrato.
+                  </>
+                ) : (
+                  <>
+                    Após a confirmação do pagamento, a situação financeira da
+                    cobrança será atualizada no sistema.
+                  </>
+                )}
             </p>
 
             <p>
@@ -739,6 +762,13 @@ type BackendCompanySettings = {
   companyState: string;
   companyZipCode: string;
   companyFooterText: string;
+  bankName: string;
+  bankAgency: string;
+  bankAccount: string;
+  bankAccountType: string;
+  bankHolder: string;
+  bankHolderDocument: string;
+  pixKey: string;
 };
 
 
@@ -7374,8 +7404,34 @@ const confirmed = window.confirm(
       return;
     }
 
+    let manualReason = "";
+
+    if (charge.provider === "BANCO_DO_BRASIL") {
+      const reason = window.prompt(
+        "Esta cobrança foi emitida pelo Banco do Brasil.\n\nInforme a justificativa para realizar a baixa manual:"
+      );
+
+      if (reason === null) return;
+
+      manualReason = reason.trim();
+
+      if (!manualReason) {
+        setSuccess("");
+        setError(
+          "A justificativa é obrigatória para baixa manual de cobrança do Banco do Brasil."
+        );
+        return;
+      }
+    }
+
     const confirmed = window.confirm(
-      `Confirmar o pagamento integral de ${formatMoneyCents(charge.amountCents)}? O protocolo será liberado para execução.`
+      charge.provider === "BANCO_DO_BRASIL"
+        ? `Confirmar manualmente o pagamento integral de ${formatMoneyCents(
+            charge.amountCents
+          )}?\n\nEsta ação ficará registrada na auditoria como baixa manual.`
+        : `Confirmar o pagamento integral de ${formatMoneyCents(
+            charge.amountCents
+          )}? O protocolo será liberado para execução.`
     );
 
     if (!confirmed) return;
@@ -7388,9 +7444,18 @@ const confirmed = window.confirm(
       await api.markBillingChargePaid(charge.id, {
         paidAt: today,
         notes: "Pagamento confirmado manualmente no painel administrativo.",
+        manualReason:
+          charge.provider === "BANCO_DO_BRASIL"
+            ? manualReason
+            : undefined,
       });
 
-      setSuccess("Pagamento confirmado. Protocolo liberado para execução.");
+      setSuccess(
+        charge.provider === "BANCO_DO_BRASIL"
+          ? "Pagamento marcado manualmente como pago. A justificativa foi registrada na auditoria."
+          : "Pagamento confirmado. Protocolo liberado para execução."
+      );
+
       await loadData();
       await onReload?.();
     } catch (err) {
@@ -8282,17 +8347,18 @@ const confirmed = window.confirm(
       </button>
     )}
 
-  {(charge.status === "EMITIDA" || charge.status === "ENVIADA") &&
-    charge.provider !== "BANCO_DO_BRASIL" && (
-      <button
-        className="mini-button"
-        type="button"
-        disabled={saving}
-        onClick={() => handleMarkPaid(charge)}
-      >
-        Marcar como pago
-      </button>
-    )}
+  {(charge.status === "EMITIDA" || charge.status === "ENVIADA") && (
+    <button
+      className="mini-button"
+      type="button"
+      disabled={saving}
+      onClick={() => handleMarkPaid(charge)}
+    >
+      {charge.provider === "BANCO_DO_BRASIL"
+        ? "Marcar como pago manualmente"
+        : "Marcar como pago"}
+    </button>
+  )}
 </div>
   </div>
 )}
@@ -10940,6 +11006,90 @@ type BackendProLaboreAdvance = {
 
 
 
+type BackendManagerExpenseStatus =
+  | "PENDENTE_RESTITUICAO"
+  | "RESTITUIDO"
+  | "CANCELADO";
+
+type BackendManagerExpenseMonthStatus =
+  | "ABERTO"
+  | "FECHADO";
+
+type BackendManagerExpenseUser = {
+  id: number;
+  name: string;
+  email: string;
+};
+
+type BackendManagerExpense = {
+  id: number;
+  managerUserId: number;
+  competenceMonth: string;
+  expenseDate: string;
+  description: string;
+  amountCents: number;
+  notes?: string | null;
+
+  status: BackendManagerExpenseStatus;
+
+  reimbursedAt?: string | null;
+  reimbursementNotes?: string | null;
+
+  hasReceipt: boolean;
+  receiptOriginalName?: string | null;
+  receiptMimeType?: string | null;
+  receiptSize?: number | null;
+
+  manager?: BackendManagerExpenseUser | null;
+  createdBy?: BackendManagerExpenseUser | null;
+  updatedBy?: BackendManagerExpenseUser | null;
+
+  createdAt: string;
+  updatedAt: string;
+};
+
+type BackendManagerExpenseManagerSummary = {
+  managerUserId: number;
+  managerName: string;
+  managerEmail: string;
+  amountCents: number;
+  reimbursedCents: number;
+  pendingCents: number;
+  cancelledCents: number;
+};
+
+type BackendManagerExpenseMonth = {
+  id: number | null;
+  status: BackendManagerExpenseMonthStatus;
+
+  closedAt?: string | null;
+  closedBy?: BackendManagerExpenseUser | null;
+
+  reopenedAt?: string | null;
+  reopenedBy?: BackendManagerExpenseUser | null;
+
+  notes?: string | null;
+};
+
+type BackendManagerExpenseResponse = {
+  competenceMonth: string;
+
+  month: BackendManagerExpenseMonth;
+
+  totals: {
+    amountCents: number;
+    reimbursedCents: number;
+    pendingCents: number;
+    cancelledCents: number;
+  };
+
+  byManager: BackendManagerExpenseManagerSummary[];
+
+  expenses: BackendManagerExpense[];
+};
+
+
+
 function FinancePage() {
   const currentMonth = new Date().toISOString().slice(0, 7);
 
@@ -10951,6 +11101,7 @@ function FinancePage() {
     | "TRANSACTIONS"
     | "AUTO_CHARGES"
     | "FIXED_COSTS"
+    | "MANAGER_EXPENSES"
     | "SALARIES"
     | "CATEGORIES"
     | "PARTNERS"
@@ -10964,6 +11115,63 @@ function FinancePage() {
   const [fixedCosts, setFixedCosts] = useState<BackendFinanceFixedCost[]>([]);
   const [salaries, setSalaries] = useState<BackendFinanceSalary[]>([]);
   const [categories, setCategories] = useState<BackendFinanceCategory[]>([]);
+
+
+  const [
+    managerExpenseData,
+    setManagerExpenseData,
+  ] = useState<BackendManagerExpenseResponse | null>(null);
+
+  const [
+    managerExpenseManagers,
+    setManagerExpenseManagers,
+  ] = useState<BackendManagerExpenseUser[]>([]);
+
+  const [
+    managerExpenseLoading,
+    setManagerExpenseLoading,
+  ] = useState(false);
+
+  const [
+    showManagerExpenseForm,
+    setShowManagerExpenseForm,
+  ] = useState(false);
+
+  const [
+    editingManagerExpense,
+    setEditingManagerExpense,
+  ] = useState<BackendManagerExpense | null>(null);
+
+  const [
+    managerExpenseManagerUserId,
+    setManagerExpenseManagerUserId,
+  ] = useState("");
+
+  const [
+    managerExpenseDate,
+    setManagerExpenseDate,
+  ] = useState("");
+
+  const [
+    managerExpenseDescription,
+    setManagerExpenseDescription,
+  ] = useState("");
+
+  const [
+    managerExpenseAmount,
+    setManagerExpenseAmount,
+  ] = useState("");
+
+  const [
+    managerExpenseNotes,
+    setManagerExpenseNotes,
+  ] = useState("");
+
+  const [
+    managerExpenseFile,
+    setManagerExpenseFile,
+  ] = useState<File | null>(null);
+
 
   const [
     financeCatalogServices,
@@ -11220,6 +11428,48 @@ function FinancePage() {
 
   
 
+  async function loadManagerExpenses(
+    competenceMonth = month
+  ) {
+    try {
+      setManagerExpenseLoading(true);
+
+      const [
+        expenseDataRaw,
+        managersDataRaw,
+      ] = await Promise.all([
+        api.financeManagerExpenses(
+          competenceMonth
+        ),
+        api.financeManagerExpenseManagers(),
+      ]);
+
+      const expenseData =
+        expenseDataRaw as BackendManagerExpenseResponse;
+
+      const managersData =
+        managersDataRaw as BackendManagerExpenseUser[];
+
+      setManagerExpenseData(
+        expenseData
+      );
+
+      setManagerExpenseManagers(
+        Array.isArray(managersData)
+          ? managersData
+          : []
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao carregar custos dos sócios."
+      );
+    } finally {
+      setManagerExpenseLoading(false);
+    }
+  }
+
   async function loadFinance() {
     try {
       setLoading(true);
@@ -11277,6 +11527,7 @@ function FinancePage() {
 
   useEffect(() => {
     loadFinance();
+    loadManagerExpenses(month);
   }, [month]);
 
   async function handleRefreshAutoChargeSchedulerStatus() {
@@ -11586,6 +11837,19 @@ function FinancePage() {
         )) as BackendFinanceTransaction;
 
       setViewingPaymentPlan(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id === obligation.id
+                ? {
+                    ...item,
+                    ...updated,
+                  }
+                : item
+          )
+      );
+
+      setTransactions(
         (current) =>
           current.map(
             (item) =>
@@ -13034,6 +13298,514 @@ async function handleSaveTransaction() {
     }
   }
 
+  // =====================================================
+  // CUSTOS DOS SÓCIOS / GERENTES
+  // =====================================================
+
+  function resetManagerExpenseForm() {
+    setEditingManagerExpense(null);
+
+    setManagerExpenseManagerUserId(
+      managerExpenseManagers.length > 0
+        ? String(managerExpenseManagers[0].id)
+        : ""
+    );
+
+    setManagerExpenseDate(
+      `${month}-01`
+    );
+
+    setManagerExpenseDescription("");
+    setManagerExpenseAmount("");
+    setManagerExpenseNotes("");
+    setManagerExpenseFile(null);
+  }
+
+  function startNewManagerExpense() {
+    clearMessages();
+    resetManagerExpenseForm();
+    setShowManagerExpenseForm(true);
+  }
+
+  function startEditManagerExpense(
+    item: BackendManagerExpense
+  ) {
+    if (
+      managerExpenseData?.month.status ===
+      "FECHADO"
+    ) {
+      setSuccess("");
+      setError(
+        "A competência está fechada. Reabra o mês antes de editar."
+      );
+      return;
+    }
+
+    if (
+      item.status !==
+      "PENDENTE_RESTITUICAO"
+    ) {
+      setSuccess("");
+      setError(
+        "Somente custos pendentes de restituição podem ser editados."
+      );
+      return;
+    }
+
+    clearMessages();
+
+    setEditingManagerExpense(item);
+
+    setManagerExpenseManagerUserId(
+      String(item.managerUserId)
+    );
+
+    setManagerExpenseDate(
+      item.expenseDate?.slice(0, 10) ||
+        `${month}-01`
+    );
+
+    setManagerExpenseDescription(
+      item.description || ""
+    );
+
+    setManagerExpenseAmount(
+      centsToReaisFormValue(
+        item.amountCents
+      )
+    );
+
+    setManagerExpenseNotes(
+      item.notes || ""
+    );
+
+    // O comprovante já existente é preservado.
+    // Na edição não exigimos novo arquivo.
+    setManagerExpenseFile(null);
+
+    setShowManagerExpenseForm(true);
+  }
+
+  async function handleSaveManagerExpense() {
+    try {
+      setSaving(true);
+      clearMessages();
+
+      if (
+        !managerExpenseManagerUserId
+      ) {
+        throw new Error(
+          "Selecione o gerente que assumiu o custo."
+        );
+      }
+
+      if (!managerExpenseDate) {
+        throw new Error(
+          "Informe a data do custo."
+        );
+      }
+
+      if (
+        !managerExpenseDate.startsWith(
+          `${month}-`
+        )
+      ) {
+        throw new Error(
+          "A data do custo deve pertencer à competência selecionada."
+        );
+      }
+
+      if (
+        !managerExpenseDescription.trim()
+      ) {
+        throw new Error(
+          "Informe a descrição do custo."
+        );
+      }
+
+      const amountCents =
+        reaisFormValueToCents(
+          managerExpenseAmount
+        );
+
+      if (amountCents <= 0) {
+        throw new Error(
+          "Informe um valor válido."
+        );
+      }
+
+      if (editingManagerExpense) {
+        await api.updateFinanceManagerExpense(
+          editingManagerExpense.id,
+          {
+            managerUserId:
+              Number(
+                managerExpenseManagerUserId
+              ),
+
+            competenceMonth: month,
+
+            expenseDate:
+              managerExpenseDate,
+
+            description:
+              managerExpenseDescription.trim(),
+
+            amount:
+              Number(
+                centsToReaisFormValue(
+                  amountCents
+                )
+              ),
+
+            notes:
+              managerExpenseNotes.trim() ||
+              null,
+          }
+        );
+
+        setSuccess(
+          "Custo do sócio atualizado com sucesso."
+        );
+      } else {
+        if (!managerExpenseFile) {
+          throw new Error(
+            "Anexe o comprovante do custo."
+          );
+        }
+
+        await api.createFinanceManagerExpense({
+          managerUserId:
+            Number(
+              managerExpenseManagerUserId
+            ),
+
+          competenceMonth: month,
+
+          expenseDate:
+            managerExpenseDate,
+
+          description:
+            managerExpenseDescription.trim(),
+
+          amount:
+            Number(
+              centsToReaisFormValue(
+                amountCents
+              )
+            ),
+
+          notes:
+            managerExpenseNotes.trim() ||
+            null,
+
+          file:
+            managerExpenseFile,
+        });
+
+        setSuccess(
+          "Custo do sócio cadastrado com sucesso."
+        );
+      }
+
+      resetManagerExpenseForm();
+      setShowManagerExpenseForm(false);
+
+      await loadManagerExpenses(month);
+    } catch (err) {
+      setSuccess("");
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao salvar custo do sócio."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDeleteManagerExpense(
+    item: BackendManagerExpense
+  ) {
+    const confirmed =
+      window.confirm(
+        `Deseja excluir o custo "${item.description}"?\n\n` +
+        `Esta ação é permitida apenas enquanto ele estiver pendente e o mês estiver aberto.`
+      );
+
+    if (!confirmed) return;
+
+    try {
+      setSaving(true);
+      clearMessages();
+
+      await api.deleteFinanceManagerExpense(
+        item.id
+      );
+
+      setSuccess(
+        "Custo excluído com sucesso."
+      );
+
+      await loadManagerExpenses(month);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao excluir custo do sócio."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleCancelManagerExpense(
+    item: BackendManagerExpense
+  ) {
+    const reason =
+      window.prompt(
+        "Informe a justificativa do cancelamento:"
+      );
+
+    if (reason === null) return;
+
+    if (reason.trim().length < 5) {
+      setSuccess("");
+      setError(
+        "A justificativa deve possuir pelo menos 5 caracteres."
+      );
+      return;
+    }
+
+    try {
+      setSaving(true);
+      clearMessages();
+
+      await api.cancelFinanceManagerExpense(
+        item.id,
+        reason.trim()
+      );
+
+      setSuccess(
+        "Custo cancelado e preservado no histórico."
+      );
+
+      await loadManagerExpenses(month);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao cancelar custo do sócio."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleReimburseManagerExpense(
+    item: BackendManagerExpense
+  ) {
+    const confirmed =
+      window.confirm(
+        `Confirmar restituição de ${formatMoneyCents(
+          item.amountCents
+        )} para ${item.manager?.name || "o gerente"}?`
+      );
+
+    if (!confirmed) return;
+
+    const notes =
+      window.prompt(
+        "Observação da restituição (opcional):"
+      );
+
+    if (notes === null) return;
+
+    try {
+      setSaving(true);
+      clearMessages();
+
+      await api.reimburseFinanceManagerExpense(
+        item.id,
+        {
+          reimbursedAt:
+            new Date()
+              .toISOString()
+              .slice(0, 10),
+
+          notes:
+            notes.trim() || null,
+        }
+      );
+
+      setSuccess(
+        "Restituição registrada com sucesso."
+      );
+
+      await loadManagerExpenses(month);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao registrar restituição."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleOpenManagerExpenseReceipt(
+    item: BackendManagerExpense
+  ) {
+    try {
+      clearMessages();
+
+      const result =
+        await api.financeManagerExpenseReceipt(
+          item.id
+        ) as {
+          blob: Blob;
+          fileName: string;
+          contentType: string;
+        };
+
+      const url =
+        URL.createObjectURL(
+          result.blob
+        );
+
+      const opened =
+        window.open(
+          url,
+          "_blank",
+          "noopener,noreferrer"
+        );
+
+      if (!opened) {
+        const link =
+          document.createElement("a");
+
+        link.href = url;
+        link.download =
+          result.fileName ||
+          `comprovante-${item.id}`;
+
+        document.body.appendChild(
+          link
+        );
+
+        link.click();
+        link.remove();
+      }
+
+      window.setTimeout(
+        () =>
+          URL.revokeObjectURL(
+            url
+          ),
+        60000
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao abrir comprovante."
+      );
+    }
+  }
+
+  async function handleCloseManagerExpenseMonth() {
+    if (
+      managerExpenseData?.month.status ===
+      "FECHADO"
+    ) {
+      return;
+    }
+
+    const confirmed =
+      window.confirm(
+        `Deseja fechar a competência ${month}?\n\n` +
+        `Após o fechamento, os custos não poderão ser incluídos, editados, excluídos, cancelados ou restituídos até eventual reabertura.`
+      );
+
+    if (!confirmed) return;
+
+    const notes =
+      window.prompt(
+        "Observação do fechamento (opcional):"
+      );
+
+    if (notes === null) return;
+
+    try {
+      setSaving(true);
+      clearMessages();
+
+      await api.closeFinanceManagerExpenseMonth(
+        month,
+        notes.trim() || null
+      );
+
+      setSuccess(
+        `Competência ${month} fechada com sucesso.`
+      );
+
+      setShowManagerExpenseForm(false);
+
+      await loadManagerExpenses(month);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao fechar competência."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleReopenManagerExpenseMonth() {
+    const reason =
+      window.prompt(
+        "Informe a justificativa para reabrir esta competência:"
+      );
+
+    if (reason === null) return;
+
+    if (reason.trim().length < 5) {
+      setSuccess("");
+      setError(
+        "A justificativa deve possuir pelo menos 5 caracteres."
+      );
+      return;
+    }
+
+    try {
+      setSaving(true);
+      clearMessages();
+
+      await api.reopenFinanceManagerExpenseMonth(
+        month,
+        reason.trim()
+      );
+
+      setSuccess(
+        `Competência ${month} reaberta com sucesso.`
+      );
+
+      await loadManagerExpenses(month);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao reabrir competência."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function resetFixedCostForm() {
     setEditingFixedCost(null);
     setFixedDescription("");
@@ -13463,34 +14235,96 @@ async function handleDeleteSalary(id: number) {
   }
 
   async function handleDeleteTransaction(id: number) {
-  const item = transactions.find((transaction) => transaction.id === id);
-  if (!item || item.installmentGroupId || isFinanceTransactionProtected(item)) {
-    setError("Somente lançamentos simples, sem pagamento consolidado, plano ou cobrança podem ser excluídos.");
-    return;
+    const item =
+      transactions.find(
+        (transaction) =>
+          transaction.id === id
+      );
+
+    if (!item) {
+      setError(
+        "Lançamento financeiro não encontrado."
+      );
+      return;
+    }
+
+    if (
+      item.status !== "PENDENTE"
+    ) {
+      setError(
+        "Somente lançamentos pendentes podem ser excluídos definitivamente."
+      );
+      return;
+    }
+
+    if (
+      item.installmentGroupId
+    ) {
+      setError(
+        "Este lançamento pertence a um plano financeiro. Utilize o fluxo próprio do plano."
+      );
+      return;
+    }
+
+    let reason: string | undefined;
+
+    if (item.billingCharge) {
+      const informedReason =
+        window.prompt(
+          "Este lançamento possui histórico de cobrança bancária.\n\nInforme a justificativa para a exclusão definitiva:"
+        );
+
+      if (informedReason === null) {
+        return;
+      }
+
+      reason =
+        informedReason.trim();
+
+      if (!reason) {
+        setError(
+          "A justificativa é obrigatória para excluir um lançamento com histórico de cobrança bancária."
+        );
+        return;
+      }
+    }
+
+    const confirmed =
+      window.confirm(
+        item.billingCharge
+          ? "Deseja realmente excluir este lançamento financeiro? Se existir uma cobrança Pix ativa, o sistema verificará e removerá a cobrança no Banco do Brasil antes da exclusão local."
+          : "Deseja realmente excluir este lançamento financeiro?"
+      );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setSaving(true);
+      setError("");
+      setSuccess("");
+
+      await api.deleteFinancialTransaction(
+        id,
+        reason
+      );
+
+      setSuccess(
+        "Lançamento excluído com sucesso."
+      );
+
+      await loadFinance();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Erro ao excluir lançamento."
+      );
+    } finally {
+      setSaving(false);
+    }
   }
-  const confirmed = window.confirm(
-    "Deseja realmente excluir este lançamento financeiro?"
-  );
-
-  if (!confirmed) return;
-
-  try {
-    setSaving(true);
-    setError("");
-    setSuccess("");
-
-    await api.deleteFinancialTransaction(id);
-
-    setSuccess("Lançamento excluído com sucesso.");
-    await loadFinance();
-  } catch (err) {
-    setError(
-      err instanceof Error ? err.message : "Erro ao excluir lançamento."
-    );
-  } finally {
-    setSaving(false);
-  }
-}
 
 
   return (
@@ -13717,6 +14551,13 @@ async function handleDeleteSalary(id: number) {
           onClick={() => setActiveTab("FIXED_COSTS")}
         >
           Custos fixos
+        </button>
+
+        <button
+          className={activeTab === "MANAGER_EXPENSES" ? "active" : ""}
+          onClick={() => setActiveTab("MANAGER_EXPENSES")}
+        >
+          Custos dos Sócios
         </button>
 
         <button
@@ -14970,6 +15811,81 @@ async function handleDeleteSalary(id: number) {
                                       }}
                                     >
                                       Consultar pagamento no BB
+                                    </button>
+                                  )}
+
+                                {obligation.status === "PENDENTE" &&
+                                  obligation.billingCharge?.id &&
+                                  obligation.paymentProvider ===
+                                    "BANCO_DO_BRASIL" &&
+                                  ["EMITIDA", "ENVIADA"].includes(
+                                    String(
+                                      obligation.billingCharge.status || ""
+                                    )
+                                  ) && (
+                                    <button
+                                      type="button"
+                                      className="secondary-action"
+                                      disabled={processingBankChargeInProgress}
+                                      onClick={async () => {
+                                        if (processingBankChargeInProgress) {
+                                          return;
+                                        }
+
+                                        const reason = window.prompt(
+                                          "Esta cobrança foi emitida pelo Banco do Brasil.\n\nInforme a justificativa para realizar a baixa manual:"
+                                        );
+
+                                        if (reason === null) return;
+
+                                        const manualReason = reason.trim();
+
+                                        if (!manualReason) {
+                                          clearMessages();
+                                          setError(
+                                            "A justificativa é obrigatória para baixa manual de cobrança do Banco do Brasil."
+                                          );
+                                          return;
+                                        }
+
+                                        const confirmed = window.confirm(
+                                          `Confirmar manualmente o pagamento integral de ${formatOptionalMoneyCents(
+                                            obligation.amountCents
+                                          )}?\n\nEsta ação ficará registrada na auditoria como baixa manual.`
+                                        );
+
+                                        if (!confirmed) return;
+
+                                        try {
+                                          clearMessages();
+                                          setProcessingBankChargeInProgress(true);
+
+                                          await api.markBillingChargePaid(
+                                            obligation.billingCharge!.id,
+                                            {
+                                              notes:
+                                                "Pagamento confirmado manualmente no painel do Financeiro V2.",
+                                              manualReason,
+                                            }
+                                          );
+
+                                          setSuccess(
+                                            "Pagamento marcado manualmente como pago. A justificativa foi registrada na auditoria."
+                                          );
+
+                                          window.location.reload();
+                                        } catch (error) {
+                                          setError(
+                                            error instanceof Error
+                                              ? error.message
+                                              : "Não foi possível marcar o pagamento manualmente."
+                                          );
+                                        } finally {
+                                          setProcessingBankChargeInProgress(false);
+                                        }
+                                      }}
+                                    >
+                                      Marcar como pago manualmente
                                     </button>
                                   )}
 
@@ -16365,25 +17281,370 @@ async function handleDeleteSalary(id: number) {
                               </button>
                             )}
 
-                          {!isFinanceTransactionProtected(item) &&
-                            !item.installmentGroupId && (
-                              <>
-                                {item.status === "PENDENTE" && (
-                                  <button
-                                    className="mini-button"
-                                    type="button"
-                                    disabled={saving}
-                                    onClick={() =>
-                                      handleCancelTransaction(item)
-                                    }
-                                  >
-                                    Cancelar
-                                  </button>
-                                )}
+                          {item.billingCharge?.id && (
+                              <button
+                                className="mini-button"
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    clearMessages();
 
+                                    const charge =
+                                      (await api.billingChargeById(
+                                        item.billingCharge!.id
+                                      )) as BackendBillingCharge;
+
+                                    const path =
+                                      billingChargePublicPath(charge);
+
+                                    window.open(
+                                      path,
+                                      "_blank",
+                                      "noopener,noreferrer"
+                                    );
+                                  } catch (error) {
+                                    setError(
+                                      error instanceof Error
+                                        ? error.message
+                                        : "Não foi possível abrir a cobrança."
+                                    );
+                                  }
+                                }}
+                              >
+                                Ver cobrança
+                              </button>
+                            )}
+
+                            {item.billingCharge?.id &&
+                              item.paymentProvider === "BANCO_DO_BRASIL" &&
+                              ["EMITIDA", "ENVIADA", "VENCIDA", "PAGA"].includes(
+                                String(item.billingCharge.status || "")
+                              ) && (
+                                <button
+                                  className="mini-button"
+                                  type="button"
+                                  disabled={processingBankChargeInProgress}
+                                  onClick={async () => {
+                                    if (processingBankChargeInProgress) {
+                                      return;
+                                    }
+
+                                    try {
+                                      clearMessages();
+                                      setProcessingBankChargeInProgress(true);
+
+                                      const result =
+                                        (await api.reconcileBbBillingCharge(
+                                          item.billingCharge!.id
+                                        )) as {
+                                          reconciled?: boolean;
+                                          alreadyReconciled?: boolean;
+                                          bbStatus?: string;
+                                          message?: string;
+                                        };
+
+                                      if (result.reconciled) {
+                                        setSuccess(
+                                          result.alreadyReconciled
+                                            ? "Pagamento já estava conciliado com o Banco do Brasil."
+                                            : "Pagamento confirmado pelo Banco do Brasil e conciliado com o Financeiro."
+                                        );
+                                      } else {
+                                        setSuccess(
+                                          result.message ||
+                                            `Pagamento ainda não confirmado pelo Banco do Brasil${
+                                              result.bbStatus
+                                                ? ` — status ${result.bbStatus}`
+                                                : ""
+                                            }.`
+                                        );
+                                      }
+
+                                      await loadFinance();
+                                    } catch (error) {
+                                      setError(
+                                        error instanceof Error
+                                          ? error.message
+                                          : "Não foi possível consultar o pagamento no Banco do Brasil."
+                                      );
+                                    } finally {
+                                      setProcessingBankChargeInProgress(false);
+                                    }
+                                  }}
+                                >
+                                  Consultar BB
+                                </button>
+                              )}
+
+                            {item.status === "PENDENTE" &&
+                              item.billingCharge?.id &&
+                              item.paymentProvider === "BANCO_DO_BRASIL" &&
+                              ["EMITIDA", "ENVIADA"].includes(
+                                String(item.billingCharge.status || "")
+                              ) && (
+                                <button
+                                  className="mini-button"
+                                  type="button"
+                                  disabled={processingBankChargeInProgress}
+                                  onClick={async () => {
+                                    if (processingBankChargeInProgress) {
+                                      return;
+                                    }
+
+                                    const reason = window.prompt(
+                                      "Esta cobrança foi emitida pelo Banco do Brasil.\n\nInforme a justificativa para realizar a baixa manual:"
+                                    );
+
+                                    if (reason === null) {
+                                      return;
+                                    }
+
+                                    const manualReason = reason.trim();
+
+                                    if (!manualReason) {
+                                      clearMessages();
+                                      setError(
+                                        "A justificativa é obrigatória para baixa manual de cobrança do Banco do Brasil."
+                                      );
+                                      return;
+                                    }
+
+                                    const confirmed = window.confirm(
+                                      `Confirmar manualmente o pagamento integral de ${formatOptionalMoneyCents(
+                                        item.amountCents
+                                      )}?\n\nEsta ação ficará registrada na auditoria como baixa manual.`
+                                    );
+
+                                    if (!confirmed) {
+                                      return;
+                                    }
+
+                                    try {
+                                      clearMessages();
+                                      setProcessingBankChargeInProgress(true);
+
+                                      await api.markBillingChargePaid(
+                                        item.billingCharge!.id,
+                                        {
+                                          notes:
+                                            "Pagamento confirmado manualmente no painel do Financeiro V2.",
+                                          manualReason,
+                                        }
+                                      );
+
+                                      setSuccess(
+                                        "Pagamento marcado manualmente como pago. A justificativa foi registrada na auditoria."
+                                      );
+
+                                      await loadFinance();
+                                    } catch (error) {
+                                      setError(
+                                        error instanceof Error
+                                          ? error.message
+                                          : "Não foi possível marcar o pagamento manualmente."
+                                      );
+                                    } finally {
+                                      setProcessingBankChargeInProgress(false);
+                                    }
+                                  }}
+                                >
+                                  Baixa manual
+                                </button>
+                              )}
+
+                            {item.status === "PENDENTE" && (
+                              <button
+                                className="mini-button"
+                                type="button"
+                                disabled={reprogrammingDueDateInProgress}
+                                onClick={() =>
+                                  startReprogramTransactionDueDate(item)
+                                }
+                              >
+                                Reprogramar vencimento
+                              </button>
+                            )}
+
+                              {reprogrammingTransactionId ===
+                                item.id && (
+                                <div className="panel soft-panel">
+                                  <label>
+                                    Novo vencimento
+                                    <input
+                                      type="date"
+                                      value={reprogramDueDate}
+                                      onChange={(event) =>
+                                        setReprogramDueDate(
+                                          event.target.value
+                                        )
+                                      }
+                                    />
+                                  </label>
+
+                                  <label>
+                                    Justificativa
+                                    <input
+                                      value={reprogramJustification}
+                                      onChange={(event) =>
+                                        setReprogramJustification(
+                                          event.target.value
+                                        )
+                                      }
+                                      placeholder="Ex: vencimento renegociado com o cliente"
+                                    />
+                                  </label>
+
+                                  <div className="form-actions compact-actions">
+                                    <button
+                                      type="button"
+                                      className="secondary-action"
+                                      disabled={
+                                        reprogrammingDueDateInProgress
+                                      }
+                                      onClick={() =>
+                                        confirmReprogramTransactionDueDate(
+                                          item
+                                        )
+                                      }
+                                    >
+                                      {reprogrammingDueDateInProgress
+                                        ? "Processando..."
+                                        : "Confirmar"}
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      className="secondary-action"
+                                      disabled={
+                                        reprogrammingDueDateInProgress
+                                      }
+                                      onClick={
+                                        cancelReprogramTransactionDueDate
+                                      }
+                                    >
+                                      Cancelar
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+
+
+                            {item.status === "PENDENTE" &&
+                              item.billingCharge?.id &&
+                              item.paymentProvider === "BANCO_DO_BRASIL" &&
+                              ["EMITIDA", "ENVIADA", "VENCIDA"].includes(
+                                String(item.billingCharge.status || "")
+                              ) && (
                                 <button
                                   className="mini-button danger"
                                   type="button"
+                                  disabled={processingBankChargeInProgress}
+                                  onClick={async () => {
+                                    if (processingBankChargeInProgress) {
+                                      return;
+                                    }
+
+                                    const reason = window.prompt(
+                                      "Informe a justificativa para cancelar esta cobrança no Banco do Brasil:"
+                                    );
+
+                                    if (reason === null) {
+                                      return;
+                                    }
+
+                                    const cancellationReason =
+                                      reason.trim();
+
+                                    if (!cancellationReason) {
+                                      clearMessages();
+                                      setError(
+                                        "A justificativa é obrigatória para cancelar a cobrança BB."
+                                      );
+                                      return;
+                                    }
+
+                                    const confirmed = window.confirm(
+                                      "Cancelar esta cobrança Pix no Banco do Brasil?\n\nO lançamento financeiro continuará PENDENTE e poderá receber uma nova cobrança posteriormente."
+                                    );
+
+                                    if (!confirmed) {
+                                      return;
+                                    }
+
+                                    try {
+                                      clearMessages();
+                                      setProcessingBankChargeInProgress(true);
+
+                                      await api.cancelBbBillingCharge(
+                                        item.billingCharge!.id,
+                                        {
+                                          reason: cancellationReason,
+                                        }
+                                      );
+
+                                      setSuccess(
+                                        "Cobrança cancelada no Banco do Brasil. O lançamento financeiro permanece pendente."
+                                      );
+
+                                      await loadFinance();
+                                    } catch (error) {
+                                      setError(
+                                        error instanceof Error
+                                          ? error.message
+                                          : "Não foi possível cancelar a cobrança no Banco do Brasil."
+                                      );
+                                    } finally {
+                                      setProcessingBankChargeInProgress(false);
+                                    }
+                                  }}
+                                >
+                                  Cancelar cobrança BB
+                                </button>
+                              )}
+
+                            {item.status === "PENDENTE" &&
+                              (item.type === "ENTRADA" ||
+                                item.type === "PARCELA") &&
+                              item.billingCharge?.status === "CANCELADA" &&
+                              !item.providerTxId && (
+                                <button
+                                  className="mini-button"
+                                  type="button"
+                                  disabled={
+                                    processingChargeTransactionId === item.id ||
+                                    processingBankChargeInProgress
+                                  }
+                                  onClick={() =>
+                                    processTransactionChargeNow(item)
+                                  }
+                                >
+                                  {processingChargeTransactionId === item.id
+                                    ? "Reemitindo Pix..."
+                                    : "Gerar novo Pix BB"}
+                                </button>
+                              )}
+
+                            {!isFinanceTransactionProtected(item) &&
+                              !item.installmentGroupId &&
+                              item.status === "PENDENTE" && (
+                                <button
+                                  className="mini-button"
+                                  type="button"
+                                  disabled={saving}
+                                  onClick={() =>
+                                    handleCancelTransaction(item)
+                                  }
+                                >
+                                  Cancelar
+                                </button>
+                              )}
+
+                            {item.status === "PENDENTE" &&
+                              !item.installmentGroupId && (
+                                <button
+                                  className="mini-button danger"
+                                  type="button"
+                                  disabled={saving}
                                   onClick={() =>
                                     handleDeleteTransaction(
                                       item.id
@@ -16392,8 +17653,7 @@ async function handleDeleteSalary(id: number) {
                                 >
                                   Excluir
                                 </button>
-                              </>
-                            )}
+                              )}
                         </div>
                       </td>
                     </tr>
@@ -16404,6 +17664,522 @@ async function handleDeleteSalary(id: number) {
 
             {transactions.length === 0 && <p>Nenhum lançamento encontrado.</p>}
           </div>
+        </article>
+      )}
+
+      {!loading && activeTab === "MANAGER_EXPENSES" && (
+        <article className="panel">
+          <div className="panel-header">
+            <div>
+              <h2>Custos dos Sócios</h2>
+              <p>
+                Controle de despesas pagas pessoalmente pelos gerentes
+                e dos valores que devem ser restituídos pela empresa.
+              </p>
+            </div>
+
+            <div className="form-actions">
+              {managerExpenseData?.month.status === "FECHADO" ? (
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={handleReopenManagerExpenseMonth}
+                  disabled={saving}
+                >
+                  Reabrir mês
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={handleCloseManagerExpenseMonth}
+                    disabled={saving}
+                  >
+                    Fechar mês
+                  </button>
+
+                  <button
+                    type="button"
+                    className="button primary"
+                    onClick={() => {
+                      if (showManagerExpenseForm) {
+                        resetManagerExpenseForm();
+                        setShowManagerExpenseForm(false);
+                      } else {
+                        startNewManagerExpense();
+                      }
+                    }}
+                    disabled={saving}
+                  >
+                    {showManagerExpenseForm
+                      ? "Fechar formulário"
+                      : "Novo custo"}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          <div className="form-row">
+            <label>
+              Competência
+              <input
+                type="month"
+                value={month}
+                onChange={(event) => {
+                  setShowManagerExpenseForm(false);
+                  setEditingManagerExpense(null);
+                  setMonth(event.target.value);
+                }}
+              />
+            </label>
+
+            <div>
+              <span>Situação</span>
+              <div style={{ marginTop: 8 }}>
+                <span
+                  className={`badge ${
+                    managerExpenseData?.month.status === "FECHADO"
+                      ? "concluido"
+                      : "em_execucao"
+                  }`}
+                >
+                  {managerExpenseData?.month.status === "FECHADO"
+                    ? "MÊS FECHADO"
+                    : "MÊS ABERTO"}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {managerExpenseLoading && (
+            <div className="panel soft-panel">
+              Carregando custos dos sócios...
+            </div>
+          )}
+
+          {!managerExpenseLoading && managerExpenseData && (
+            <>
+              <div className="metrics-grid three">
+                <MetricCard
+                  title="Custos assumidos"
+                  value={formatMoneyCents(
+                    managerExpenseData.totals.amountCents
+                  )}
+                  hint="total válido da competência"
+                  icon={WalletCards}
+                />
+
+                <MetricCard
+                  title="Já restituído"
+                  value={formatMoneyCents(
+                    managerExpenseData.totals.reimbursedCents
+                  )}
+                  hint="valores devolvidos aos sócios"
+                  icon={BarChart3}
+                />
+
+                <MetricCard
+                  title="A restituir"
+                  value={formatMoneyCents(
+                    managerExpenseData.totals.pendingCents
+                  )}
+                  hint="saldo devido aos sócios"
+                  icon={Clock}
+                />
+              </div>
+
+              {managerExpenseData.byManager.length > 0 && (
+                <div className="metrics-grid three">
+                  {managerExpenseData.byManager.map((manager) => (
+                    <article
+                      className="panel soft-panel"
+                      key={manager.managerUserId}
+                    >
+                      <div className="panel-header">
+                        <div>
+                          <h3>{manager.managerName}</h3>
+                          <p>{manager.managerEmail}</p>
+                        </div>
+                      </div>
+
+                      <div className="detail-list">
+                        <div>
+                          <span>Assumido</span>
+                          <strong>
+                            {formatMoneyCents(manager.amountCents)}
+                          </strong>
+                        </div>
+
+                        <div>
+                          <span>Restituído</span>
+                          <strong>
+                            {formatMoneyCents(manager.reimbursedCents)}
+                          </strong>
+                        </div>
+
+                        <div>
+                          <span>A restituir</span>
+                          <strong>
+                            {formatMoneyCents(manager.pendingCents)}
+                          </strong>
+                        </div>
+
+                        {manager.cancelledCents > 0 && (
+                          <div>
+                            <span>Cancelado</span>
+                            <strong>
+                              {formatMoneyCents(manager.cancelledCents)}
+                            </strong>
+                          </div>
+                        )}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+
+              {showManagerExpenseForm &&
+                managerExpenseData.month.status === "ABERTO" && (
+                  <div className="panel soft-panel">
+                    <div className="panel-header">
+                      <div>
+                        <h3>
+                          {editingManagerExpense
+                            ? "Editar custo"
+                            : "Novo custo do sócio"}
+                        </h3>
+
+                        <p>
+                          Informe quem realizou o pagamento e anexe o
+                          comprovante da despesa.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="form-row">
+                      <label>
+                        Gerente que pagou
+                        <select
+                          value={managerExpenseManagerUserId}
+                          onChange={(event) =>
+                            setManagerExpenseManagerUserId(
+                              event.target.value
+                            )
+                          }
+                        >
+                          <option value="">
+                            Selecione
+                          </option>
+
+                          {managerExpenseManagers.map((manager) => (
+                            <option
+                              key={manager.id}
+                              value={manager.id}
+                            >
+                              {manager.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label>
+                        Data
+                        <input
+                          type="date"
+                          value={managerExpenseDate}
+                          min={`${month}-01`}
+                          max={`${month}-31`}
+                          onChange={(event) =>
+                            setManagerExpenseDate(
+                              event.target.value
+                            )
+                          }
+                        />
+                      </label>
+
+                      <label>
+                        Valor
+                        <input
+                          value={managerExpenseAmount}
+                          onChange={(event) =>
+                            setManagerExpenseAmount(
+                              event.target.value
+                            )
+                          }
+                          placeholder="0,00"
+                          inputMode="decimal"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="form-row">
+                      <label style={{ flex: 2 }}>
+                        Descrição
+                        <input
+                          value={managerExpenseDescription}
+                          onChange={(event) =>
+                            setManagerExpenseDescription(
+                              event.target.value
+                            )
+                          }
+                          placeholder="Ex.: combustível para vistoria"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="form-row">
+                      <label style={{ flex: 2 }}>
+                        Observações
+                        <textarea
+                          value={managerExpenseNotes}
+                          onChange={(event) =>
+                            setManagerExpenseNotes(
+                              event.target.value
+                            )
+                          }
+                          placeholder="Informações adicionais"
+                        />
+                      </label>
+                    </div>
+
+                    {!editingManagerExpense && (
+                      <div className="form-row">
+                        <label style={{ flex: 2 }}>
+                          Comprovante
+                          <input
+                            type="file"
+                            accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
+                            onChange={(event) =>
+                              setManagerExpenseFile(
+                                event.target.files?.[0] || null
+                              )
+                            }
+                          />
+
+                          <small>
+                            Obrigatório. Formatos aceitos: PDF, JPG ou PNG.
+                            Limite de 10 MB.
+                          </small>
+                        </label>
+                      </div>
+                    )}
+
+                    {editingManagerExpense?.hasReceipt && (
+                      <div className="form-row">
+                        <div>
+                          <span>Comprovante atual</span>
+                          <div style={{ marginTop: 8 }}>
+                            <button
+                              type="button"
+                              className="secondary-action"
+                              onClick={() =>
+                                handleOpenManagerExpenseReceipt(
+                                  editingManagerExpense
+                                )
+                              }
+                            >
+                              Abrir comprovante
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="form-actions">
+                      <button
+                        type="button"
+                        className="button primary"
+                        onClick={handleSaveManagerExpense}
+                        disabled={saving}
+                      >
+                        {saving
+                          ? "Salvando..."
+                          : editingManagerExpense
+                            ? "Salvar alterações"
+                            : "Cadastrar custo"}
+                      </button>
+
+                      <button
+                        type="button"
+                        className="secondary-action"
+                        onClick={() => {
+                          resetManagerExpenseForm();
+                          setShowManagerExpenseForm(false);
+                        }}
+                        disabled={saving}
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Data</th>
+                      <th>Gerente</th>
+                      <th>Descrição</th>
+                      <th>Valor</th>
+                      <th>Comprovante</th>
+                      <th>Situação</th>
+                      <th>Ações</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {managerExpenseData.expenses.map((item) => (
+                      <tr key={item.id}>
+                        <td>
+                          {item.expenseDate
+                            ? new Intl.DateTimeFormat("pt-BR", {
+                                timeZone: "UTC",
+                                day: "2-digit",
+                                month: "2-digit",
+                                year: "numeric",
+                              }).format(
+                                new Date(item.expenseDate)
+                              )
+                            : "—"}
+                        </td>
+
+                        <td>
+                          {item.manager?.name || "—"}
+                        </td>
+
+                        <td>
+                          <strong>{item.description}</strong>
+
+                          {item.notes && (
+                            <div>
+                              <small>{item.notes}</small>
+                            </div>
+                          )}
+                        </td>
+
+                        <td>
+                          {formatMoneyCents(item.amountCents)}
+                        </td>
+
+                        <td>
+                          {item.hasReceipt ? (
+                            <button
+                              type="button"
+                              className="secondary-action"
+                              onClick={() =>
+                                handleOpenManagerExpenseReceipt(
+                                  item
+                                )
+                              }
+                            >
+                              Abrir
+                            </button>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+
+                        <td>
+                          <span
+                            className={`badge ${
+                              item.status === "RESTITUIDO"
+                                ? "concluido"
+                                : item.status === "CANCELADO"
+                                  ? "cancelado"
+                                  : "em_execucao"
+                            }`}
+                          >
+                            {item.status === "RESTITUIDO"
+                              ? "RESTITUÍDO"
+                              : item.status === "CANCELADO"
+                                ? "CANCELADO"
+                                : "PENDENTE"}
+                          </span>
+
+                          {item.reimbursedAt && (
+                            <div>
+                              <small>
+                                Restituído em{" "}
+                                {new Intl.DateTimeFormat("pt-BR", {
+                                  day: "2-digit",
+                                  month: "2-digit",
+                                  year: "numeric",
+                                }).format(
+                                  new Date(item.reimbursedAt)
+                                )}
+                              </small>
+                            </div>
+                          )}
+                        </td>
+
+                        <td>
+                          <div className="form-actions compact-actions">
+                            {managerExpenseData.month.status === "ABERTO" &&
+                              item.status === "PENDENTE_RESTITUICAO" && (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="secondary-action"
+                                    onClick={() =>
+                                      startEditManagerExpense(item)
+                                    }
+                                    disabled={saving}
+                                  >
+                                    Editar
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    className="secondary-action"
+                                    onClick={() =>
+                                      handleReimburseManagerExpense(item)
+                                    }
+                                    disabled={saving}
+                                  >
+                                    Restituir
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    className="secondary-action"
+                                    onClick={() =>
+                                      handleCancelManagerExpense(item)
+                                    }
+                                    disabled={saving}
+                                  >
+                                    Cancelar
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    className="secondary-action danger"
+                                    onClick={() =>
+                                      handleDeleteManagerExpense(item)
+                                    }
+                                    disabled={saving}
+                                  >
+                                    Excluir
+                                  </button>
+                                </>
+                              )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                {managerExpenseData.expenses.length === 0 && (
+                  <p>
+                    Nenhum custo de sócio registrado nesta competência.
+                  </p>
+                )}
+              </div>
+            </>
+          )}
         </article>
       )}
 
@@ -17792,6 +19568,13 @@ function CompanySettingsPanel() {
   const [companyState, setCompanyState] = useState("");
   const [companyZipCode, setCompanyZipCode] = useState("");
   const [companyFooterText, setCompanyFooterText] = useState("");
+  const [bankName, setBankName] = useState("");
+  const [bankAgency, setBankAgency] = useState("");
+  const [bankAccount, setBankAccount] = useState("");
+  const [bankAccountType, setBankAccountType] = useState("");
+  const [bankHolder, setBankHolder] = useState("");
+  const [bankHolderDocument, setBankHolderDocument] = useState("");
+  const [pixKey, setPixKey] = useState("");
 
   async function loadCompanySettings() {
     try {
@@ -17812,6 +19595,13 @@ function CompanySettingsPanel() {
       setCompanyState(data.companyState || "");
       setCompanyZipCode(data.companyZipCode || "");
       setCompanyFooterText(data.companyFooterText || "");
+      setBankName(data.bankName || "");
+      setBankAgency(data.bankAgency || "");
+      setBankAccount(data.bankAccount || "");
+      setBankAccountType(data.bankAccountType || "");
+      setBankHolder(data.bankHolder || "");
+      setBankHolderDocument(data.bankHolderDocument || "");
+      setPixKey(data.pixKey || "");
     } catch (err) {
       setError(
         err instanceof Error
@@ -17854,6 +19644,13 @@ function CompanySettingsPanel() {
         companyState,
         companyZipCode,
         companyFooterText,
+        bankName,
+        bankAgency,
+        bankAccount,
+        bankAccountType,
+        bankHolder,
+        bankHolderDocument,
+        pixKey,
       })) as {
         message?: string;
         settings?: BackendCompanySettings;
@@ -17874,6 +19671,13 @@ function CompanySettingsPanel() {
         setCompanyState(response.settings.companyState || "");
         setCompanyZipCode(response.settings.companyZipCode || "");
         setCompanyFooterText(response.settings.companyFooterText || "");
+        setBankName(response.settings.bankName || "");
+        setBankAgency(response.settings.bankAgency || "");
+        setBankAccount(response.settings.bankAccount || "");
+        setBankAccountType(response.settings.bankAccountType || "");
+        setBankHolder(response.settings.bankHolder || "");
+        setBankHolderDocument(response.settings.bankHolderDocument || "");
+        setPixKey(response.settings.pixKey || "");
       }
     } catch (err) {
       setError(
@@ -18036,6 +19840,46 @@ function CompanySettingsPanel() {
               />
             </label>
           </div>
+        </div>
+
+        <div className="form-section flat company-address-section">
+          <h3>Dados bancários e chave Pix</h3>
+          <p>Estas informações aparecerão nas propostas comerciais. Nenhum QR Code Pix será gerado.</p>
+          <label>Banco
+            <input value={bankName} onChange={(event) => setBankName(event.target.value)}
+              placeholder="Nome ou número do banco" maxLength={120} />
+          </label>
+          <div className="form-row">
+            <label>Agência
+              <input value={bankAgency} onChange={(event) => setBankAgency(event.target.value)}
+                placeholder="Agência com dígito, se houver" maxLength={30} />
+            </label>
+            <label>Conta
+              <input value={bankAccount} onChange={(event) => setBankAccount(event.target.value)}
+                placeholder="Conta com dígito" maxLength={40} />
+            </label>
+            <label>Tipo de conta
+              <select value={bankAccountType} onChange={(event) => setBankAccountType(event.target.value)}>
+                <option value="">Não informado</option>
+                <option value="Conta corrente">Conta corrente</option>
+                <option value="Conta poupança">Conta poupança</option>
+                <option value="Conta de pagamento">Conta de pagamento</option>
+              </select>
+            </label>
+          </div>
+          <label>Favorecido / titular
+            <input value={bankHolder} onChange={(event) => setBankHolder(event.target.value)}
+              placeholder="Razão social ou nome do titular" maxLength={150} />
+          </label>
+          <label>CPF/CNPJ do favorecido
+            <input value={bankHolderDocument} onChange={(event) => setBankHolderDocument(event.target.value)}
+              placeholder="Documento do titular" maxLength={20} />
+          </label>
+          <label>Chave Pix
+            <input value={pixKey} onChange={(event) => setPixKey(event.target.value)}
+              placeholder="CPF/CNPJ, e-mail, telefone ou chave aleatória" maxLength={160} />
+          </label>
+          <small>Somente os campos preenchidos serão exibidos no PDF da proposta. Confira os dados antes de salvar.</small>
         </div>
 
         <div className="company-preview-card">
@@ -18343,6 +20187,7 @@ function App() {
           element={<ResetPasswordPage />}
         />
       <Route path="/proposta/:token" element={<PublicProposalPage />} />
+      <Route path="/proposta-avulsa/:token" element={<StandaloneProposalPublicPage />} />
       <Route path="/contrato/:token" element={<PublicContractPage />} />
       <Route path="/cobranca/:token" element={<PublicBillingChargePage />} />
 

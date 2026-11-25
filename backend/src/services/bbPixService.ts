@@ -36,6 +36,67 @@ function requiredEnv(name: string) {
   return String(value).trim();
 }
 
+function validateBbEnvironment() {
+  const env = requiredEnv("BB_ENV").toLowerCase();
+  const oauthUrl = requiredEnv("BB_OAUTH_URL");
+  const pixApiUrl = requiredEnv("BB_PIX_API_URL");
+
+  let oauthHost: string;
+  let pixApiHost: string;
+
+  try {
+    oauthHost = new URL(oauthUrl).hostname.toLowerCase();
+  } catch {
+    throw new Error(
+      `BB_OAUTH_URL inválida para o ambiente Banco do Brasil: ${oauthUrl}`
+    );
+  }
+
+  try {
+    pixApiHost = new URL(pixApiUrl).hostname.toLowerCase();
+  } catch {
+    throw new Error(
+      `BB_PIX_API_URL inválida para o ambiente Banco do Brasil: ${pixApiUrl}`
+    );
+  }
+
+  if (env === "sandbox") {
+    if (oauthHost !== "oauth.hm.bb.com.br") {
+      throw new Error(
+        `Configuração BB inconsistente: BB_ENV=sandbox exige oauth.hm.bb.com.br, recebido ${oauthHost}.`
+      );
+    }
+
+    if (pixApiHost !== "api.hm.bb.com.br") {
+      throw new Error(
+        `Configuração BB inconsistente: BB_ENV=sandbox exige api.hm.bb.com.br, recebido ${pixApiHost}.`
+      );
+    }
+
+    return;
+  }
+
+  if (env === "production") {
+    if (oauthHost !== "oauth.bb.com.br") {
+      throw new Error(
+        `Configuração BB inconsistente: BB_ENV=production exige oauth.bb.com.br, recebido ${oauthHost}.`
+      );
+    }
+
+    if (pixApiHost !== "api.bb.com.br") {
+      throw new Error(
+        `Configuração BB inconsistente: BB_ENV=production exige api.bb.com.br, recebido ${pixApiHost}.`
+      );
+    }
+
+    return;
+  }
+
+  throw new Error(
+    `BB_ENV inválido: ${env}. Valores permitidos: sandbox ou production.`
+  );
+}
+
 function normalizeDocument(value?: string | null) {
   return String(value || "").replace(/\D/g, "");
 }
@@ -51,6 +112,8 @@ function sanitizeTxid(value: string) {
 }
 
 export async function getBbAccessToken() {
+  validateBbEnvironment();
+
   const clientId = requiredEnv("BB_CLIENT_ID");
   const clientSecret = requiredEnv("BB_CLIENT_SECRET");
   const oauthUrl = requiredEnv("BB_OAUTH_URL");
@@ -453,3 +516,88 @@ export async function updateBbPixDueChargeDueDate(input: {
     throw error;
   }
 }
+
+export async function removeBbPixDueCharge(
+  txid: string
+) {
+  const accessToken =
+    await getBbAccessToken();
+
+  const appKey =
+    requiredEnv("BB_APP_KEY");
+
+  const pixApiUrl =
+    requiredEnv("BB_PIX_API_URL");
+
+  const sanitizedTxid =
+    sanitizeTxid(txid);
+
+  if (!sanitizedTxid) {
+    throw new Error(
+      "TXID inválido para remoção da cobrança Pix com vencimento."
+    );
+  }
+
+  const url =
+    `${pixApiUrl.replace(/\/$/, "")}/cobv/${encodeURIComponent(
+      sanitizedTxid
+    )}`;
+
+  /*
+   * Para remover uma CobV ATIVA, o padrão Pix determina
+   * que o PATCH contenha somente o novo status.
+   *
+   * Não alterar calendário, valor, devedor ou demais campos
+   * simultaneamente à remoção.
+   */
+  const payload = {
+    status:
+      "REMOVIDA_PELO_USUARIO_RECEBEDOR",
+  };
+
+  try {
+    const response =
+      await axios.patch(
+        url,
+        payload,
+        {
+          params: {
+            "gw-dev-app-key":
+              appKey,
+          },
+
+          headers: {
+            Authorization:
+              `Bearer ${accessToken}`,
+
+            "Content-Type":
+              "application/json",
+          },
+        }
+      );
+
+    return response.data;
+  } catch (error: any) {
+    console.error(
+      "ERRO DETALHADO BB PIX REMOÇÃO /cobv:",
+      {
+        message:
+          error?.message,
+
+        status:
+          error?.response?.status,
+
+        data:
+          error?.response?.data,
+
+        txid:
+          sanitizedTxid,
+
+        url,
+      }
+    );
+
+    throw error;
+  }
+}
+

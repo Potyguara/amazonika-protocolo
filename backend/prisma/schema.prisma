@@ -301,11 +301,18 @@ model User {
   managementCashSettingsCreated ManagementCashSetting[] @relation("ManagementCashSettingCreatedBy")
   proLaboreAdvancesCreated      ProLaboreAdvance[]      @relation("ProLaboreAdvanceCreatedBy")
   managerProLaboreAdvances      ProLaboreAdvance[]      @relation("ManagerProLaboreAdvances")
-  proposalsCreated              Proposal[]              @relation("ProposalCreatedBy")
-  contractsCreated              Contract[]              @relation("ContractCreatedBy")
-  billingChargesCreated         BillingCharge[]         @relation("BillingChargeCreatedBy")
-  fiscalDocumentsCreated        FiscalDocument[]        @relation("FiscalDocumentCreatedBy")
-  standaloneProposalsCreated    StandaloneProposal[]    @relation("StandaloneProposalCreatedBy")
+
+  managerExpensesPaid    ManagerExpense[] @relation("ManagerExpenseManager")
+  managerExpensesCreated ManagerExpense[] @relation("ManagerExpenseCreatedBy")
+  managerExpensesUpdated ManagerExpense[] @relation("ManagerExpenseUpdatedBy")
+
+  managerExpenseMonthsClosed   ManagerExpenseMonth[] @relation("ManagerExpenseMonthClosedBy")
+  managerExpenseMonthsReopened ManagerExpenseMonth[] @relation("ManagerExpenseMonthReopenedBy")
+  proposalsCreated             Proposal[]            @relation("ProposalCreatedBy")
+  contractsCreated             Contract[]            @relation("ContractCreatedBy")
+  billingChargesCreated        BillingCharge[]       @relation("BillingChargeCreatedBy")
+  fiscalDocumentsCreated       FiscalDocument[]      @relation("FiscalDocumentCreatedBy")
+  standaloneProposalsCreated   StandaloneProposal[]  @relation("StandaloneProposalCreatedBy")
 
   paymentDueDateExtensionsCreated   PaymentDueDateExtension[] @relation("PaymentDueDateExtensionCreatedBy")
   paymentDueDateExtensionsCancelled PaymentDueDateExtension[] @relation("PaymentDueDateExtensionCancelledBy")
@@ -885,6 +892,10 @@ model BillingCharge {
   // Impede que a mesma transação gere duas BillingCharge.
   financialTransactionId Int? @unique
 
+  // Financeiro V2: revisão da emissão Pix.
+  // 0 = cobrança original; 1, 2, 3... = reemissões após cancelamento.
+  pixRevision Int @default(0)
+
   provider   BillingProvider   @default(BANCO_DO_BRASIL)
   status     BillingStatus     @default(AGUARDANDO_DOCUMENTO_FISCAL)
   chargeType BillingChargeType @default(ENTRADA)
@@ -1415,6 +1426,103 @@ model FinanceAutoChargeSettings {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+enum ManagerExpenseStatus {
+  PENDENTE_RESTITUICAO
+  RESTITUIDO
+  CANCELADO
+}
+
+enum ManagerExpenseMonthStatus {
+  ABERTO
+  FECHADO
+}
+
+model ManagerExpense {
+  id Int @id @default(autoincrement())
+
+  // Gerente/sócio que efetivamente suportou o custo.
+  managerUserId Int
+
+  // Competência no formato YYYY-MM.
+  competenceMonth String
+
+  // Data em que a despesa foi efetivamente paga/assumida.
+  expenseDate DateTime
+
+  description String
+
+  // Valor canônico sempre em centavos.
+  amountCents Int
+
+  notes String?
+
+  // =====================================================
+  // COMPROVANTE
+  // =====================================================
+
+  receiptOriginalName String?
+  receiptStoredName   String?
+  receiptMimeType     String?
+  receiptSize         Int?
+  receiptPath         String?
+
+  // =====================================================
+  // RESTITUIÇÃO
+  // =====================================================
+
+  status ManagerExpenseStatus @default(PENDENTE_RESTITUICAO)
+
+  reimbursedAt       DateTime?
+  reimbursementNotes String?
+
+  // =====================================================
+  // AUDITORIA DE AUTORIA
+  // =====================================================
+
+  createdById Int?
+  updatedById Int?
+
+  manager User @relation("ManagerExpenseManager", fields: [managerUserId], references: [id], onDelete: Restrict)
+
+  createdBy User? @relation("ManagerExpenseCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  updatedBy User? @relation("ManagerExpenseUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([managerUserId])
+  @@index([competenceMonth])
+  @@index([expenseDate])
+  @@index([status])
+}
+
+model ManagerExpenseMonth {
+  id Int @id @default(autoincrement())
+
+  // Uma linha de controle por competência.
+  competenceMonth String @unique
+
+  status ManagerExpenseMonthStatus @default(ABERTO)
+
+  closedAt   DateTime?
+  closedById Int?
+
+  reopenedAt   DateTime?
+  reopenedById Int?
+
+  notes String?
+
+  closedBy User? @relation("ManagerExpenseMonthClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+
+  reopenedBy User? @relation("ManagerExpenseMonthReopenedBy", fields: [reopenedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
 }
 
 model ProLaboreAdvance {
