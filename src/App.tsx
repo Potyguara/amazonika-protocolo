@@ -25,6 +25,7 @@ import {
   sumValidMoneyCents,
 } from "./lib/money";
 import CatalogPage from "./pages/CatalogPage";
+import SecretaryEntriesPage from "./pages/SecretaryEntriesPage";
 import {
   ForgotPasswordPage,
   ResetPasswordPage,
@@ -50,6 +51,7 @@ import {
   X,
   Eye,
   EyeOff,
+  Receipt,
 } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
 import {
@@ -537,7 +539,7 @@ type BackendProposalHistory = {
   createdAt: string;
 };
 
-type Role = "CLIENTE" | "ATENDENTE" | "GERENTE" | "PROGRAMADOR";
+type Role = "CLIENTE" | "ATENDENTE" | "GERENTE" | "PROGRAMADOR" | "SECRETARIA";
 
 type ProtocolStatus =
   | "NOVO"
@@ -1136,6 +1138,7 @@ const roleLabels: Record<Role, string> = {
   ATENDENTE: "Atendente",
   GERENTE: "Gerente",
   PROGRAMADOR: "Programador",
+  SECRETARIA: "Secretária",
 };
 
 
@@ -1460,6 +1463,12 @@ function optionalReaisFormValue(
 
 function normalizedReaisFormNumber(value: string) {
   return Number(centsToReaisFormValue(reaisFormValueToCents(value)));
+}
+
+// Página inicial de cada perfil interno.
+function homePathForRole(role: Role | null) {
+  if (role === "SECRETARIA") return "/app/lancamentos";
+  return "/app/dashboard";
 }
 
 function currentRole(): Role | null {
@@ -2677,7 +2686,7 @@ async function login() {
       return;
     }
 
-    navigate("/app/dashboard");
+    navigate(homePathForRole(response.user.role as Role));
   } catch (err) {
     setError(err instanceof Error ? err.message : "Erro ao acessar o sistema.");
   } finally {
@@ -2864,6 +2873,12 @@ const nav = [
     to: "/app/catalogo",
     icon: BookOpen,
     roles: ["GERENTE", "PROGRAMADOR"],
+  },
+  {
+    label: "Lançamentos",
+    to: "/app/lancamentos",
+    icon: Receipt,
+    roles: ["SECRETARIA", "GERENTE", "PROGRAMADOR"],
   },
   {
     label: "Financeiro",
@@ -19165,6 +19180,7 @@ function UsersPermissionsPanel() {
                       onChange={(event) => setRole(event.target.value as Role)}
                     >
                       <option value="ATENDENTE">Atendente</option>
+                      <option value="SECRETARIA">Secretária</option>
                       <option value="GERENTE">Gerente</option>
                       <option value="PROGRAMADOR">Programador</option>
                       <option value="CLIENTE">Cliente</option>
@@ -19190,6 +19206,16 @@ function UsersPermissionsPanel() {
                     Pode cadastrar clientes, abrir protocolos, anexar documentos,
                     consultar agenda dos gestores e criar agendamentos. Não acessa
                     financeiro nem configurações.
+                  </p>
+                )}
+
+                {role === "SECRETARIA" && (
+                  <p>
+                    Faz lançamentos financeiros: recebimentos das propostas
+                    aceitas (seguindo o cronograma aprovado) e despesas da
+                    empresa. Vê só os lançamentos que ela mesma fez. Não acessa
+                    resumos, lucro, pró-labore, salários, custos fixos nem
+                    despesas dos gestores.
                   </p>
                 )}
 
@@ -20162,7 +20188,7 @@ function ClientDashboard() {
 }
 
 function App() {
-  const internalRoles: Role[] = ["ATENDENTE", "GERENTE", "PROGRAMADOR"];
+  const internalRoles: Role[] = ["ATENDENTE", "GERENTE", "PROGRAMADOR", "SECRETARIA"];
 
   return (
     <Routes>
@@ -20199,9 +20225,32 @@ function App() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<Navigate to="/app/dashboard" replace />} />
-        <Route path="dashboard" element={<AdminDashboard />} />
-        <Route path="agendamentos" element={<SchedulePage />} />
+        <Route index element={<Navigate to={homePathForRole(currentRole())} replace />} />
+        <Route
+          path="dashboard"
+          element={
+            <ProtectedRoute allowed={["ATENDENTE", "GERENTE", "PROGRAMADOR"]}>
+              <AdminDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="agendamentos"
+          element={
+            <ProtectedRoute allowed={["ATENDENTE", "GERENTE", "PROGRAMADOR"]}>
+              <SchedulePage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="lancamentos"
+          element={
+            <ProtectedRoute allowed={["SECRETARIA", "GERENTE", "PROGRAMADOR"]}>
+              <SecretaryEntriesPage />
+            </ProtectedRoute>
+          }
+        />
 
         <Route
           path="propostas-avulsas/:id"
@@ -20266,7 +20315,14 @@ function App() {
           }
         />
 
-        <Route path="protocolos" element={<ProtocolsPage />} />
+        <Route
+          path="protocolos"
+          element={
+            <ProtectedRoute allowed={["ATENDENTE", "GERENTE", "PROGRAMADOR"]}>
+              <ProtocolsPage />
+            </ProtectedRoute>
+          }
+        />
 
         <Route
           path="protocolos/:id"

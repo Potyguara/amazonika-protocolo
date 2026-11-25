@@ -24,7 +24,7 @@ export type LoginResponse = {
     id: number;
     name: string;
     email: string;
-    role: "CLIENTE" | "ATENDENTE" | "GERENTE" | "PROGRAMADOR";
+    role: "CLIENTE" | "ATENDENTE" | "GERENTE" | "PROGRAMADOR" | "SECRETARIA";
     lastLoginAt?: string | null;
   };
 };
@@ -187,6 +187,70 @@ async function requestBlob(
 }
 
 export const api = {
+  // ---------------------------------------------------
+  // LANÇAMENTOS (perfil Secretária)
+  // ---------------------------------------------------
+  secretaryClients(q: string) {
+    return request(`/secretary/clients?q=${encodeURIComponent(q)}`);
+  },
+
+  secretaryCategories(type?: "RECEITA" | "DESPESA") {
+    return request(`/secretary/categories${type ? `?type=${type}` : ""}`);
+  },
+
+  secretaryClientProposals(clientId: number) {
+    return request(`/secretary/clients/${clientId}/proposals`);
+  },
+
+  secretaryEntries() {
+    return request("/secretary/entries");
+  },
+
+  secretaryCreateProposalEntry(payload: {
+    proposalId: number;
+    scheduleItemIds: number[];
+    status: "PENDENTE" | "PAGO";
+    paidAt?: string | null;
+    categoryId?: number | null;
+    notes?: string | null;
+  }) {
+    return request("/secretary/entries/proposal", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  secretaryCreateExpense(payload: {
+    categoryId: number;
+    description: string;
+    amountCents: number;
+    dueDate: string;
+    status: "PENDENTE" | "PAGO";
+    paidAt?: string | null;
+    clientId?: number | null;
+    proposalId?: number | null;
+    notes?: string | null;
+  }) {
+    return request("/secretary/entries/expense", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  secretaryPayEntry(id: number, paidAt?: string | null) {
+    return request(`/secretary/entries/${id}/pay`, {
+      method: "PATCH",
+      body: JSON.stringify({ paidAt: paidAt || null }),
+    });
+  },
+
+  secretaryCancelEntry(id: number) {
+    return request(`/secretary/entries/${id}/cancel`, {
+      method: "PATCH",
+      body: JSON.stringify({}),
+    });
+  },
+
 login(email: string, password: string) {
   return request("/auth/login", {
     method: "POST",

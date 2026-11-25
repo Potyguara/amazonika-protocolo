@@ -12,6 +12,8 @@ enum UserRole {
   ATENDENTE
   GERENTE
   PROGRAMADOR
+  // Lança receitas/despesas sem acesso a resumos, lucro ou valores dos gestores.
+  SECRETARIA
 }
 
 enum ProtocolStatus {
@@ -1211,6 +1213,10 @@ model FinancialTransaction {
   catalogServiceId Int?
   catalogService   CatalogService? @relation(fields: [catalogServiceId], references: [id], onDelete: SetNull)
 
+  // Proposta (fluxo de protocolo) cujo cronograma financeiro aprovado originou o lançamento.
+  proposalId Int?
+  proposal   Proposal? @relation(fields: [proposalId], references: [id], onDelete: SetNull)
+
   // =====================================================
   // PARCELAMENTO
   // =====================================================
@@ -1276,6 +1282,7 @@ model FinancialTransaction {
   @@index([clientId])
   @@index([catalogServiceId])
   @@index([installmentGroupId])
+  @@index([proposalId])
 }
 
 model EmployeeSalary {
@@ -1674,6 +1681,8 @@ model Proposal {
   items           ProposalItem[]
   paymentSchedule ProposalPaymentSchedule[]
   contracts       Contract[]
+
+  financialTransactions FinancialTransaction[]
 }
 
 model ProposalPaymentSchedule {

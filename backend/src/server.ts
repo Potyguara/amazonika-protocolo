@@ -57,6 +57,7 @@ import { registerCatalogRoutes } from "./modules/catalog/catalog.routes";
 import { registerStandaloneProposalRoutes } from "./modules/standalone-proposals/standalone-proposals.routes";
 import { blockStandaloneProposalStaticAccess } from "./modules/standalone-proposals/standalone-upload-guard";
 import { registerFieldScheduleRoutes } from "./modules/field-schedule/field-schedule.routes";
+import { registerSecretaryRoutes, restrictSecretaryAccess } from "./modules/secretary/secretary.routes";
 import { registerPartnerReferralRoutes } from "./modules/partners/partner-referrals.routes";
 import { registerPartnerCommissionRoutes } from "./modules/partners/partner-commissions.routes";
 import { releasePartnerCommissionForEntryPayment } from "./modules/partners/partner-commission.service";
@@ -129,6 +130,10 @@ app.use(
     return next(error);
   }
 );
+// Perfil Secretária: o token só alcança as rotas de lançamento.
+// JWT_SECRET é lido na hora da requisição (declarado mais abaixo).
+app.use(restrictSecretaryAccess(() => JWT_SECRET));
+
 app.use("/email", express.static(path.join(process.cwd(), "public", "email")));
 
 const uploadsDir = path.resolve(process.cwd(), "uploads", "documents");
@@ -30987,6 +30992,50 @@ app.post(
           });
       }
 
+      /*
+       * Lançamento já feito pela tela de Lançamentos (secretária)
+       * para esta mesma etapa da proposta: vincula em vez de duplicar.
+       */
+      if (
+        !linkedFinancialTransaction &&
+        charge.contract?.proposalId &&
+        (charge.chargeType === "ENTRADA" ||
+          charge.chargeType === "PARCELA")
+      ) {
+        const proposalEntry =
+          await prisma.financialTransaction.findFirst({
+            where: {
+              proposalId: charge.contract.proposalId,
+              type: charge.chargeType,
+              installmentNumber:
+                charge.chargeType === "ENTRADA"
+                  ? 0
+                  : charge.installmentNumber ?? -1,
+              status: {
+                not: "CANCELADO",
+              },
+              billingCharge: null,
+            },
+            orderBy: {
+              id: "asc",
+            },
+          });
+
+        if (proposalEntry) {
+          linkedFinancialTransaction =
+            await prisma.financialTransaction.update({
+              where: {
+                id: proposalEntry.id,
+              },
+              data: {
+                status: "PAGO",
+                paidAt,
+                paymentConfirmedAt: paidAt,
+              },
+            });
+        }
+      }
+
       if (!linkedFinancialTransaction) {
         linkedFinancialTransaction =
           await prisma.financialTransaction.create({
@@ -31604,6 +31653,13 @@ registerPartnerCommissionRoutes({
 
 
 registerCatalogRoutes({
+  app,
+  prisma,
+  authMiddleware,
+  requireRoles,
+});
+
+registerSecretaryRoutes({
   app,
   prisma,
   authMiddleware,
