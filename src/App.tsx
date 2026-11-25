@@ -25,7 +25,6 @@ import {
   sumValidMoneyCents,
 } from "./lib/money";
 import CatalogPage from "./pages/CatalogPage";
-import SecretaryEntriesPage from "./pages/SecretaryEntriesPage";
 import {
   ForgotPasswordPage,
   ResetPasswordPage,
@@ -51,7 +50,6 @@ import {
   X,
   Eye,
   EyeOff,
-  Receipt,
 } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
 import {
@@ -1467,7 +1465,7 @@ function normalizedReaisFormNumber(value: string) {
 
 // Página inicial de cada perfil interno.
 function homePathForRole(role: Role | null) {
-  if (role === "SECRETARIA") return "/app/lancamentos";
+  void role;
   return "/app/dashboard";
 }
 
@@ -2842,25 +2840,25 @@ const nav = [
     label: "Dashboard",
     to: "/app/dashboard",
     icon: LayoutDashboard,
-    roles: ["ATENDENTE", "GERENTE", "PROGRAMADOR"],
+    roles: ["ATENDENTE", "GERENTE", "PROGRAMADOR", "SECRETARIA"],
   },
   {
     label: "Protocolos",
     to: "/app/protocolos",
     icon: ClipboardList,
-    roles: ["ATENDENTE", "GERENTE", "PROGRAMADOR"],
+    roles: ["ATENDENTE", "GERENTE", "PROGRAMADOR", "SECRETARIA"],
   },
   {
     label: "Agendamentos",
     to: "/app/agendamentos",
     icon: CalendarDays,
-    roles: ["ATENDENTE", "GERENTE", "PROGRAMADOR"],
+    roles: ["ATENDENTE", "GERENTE", "PROGRAMADOR", "SECRETARIA"],
   },
   {
     label: "Cronograma de Campo",
     to: "/app/cronograma-campo",
     icon: CalendarDays,
-    roles: ["GERENTE", "PROGRAMADOR"],
+    roles: ["GERENTE", "PROGRAMADOR", "SECRETARIA"],
   },
   {
     label: "Propostas Avulsas",
@@ -2875,16 +2873,10 @@ const nav = [
     roles: ["GERENTE", "PROGRAMADOR"],
   },
   {
-    label: "Lançamentos",
-    to: "/app/lancamentos",
-    icon: Receipt,
-    roles: ["SECRETARIA", "GERENTE", "PROGRAMADOR"],
-  },
-  {
     label: "Financeiro",
     to: "/app/financeiro",
     icon: BarChart3,
-    roles: ["GERENTE", "PROGRAMADOR"],
+    roles: ["GERENTE", "PROGRAMADOR", "SECRETARIA"],
   },
   {
     label: "Configurações",
@@ -9553,7 +9545,7 @@ return (
             Reenviar e-mail
           </button>
 
-          <button className="secondary-action danger" onClick={handleCancel}>
+          <button className="secondary-action danger" hidden={currentRole === "SECRETARIA"} onClick={handleCancel}>
             Cancelar protocolo
           </button>
         </div>
@@ -11111,6 +11103,10 @@ function FinancePage() {
   const isProgrammer =
     currentRole() === "PROGRAMADOR";
 
+  // Secretária: só a aba Lançamentos (cadastrar e dar baixa).
+  const isSecretary =
+    currentRole() === "SECRETARIA";
+
   const [activeTab, setActiveTab] = useState<
     | "OVERVIEW"
     | "TRANSACTIONS"
@@ -11120,7 +11116,7 @@ function FinancePage() {
     | "SALARIES"
     | "CATEGORIES"
     | "PARTNERS"
-  >("OVERVIEW");
+  >(isSecretary ? "TRANSACTIONS" : "OVERVIEW");
 
   const [month, setMonth] = useState(currentMonth);
   const [summary, setSummary] = useState<BackendFinanceSummary | null>(null);
@@ -11500,7 +11496,9 @@ function FinancePage() {
         autoChargeSettingsData,
         autoChargeSchedulerStatusData,
       ] = await Promise.all([
-        api.financeSummary(month) as Promise<BackendFinanceSummary>,
+        isSecretary
+          ? Promise.resolve(null)
+          : (api.financeSummary(month) as Promise<BackendFinanceSummary>),
         api.financeCategories() as Promise<BackendFinanceCategory[]>,
         api.financeTransactions({
           month,
@@ -11508,14 +11506,22 @@ function FinancePage() {
           status: transactionStatusFilter || undefined,
           search: transactionSearch || undefined,
         }) as Promise<BackendFinanceTransaction[]>,
-        api.financeFixedCosts() as Promise<BackendFinanceFixedCost[]>,
-        api.financeSalaries() as Promise<BackendFinanceSalary[]>,
+        isSecretary
+          ? Promise.resolve([] as BackendFinanceFixedCost[])
+          : (api.financeFixedCosts() as Promise<BackendFinanceFixedCost[]>),
+        isSecretary
+          ? Promise.resolve([] as BackendFinanceSalary[])
+          : (api.financeSalaries() as Promise<BackendFinanceSalary[]>),
         api.catalogServices({
           includeInactive: false,
         }) as Promise<BackendFinanceCatalogService[]>,
-        api.financeAutoChargeSettings() as Promise<BackendFinanceAutoChargeSettings>,
+        isSecretary
+          ? Promise.resolve(null)
+          : (api.financeAutoChargeSettings() as Promise<BackendFinanceAutoChargeSettings>),
 
-        api.financeAutoChargeSchedulerStatus() as Promise<BackendFinanceAutoChargeSchedulerStatus>,
+        isSecretary
+          ? Promise.resolve(null)
+          : (api.financeAutoChargeSchedulerStatus() as Promise<BackendFinanceAutoChargeSchedulerStatus>),
       ]);
 
       setSummary(summaryData);
@@ -11542,7 +11548,7 @@ function FinancePage() {
 
   useEffect(() => {
     loadFinance();
-    loadManagerExpenses(month);
+    if (!isSecretary) loadManagerExpenses(month);
   }, [month]);
 
   async function handleRefreshAutoChargeSchedulerStatus() {
@@ -14541,6 +14547,7 @@ async function handleDeleteSalary(id: number) {
 
       <div className="settings-tabs finance-tabs">
         <button
+          hidden={isSecretary}
           className={activeTab === "OVERVIEW" ? "active" : ""}
           onClick={() => setActiveTab("OVERVIEW")}
         >
@@ -14555,6 +14562,7 @@ async function handleDeleteSalary(id: number) {
         </button>
 
         <button
+          hidden={isSecretary}
           className={activeTab === "AUTO_CHARGES" ? "active" : ""}
           onClick={() => setActiveTab("AUTO_CHARGES")}
         >
@@ -14562,6 +14570,7 @@ async function handleDeleteSalary(id: number) {
         </button>
 
         <button
+          hidden={isSecretary}
           className={activeTab === "FIXED_COSTS" ? "active" : ""}
           onClick={() => setActiveTab("FIXED_COSTS")}
         >
@@ -14569,6 +14578,7 @@ async function handleDeleteSalary(id: number) {
         </button>
 
         <button
+          hidden={isSecretary}
           className={activeTab === "MANAGER_EXPENSES" ? "active" : ""}
           onClick={() => setActiveTab("MANAGER_EXPENSES")}
         >
@@ -14576,6 +14586,7 @@ async function handleDeleteSalary(id: number) {
         </button>
 
         <button
+          hidden={isSecretary}
           className={activeTab === "SALARIES" ? "active" : ""}
           onClick={() => setActiveTab("SALARIES")}
         >
@@ -14583,6 +14594,7 @@ async function handleDeleteSalary(id: number) {
         </button>
 
         <button
+          hidden={isSecretary}
           className={activeTab === "CATEGORIES" ? "active" : ""}
           onClick={() => setActiveTab("CATEGORIES")}
         >
@@ -14590,6 +14602,7 @@ async function handleDeleteSalary(id: number) {
         </button>
 
         <button
+          hidden={isSecretary}
           className={activeTab === "PARTNERS" ? "active" : ""}
           onClick={() => setActiveTab("PARTNERS")}
         >
@@ -15712,7 +15725,7 @@ async function handleDeleteSalary(id: number) {
                               </span>
 
                               {obligation.status === "PENDENTE" && (
-                                <button
+                                <button hidden={isSecretary}
                                   type="button"
                                   className="secondary-action"
                                   onClick={() =>
@@ -15733,7 +15746,7 @@ async function handleDeleteSalary(id: number) {
                             {obligation.status === "PENDENTE" ? (
                               <div className="form-actions compact-actions">
                                 {obligation.billingCharge?.id && (
-                                  <button
+                                  <button hidden={isSecretary}
                                     type="button"
                                     className="secondary-action"
                                     onClick={async () => {
@@ -15775,7 +15788,7 @@ async function handleDeleteSalary(id: number) {
                                       obligation.billingCharge.status || ""
                                     )
                                   ) && (
-                                    <button
+                                    <button hidden={isSecretary}
                                       type="button"
                                       className="secondary-action"
                                       disabled={processingBankChargeInProgress}
@@ -15838,7 +15851,7 @@ async function handleDeleteSalary(id: number) {
                                       obligation.billingCharge.status || ""
                                     )
                                   ) && (
-                                    <button
+                                    <button hidden={isSecretary}
                                       type="button"
                                       className="secondary-action"
                                       disabled={processingBankChargeInProgress}
@@ -15905,7 +15918,7 @@ async function handleDeleteSalary(id: number) {
                                   )}
 
                                 {obligation.status === "PENDENTE" && (
-                                  <button
+                                  <button hidden={isSecretary}
                                     type="button"
                                     className="secondary-action"
                                     onClick={() =>
@@ -15920,7 +15933,7 @@ async function handleDeleteSalary(id: number) {
 
                                 {!obligation.billingCharge &&
                                   !obligation.providerTxId && (
-                                    <button
+                                    <button hidden={isSecretary}
                                       type="button"
                                       className="secondary-action"
                                       disabled={
@@ -16195,7 +16208,7 @@ async function handleDeleteSalary(id: number) {
               <div className="form-actions">
                 {isProgrammer &&
                   editingTransaction?.installmentGroupId && (
-                    <button
+                    <button hidden={isSecretary}
                       type="button"
                       className="mini-button danger"
                       disabled={saving}
@@ -16263,7 +16276,7 @@ async function handleDeleteSalary(id: number) {
                       <option value="CONTRATO">Contrato</option>
                       <option value="SERVICO_AVULSO">Serviço avulso</option>
                       <option value="CUSTO_FIXO">Custo fixo</option>
-                      <option value="SALARIO">Salário</option>
+                      <option value="SALARIO" hidden={isSecretary} disabled={isSecretary}>Salário</option>
                       <option value="IMPOSTO">Imposto</option>
                       <option value="TAXA">Taxa</option>
                       <option value="OUTRO">Outro</option>
@@ -17248,7 +17261,7 @@ async function handleDeleteSalary(id: number) {
                               Ver plano
                             </button>
                           ) : !isFinanceTransactionProtected(item) && (
-                            <button
+                            <button hidden={isSecretary}
                               className="mini-button"
                               type="button"
                               onClick={() =>
@@ -17277,7 +17290,7 @@ async function handleDeleteSalary(id: number) {
                               item.type === "PARCELA") &&
                             !item.billingCharge &&
                             !item.providerTxId && (
-                              <button
+                              <button hidden={isSecretary}
                                 className="mini-button"
                                 type="button"
                                 disabled={
@@ -17297,7 +17310,7 @@ async function handleDeleteSalary(id: number) {
                             )}
 
                           {item.billingCharge?.id && (
-                              <button
+                              <button hidden={isSecretary}
                                 className="mini-button"
                                 type="button"
                                 onClick={async () => {
@@ -17335,7 +17348,7 @@ async function handleDeleteSalary(id: number) {
                               ["EMITIDA", "ENVIADA", "VENCIDA", "PAGA"].includes(
                                 String(item.billingCharge.status || "")
                               ) && (
-                                <button
+                                <button hidden={isSecretary}
                                   className="mini-button"
                                   type="button"
                                   disabled={processingBankChargeInProgress}
@@ -17397,7 +17410,7 @@ async function handleDeleteSalary(id: number) {
                               ["EMITIDA", "ENVIADA"].includes(
                                 String(item.billingCharge.status || "")
                               ) && (
-                                <button
+                                <button hidden={isSecretary}
                                   className="mini-button"
                                   type="button"
                                   disabled={processingBankChargeInProgress}
@@ -17468,7 +17481,7 @@ async function handleDeleteSalary(id: number) {
                               )}
 
                             {item.status === "PENDENTE" && (
-                              <button
+                              <button hidden={isSecretary}
                                 className="mini-button"
                                 type="button"
                                 disabled={reprogrammingDueDateInProgress}
@@ -17550,7 +17563,7 @@ async function handleDeleteSalary(id: number) {
                               ["EMITIDA", "ENVIADA", "VENCIDA"].includes(
                                 String(item.billingCharge.status || "")
                               ) && (
-                                <button
+                                <button hidden={isSecretary}
                                   className="mini-button danger"
                                   type="button"
                                   disabled={processingBankChargeInProgress}
@@ -17622,7 +17635,7 @@ async function handleDeleteSalary(id: number) {
                                 item.type === "PARCELA") &&
                               item.billingCharge?.status === "CANCELADA" &&
                               !item.providerTxId && (
-                                <button
+                                <button hidden={isSecretary}
                                   className="mini-button"
                                   type="button"
                                   disabled={
@@ -17642,7 +17655,7 @@ async function handleDeleteSalary(id: number) {
                             {!isFinanceTransactionProtected(item) &&
                               !item.installmentGroupId &&
                               item.status === "PENDENTE" && (
-                                <button
+                                <button hidden={isSecretary}
                                   className="mini-button"
                                   type="button"
                                   disabled={saving}
@@ -17656,7 +17669,7 @@ async function handleDeleteSalary(id: number) {
 
                             {item.status === "PENDENTE" &&
                               !item.installmentGroupId && (
-                                <button
+                                <button hidden={isSecretary}
                                   className="mini-button danger"
                                   type="button"
                                   disabled={saving}
@@ -19211,11 +19224,11 @@ function UsersPermissionsPanel() {
 
                 {role === "SECRETARIA" && (
                   <p>
-                    Faz lançamentos financeiros: recebimentos das propostas
-                    aceitas (seguindo o cronograma aprovado) e despesas da
-                    empresa. Vê só os lançamentos que ela mesma fez. Não acessa
-                    resumos, lucro, pró-labore, salários, custos fixos nem
-                    despesas dos gestores.
+                    Cadastra protocolos, clientes, agendamentos e cronograma de
+                    campo, e faz lançamentos financeiros (cadastrar e dar
+                    baixa). Não vê resumo financeiro, caixa, pró-labore,
+                    salários, custos fixos, custos dos sócios, cobranças,
+                    categorias, parceiros, propostas avulsas nem catálogo.
                   </p>
                 )}
 
@@ -20229,7 +20242,7 @@ function App() {
         <Route
           path="dashboard"
           element={
-            <ProtectedRoute allowed={["ATENDENTE", "GERENTE", "PROGRAMADOR"]}>
+            <ProtectedRoute allowed={["ATENDENTE", "GERENTE", "PROGRAMADOR", "SECRETARIA"]}>
               <AdminDashboard />
             </ProtectedRoute>
           }
@@ -20237,20 +20250,12 @@ function App() {
         <Route
           path="agendamentos"
           element={
-            <ProtectedRoute allowed={["ATENDENTE", "GERENTE", "PROGRAMADOR"]}>
+            <ProtectedRoute allowed={["ATENDENTE", "GERENTE", "PROGRAMADOR", "SECRETARIA"]}>
               <SchedulePage />
             </ProtectedRoute>
           }
         />
 
-        <Route
-          path="lancamentos"
-          element={
-            <ProtectedRoute allowed={["SECRETARIA", "GERENTE", "PROGRAMADOR"]}>
-              <SecretaryEntriesPage />
-            </ProtectedRoute>
-          }
-        />
 
         <Route
           path="propostas-avulsas/:id"
@@ -20264,7 +20269,7 @@ function App() {
         <Route
           path="cronograma-campo"
           element={
-            <ProtectedRoute allowed={["GERENTE", "PROGRAMADOR"]}>
+            <ProtectedRoute allowed={["GERENTE", "PROGRAMADOR", "SECRETARIA"]}>
               <FieldSchedulePage />
             </ProtectedRoute>
           }
@@ -20273,7 +20278,7 @@ function App() {
         <Route
           path="cronograma-campo/mapa"
           element={
-            <ProtectedRoute allowed={["GERENTE", "PROGRAMADOR"]}>
+            <ProtectedRoute allowed={["GERENTE", "PROGRAMADOR", "SECRETARIA"]}>
               <FieldTravelMapPage />
             </ProtectedRoute>
           }
@@ -20300,7 +20305,7 @@ function App() {
         <Route
           path="financeiro"
           element={
-            <ProtectedRoute allowed={["GERENTE", "PROGRAMADOR"]}>
+            <ProtectedRoute allowed={["GERENTE", "PROGRAMADOR", "SECRETARIA"]}>
               <FinancePage />
             </ProtectedRoute>
           }
@@ -20318,7 +20323,7 @@ function App() {
         <Route
           path="protocolos"
           element={
-            <ProtectedRoute allowed={["ATENDENTE", "GERENTE", "PROGRAMADOR"]}>
+            <ProtectedRoute allowed={["ATENDENTE", "GERENTE", "PROGRAMADOR", "SECRETARIA"]}>
               <ProtocolsPage />
             </ProtectedRoute>
           }
@@ -20327,7 +20332,7 @@ function App() {
         <Route
           path="protocolos/:id"
           element={
-            <ProtectedRoute allowed={["ATENDENTE", "GERENTE", "PROGRAMADOR"]}>
+            <ProtectedRoute allowed={["ATENDENTE", "GERENTE", "PROGRAMADOR", "SECRETARIA"]}>
               <ProtocolDetailsPage />
             </ProtectedRoute>
           }

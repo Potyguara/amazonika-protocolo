@@ -1900,3 +1900,8 @@ th {
     display: none;
   }
 }
+/* Botões ocultos por perfil (ex.: Secretária) */
+button[hidden],
+option[hidden] {
+  display: none !important;
+}

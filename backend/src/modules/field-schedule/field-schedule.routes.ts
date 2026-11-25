@@ -20,6 +20,7 @@ type RegisterFieldScheduleRoutesParams = {
 const FIELD_ROLES = [
   "GERENTE",
   "PROGRAMADOR",
+  "SECRETARIA",
 ];
 
 const FIELD_TYPES = new Set(

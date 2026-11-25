@@ -57,7 +57,7 @@ import { registerCatalogRoutes } from "./modules/catalog/catalog.routes";
 import { registerStandaloneProposalRoutes } from "./modules/standalone-proposals/standalone-proposals.routes";
 import { blockStandaloneProposalStaticAccess } from "./modules/standalone-proposals/standalone-upload-guard";
 import { registerFieldScheduleRoutes } from "./modules/field-schedule/field-schedule.routes";
-import { registerSecretaryRoutes, restrictSecretaryAccess } from "./modules/secretary/secretary.routes";
+import { restrictSecretaryAccess, secretaryMayUseRoute } from "./modules/secretary/secretary.routes";
 import { registerPartnerReferralRoutes } from "./modules/partners/partner-referrals.routes";
 import { registerPartnerCommissionRoutes } from "./modules/partners/partner-commissions.routes";
 import { releasePartnerCommissionForEntryPayment } from "./modules/partners/partner-commission.service";
@@ -76,7 +76,7 @@ import {
   removeBbPixDueCharge,
 } from "./services/bbPixService";
 
-type UserRole = "CLIENTE" | "ATENDENTE" | "GERENTE" | "PROGRAMADOR";
+type UserRole = "CLIENTE" | "ATENDENTE" | "GERENTE" | "PROGRAMADOR" | "SECRETARIA";
 
 const prisma = new PrismaClient();
 
@@ -1578,7 +1578,13 @@ function requireRoles(roles: UserRole[]) {
       return res.status(401).json({ message: "Usuário não autenticado." });
     }
 
-    if (!roles.includes(req.user.role)) {
+    const allowed =
+      roles.includes(req.user.role) ||
+      // Secretária usa o que o atendente usa (a lista fina fica em
+      // restrictSecretaryAccess) e as rotas que a citam.
+      (req.user.role === "SECRETARIA" && secretaryMayUseRoute(roles));
+
+    if (!allowed) {
       return res.status(403).json({ message: "Acesso não autorizado." });
     }
 
@@ -16046,7 +16052,7 @@ app.post(
 app.get(
   "/finance/categories",
   authMiddleware,
-  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  requireRoles(["GERENTE", "PROGRAMADOR", "SECRETARIA"]),
   async (_req, res) => {
     const categories = await prisma.financialCategory.findMany({
       orderBy: [{ type: "asc" }, { name: "asc" }],
@@ -16259,9 +16265,15 @@ app.get(
 app.get(
   "/finance/transactions",
   authMiddleware,
-  requireRoles(["GERENTE", "PROGRAMADOR"]),
-  async (req, res) => {
-    const where = buildFinancialWhere(req);
+  requireRoles(["GERENTE", "PROGRAMADOR", "SECRETARIA"]),
+  async (req: any, res) => {
+    const baseWhere = buildFinancialWhere(req);
+
+    // Secretária não vê lançamentos de salário.
+    const where =
+      req.user?.role === "SECRETARIA"
+        ? { AND: [baseWhere, { source: { not: "SALARIO" as const } }] }
+        : baseWhere;
 
     const transactions = await prisma.financialTransaction.findMany({
       where,
@@ -16309,7 +16321,7 @@ app.get(
 app.post(
   "/finance/transactions",
   authMiddleware,
-  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  requireRoles(["GERENTE", "PROGRAMADOR", "SECRETARIA"]),
   async (req: any, res) => {
     try {
       const {
@@ -16350,6 +16362,16 @@ app.post(
         autoChargeEnabled,
         emailNotificationEnabled,
       } = req.body;
+
+      if (
+        req.user?.role === "SECRETARIA" &&
+        source === "SALARIO"
+      ) {
+        return res.status(403).json({
+          message:
+            "Lançamentos de salário são feitos pelos gestores.",
+        });
+      }
 
       if (
         !type ||
@@ -18194,7 +18216,7 @@ app.post(
 app.get(
   "/finance/transactions/:id/payment-plan",
   authMiddleware,
-  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  requireRoles(["GERENTE", "PROGRAMADOR", "SECRETARIA"]),
   async (req: any, res) => {
     try {
       const id = Number(req.params.id);
@@ -19348,7 +19370,7 @@ app.put(
 app.patch(
   "/finance/transactions/:id/pay",
   authMiddleware,
-  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  requireRoles(["GERENTE", "PROGRAMADOR", "SECRETARIA"]),
   financeMutationHandler("PAY")
 );
 
@@ -31653,13 +31675,6 @@ registerPartnerCommissionRoutes({
 
 
 registerCatalogRoutes({
-  app,
-  prisma,
-  authMiddleware,
-  requireRoles,
-});
-
-registerSecretaryRoutes({
   app,
   prisma,
   authMiddleware,
