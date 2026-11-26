@@ -73,6 +73,136 @@ function billingChargePublicPath(charge: BackendBillingCharge) {
   return `/cobranca/${billingChargePublicIdentifier(charge)}`;
 }
 
+type PublicReceiptInfo = {
+  valid: boolean;
+  status: string;
+  receiptNumber: string;
+  verificationCode: string;
+  description?: string | null;
+  payerName?: string | null;
+  payerDocument?: string | null;
+  amountCents?: number | null;
+  paidAt?: string | null;
+  txid?: string | null;
+  endToEndId?: string | null;
+  issuerName?: string | null;
+  issuerCnpj?: string | null;
+};
+
+function PublicReceiptVerificationPage() {
+  const { hash } = useParams();
+  const [info, setInfo] = useState<PublicReceiptInfo | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        setLoading(true);
+        const data = (await api.publicReceipt(String(hash || ""))) as PublicReceiptInfo;
+        if (active) setInfo(data);
+      } catch (err) {
+        if (active) {
+          setError(err instanceof Error ? err.message : "Recibo não encontrado.");
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [hash]);
+
+  const rows: [string, string | null | undefined][] = info
+    ? [
+        ["Recibo", info.receiptNumber],
+        ["Código de verificação", info.verificationCode],
+        ["Emitente", info.issuerName ? `${info.issuerName} — CNPJ ${info.issuerCnpj}` : null],
+        ["Pagador", info.payerName ? `${info.payerName} (${info.payerDocument})` : null],
+        ["Referente a", info.description],
+        ["Valor", formatOptionalMoneyCents(info.amountCents ?? null)],
+        [
+          "Pago em",
+          info.paidAt
+            ? new Date(info.paidAt).toLocaleString("pt-BR", {
+                dateStyle: "short",
+                timeStyle: "medium",
+              })
+            : null,
+        ],
+        ["TXID", info.txid],
+        ["Identificador E2E (Bacen)", info.endToEndId],
+      ]
+    : [];
+
+  return (
+    <main className="public-billing-page">
+      <section className="public-billing-shell">
+        <header className="public-billing-header">
+          <div className="public-proposal-logo-box">
+            <img
+              src="/brand/logo-amazonika.png"
+              alt="AMAZONIKA Engenharia & Meio Ambiente"
+              onError={(event) => {
+                event.currentTarget.style.display = "none";
+              }}
+            />
+          </div>
+          <div>
+            <span className="eyebrow">Conferência de documento</span>
+            <h1>Verificação de recibo</h1>
+          </div>
+        </header>
+
+        <article className="panel public-billing-main">
+          {loading ? (
+            <p>Conferindo recibo...</p>
+          ) : error || !info ? (
+            <div className="panel error-panel">
+              {error || "Recibo não encontrado."} Confira se o código está correto.
+            </div>
+          ) : (
+            <>
+              <div
+                className={
+                  info.valid ? "public-payment-confirmed" : "panel error-panel"
+                }
+              >
+                {info.valid && (
+                  <div className="public-payment-confirmed-icon" aria-hidden="true">
+                    ✓
+                  </div>
+                )}
+                <h3>
+                  {info.valid
+                    ? "Recibo autêntico"
+                    : `Este recibo não corresponde a um pagamento confirmado (${info.status}).`}
+                </h3>
+                {info.valid && (
+                  <p>Os dados abaixo conferem com o registro do SIS Amazonika.</p>
+                )}
+              </div>
+
+              <dl className="public-receipt-rows">
+                {rows
+                  .filter(([, value]) => value)
+                  .map(([label, value]) => (
+                    <div key={label}>
+                      <dt>{label}</dt>
+                      <dd>{value}</dd>
+                    </div>
+                  ))}
+              </dl>
+            </>
+          )}
+        </article>
+      </section>
+    </main>
+  );
+}
+
 function PublicBillingChargePage() {
   const { token } = useParams();
 
@@ -20286,6 +20416,7 @@ function App() {
       <Route path="/proposta-avulsa/:token" element={<StandaloneProposalPublicPage />} />
       <Route path="/contrato/:token" element={<PublicContractPage />} />
       <Route path="/cobranca/:token" element={<PublicBillingChargePage />} />
+      <Route path="/recibo/:hash" element={<PublicReceiptVerificationPage />} />
 
       <Route
         path="/app"

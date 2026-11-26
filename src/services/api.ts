@@ -2049,6 +2049,10 @@ publicBillingCharge(identifier: string | number) {
   return request(`/public/billing-charges/${identifier}`);
 },
 
+publicReceipt(hash: string) {
+  return request(`/public/receipts/${hash}`);
+},
+
 publicBillingChargeStatus(token: string) {
   return request(`/public/billing-charges/${token}/status`);
 },

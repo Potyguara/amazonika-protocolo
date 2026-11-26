@@ -51,6 +51,8 @@ import path from "path";
 import fs from "fs";
 import nodemailer from "nodemailer";
 import PDFDocument from "pdfkit";
+import QRCode from "qrcode";
+import { pdfSignerInfo, signPdfBuffer } from "./services/pdfSign";
 import crypto from "crypto";
 import { registerPartnerRoutes } from "./modules/partners/partners.routes";
 import { registerCatalogRoutes } from "./modules/catalog/catalog.routes";
@@ -11898,364 +11900,540 @@ async function sendFinanceInitialChargeEmail(
 
 
 
+/*
+ * ======================================================
+ * RECIBO DE PAGAMENTO (Financeiro V2)
+ * ======================================================
+ *
+ * Recibo completo e rastreável: logomarca, pagador, recebedor,
+ * referência (serviço, proposta, protocolo, parcela), dados do Pix
+ * (TXID e identificador E2E do Banco Central), valor por extenso,
+ * QR Code para conferência pública e assinatura digital ICP-Brasil
+ * com o e-CNPJ da empresa (quando configurado no servidor).
+ */
+
+function brlAmountInWords(cents: number): string {
+  const units = ["", "um", "dois", "três", "quatro", "cinco", "seis", "sete", "oito", "nove"];
+  const teens = ["dez", "onze", "doze", "treze", "quatorze", "quinze", "dezesseis", "dezessete", "dezoito", "dezenove"];
+  const tens = ["", "", "vinte", "trinta", "quarenta", "cinquenta", "sessenta", "setenta", "oitenta", "noventa"];
+  const hundreds = ["", "cento", "duzentos", "trezentos", "quatrocentos", "quinhentos", "seiscentos", "setecentos", "oitocentos", "novecentos"];
+
+  const upTo999 = (n: number): string => {
+    if (n === 0) return "";
+    if (n === 100) return "cem";
+    const parts: string[] = [];
+    const h = Math.floor(n / 100);
+    const rest = n % 100;
+    if (h) parts.push(hundreds[h]);
+    if (rest >= 10 && rest < 20) parts.push(teens[rest - 10]);
+    else {
+      const t = Math.floor(rest / 10);
+      const u = rest % 10;
+      if (t) parts.push(tens[t]);
+      if (u) parts.push(units[u]);
+    }
+    return parts.join(" e ");
+  };
+
+  const integerWords = (n: number): string => {
+    if (n === 0) return "zero";
+    const groups: { value: number; singular: string; plural: string }[] = [
+      { value: Math.floor(n / 1_000_000_000) % 1000, singular: "bilhão", plural: "bilhões" },
+      { value: Math.floor(n / 1_000_000) % 1000, singular: "milhão", plural: "milhões" },
+      { value: Math.floor(n / 1000) % 1000, singular: "mil", plural: "mil" },
+      { value: n % 1000, singular: "", plural: "" },
+    ];
+    const pieces: string[] = [];
+    groups.forEach((group) => {
+      if (!group.value) return;
+      if (group.singular === "mil") {
+        pieces.push(group.value === 1 ? "mil" : `${upTo999(group.value)} mil`);
+      } else if (group.singular) {
+        pieces.push(`${upTo999(group.value)} ${group.value === 1 ? group.singular : group.plural}`);
+      } else {
+        pieces.push(upTo999(group.value));
+      }
+    });
+    const last = n % 1000;
+    if (pieces.length > 1 && last > 0 && (last < 100 || last % 100 === 0)) {
+      const tail = pieces.pop();
+      return `${pieces.join(" ")} e ${tail}`;
+    }
+    return pieces.join(" ");
+  };
+
+  const reais = Math.floor(cents / 100);
+  const centavos = cents % 100;
+  const parts: string[] = [];
+
+  if (reais > 0) {
+    const big = reais % 1_000_000 === 0 && reais >= 1_000_000;
+    parts.push(`${integerWords(reais)}${big ? " de" : ""} ${reais === 1 ? "real" : "reais"}`);
+  }
+  if (centavos > 0) {
+    parts.push(`${integerWords(centavos)} ${centavos === 1 ? "centavo" : "centavos"}`);
+  }
+  if (!parts.length) return "zero real";
+  return parts.join(" e ");
+}
+
+function maskCpfCnpj(value?: string | null) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (digits.length === 11) return `***.${digits.slice(3, 6)}.${digits.slice(6, 9)}-**`;
+  if (digits.length === 14) {
+    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
+  }
+  return value ? String(value) : "-";
+}
+
+function formatCpfCnpj(value?: string | null) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (digits.length === 11) {
+    return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+  }
+  if (digits.length === 14) {
+    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
+  }
+  return value ? String(value) : "-";
+}
+
+function bbEndToEndIdFromRaw(raw?: string | null) {
+  if (!raw) return null;
+  try {
+    const data = JSON.parse(raw);
+    const pix = Array.isArray(data?.pix) ? data.pix[0] : null;
+    return pix?.endToEndId ? String(pix.endToEndId) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Código público de conferência do recibo (hash da cobrança). */
+async function ensureBillingChargeVerificationHash(charge: any): Promise<string | null> {
+  if (charge?.verificationHash) return String(charge.verificationHash);
+  if (!charge?.id) return null;
+
+  const fields = charge.publicToken
+    ? {
+        publicToken: charge.publicToken,
+        verificationHash: generateBillingChargeVerificationHash(charge.publicToken),
+      }
+    : createBillingChargePublicFields();
+
+  await prisma.billingCharge.update({
+    where: { id: charge.id },
+    data: fields,
+  });
+
+  charge.publicToken = fields.publicToken;
+  charge.verificationHash = fields.verificationHash;
+  return fields.verificationHash;
+}
+
+function receiptVerificationUrl(hash: string) {
+  return `${getBillingPublicBaseUrl().replace(/\/$/, "")}/recibo/${hash}`;
+}
+
+function shortVerificationCode(hash: string) {
+  return hash.slice(0, 16).toUpperCase().replace(/(.{4})(?!$)/g, "$1-");
+}
+
 async function generateFinanceReceiptPdf(
-  transaction: any,
-  charge: any,
+  transactionInput: any,
+  chargeInput: any,
   confirmationSource: "BANCO_DO_BRASIL" | "MANUAL"
 ): Promise<{
   fileName: string;
   filePath: string;
   publicPath: string;
+  signed?: boolean;
 }> {
-  const company =
-    await getCompanySettings();
+  const company = await getCompanySettings();
 
-  const client =
-    transaction.client ||
-    charge.client ||
-    null;
+  // Releitura com todas as referências do lançamento.
+  const transaction: any =
+    (await prisma.financialTransaction.findUnique({
+      where: { id: transactionInput.id },
+      include: {
+        client: true,
+        protocol: true,
+        catalogService: true,
+        proposal: { select: { id: true, proposalNumber: true } },
+        billingCharge: { include: { client: true } },
+      },
+    })) || transactionInput;
 
-  const amountCents =
-    requireCanonicalCents(
-      transaction.amountCents ??
-        charge.amountCents,
-      "Valor do recibo financeiro"
-    );
+  const charge: any = transaction.billingCharge || chargeInput;
+  const client = transaction.client || charge?.client || null;
 
-  const paidAt =
-    transaction.paidAt ||
-    charge.paidAt ||
-    new Date();
-
-  const outputDir =
-    path.join(
-      process.cwd(),
-      "uploads",
-      "documents"
-    );
-
-  fs.mkdirSync(
-    outputDir,
-    {
-      recursive: true,
-    }
+  const amountCents = requireCanonicalCents(
+    charge?.paidAmountCents ?? transaction.amountCents ?? charge?.amountCents,
+    "Valor do recibo financeiro"
   );
 
-  const receiptNumber =
-    `REC-FIN-${String(transaction.id).padStart(6, "0")}`;
+  const paidAt = new Date(charge?.paidAt || transaction.paidAt || new Date());
+  const issuedAt = new Date();
+  const verificationHash = await ensureBillingChargeVerificationHash(charge);
+  const verificationUrl = verificationHash ? receiptVerificationUrl(verificationHash) : null;
+  const endToEndId = bbEndToEndIdFromRaw(charge?.rawResponse);
+  const signer = pdfSignerInfo();
 
-  const fileName =
-    `${receiptNumber}.pdf`;
+  const receiptNumber = `REC-FIN-${String(transaction.id).padStart(6, "0")}`;
+  const outputDir = path.join(process.cwd(), "uploads", "documents");
+  fs.mkdirSync(outputDir, { recursive: true });
+  const fileName = `${receiptNumber}.pdf`;
+  const filePath = path.join(outputDir, fileName);
+  const publicPath = `/uploads/documents/${fileName}`;
 
-  const filePath =
-    path.join(
-      outputDir,
-      fileName
-    );
+  const tz = "America/Belem";
+  const dateTime = (value: Date) =>
+    new Intl.DateTimeFormat("pt-BR", {
+      timeZone: tz,
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).format(value);
+  const dateOnly = (value: Date) =>
+    new Intl.DateTimeFormat("pt-BR", {
+      timeZone: tz,
+      day: "2-digit",
+      month: "long",
+      year: "numeric",
+    }).format(value);
 
-  const publicPath =
-    `/uploads/documents/${fileName}`;
-
-  const doc =
-    new PDFDocument({
-      size: "A4",
-      margins: {
-        top: 56,
-        bottom: 56,
-        left: 56,
-        right: 56,
-      },
-    });
-
-  const stream =
-    fs.createWriteStream(
-      filePath
-    );
-
-  doc.pipe(stream);
-
-  const formatDate =
-    (
-      value:
-        | Date
-        | string
-        | null
-        | undefined
-    ) => {
-      if (!value) {
-        return "-";
-      }
-
-      const date =
-        new Date(value);
-
-      if (
-        Number.isNaN(
-          date.getTime()
-        )
-      ) {
-        return "-";
-      }
-
-      return new Intl.DateTimeFormat(
-        "pt-BR",
-        {
-          timeZone:
-            "America/Belem",
-          day:
-            "2-digit",
-          month:
-            "2-digit",
-          year:
-            "numeric",
-        }
-      ).format(date);
-    };
-
-  const companyLine = [
+  const companyName =
+    company.companyLegalName || company.companyName || "AMAZONIKA Engenharia & Meio Ambiente";
+  const companyAddress = [
     company.companyAddress,
-    company.companyCity,
-    company.companyState,
-    company.companyZipCode
-      ? `CEP ${company.companyZipCode}`
-      : "",
+    company.companyCity && company.companyState
+      ? `${company.companyCity}/${company.companyState}`
+      : company.companyCity || company.companyState,
+    company.companyZipCode ? `CEP ${company.companyZipCode}` : "",
   ]
     .filter(Boolean)
-    .join(" - ");
+    .join(" · ");
+  const companyContact = [company.companyPhone || company.companyWhatsapp, company.companyEmail, company.companyWebsite]
+    .filter(Boolean)
+    .join(" · ");
 
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(18)
-    .fillColor("#123c32")
-    .text(
-      company.companyLegalName ||
-        company.companyName ||
-        "AMAZONIKA Engenharia & Meio Ambiente",
-      {
-        align: "center",
-      }
-    );
+  const green = "#123c32";
+  const accent = "#2f8f5b";
+  const muted = "#5b6b63";
+  const line = "#dfe7e2";
 
-  doc
-    .moveDown(0.4)
-    .font("Helvetica")
-    .fontSize(10)
-    .fillColor("#374151")
-    .text(
-      `CNPJ: ${company.companyCnpj || "-"}`,
-      {
-        align: "center",
-      }
-    );
+  const doc = new PDFDocument({
+    size: "A4",
+    margins: { top: 40, bottom: 40, left: 48, right: 48 },
+    info: {
+      Title: `Recibo ${receiptNumber}`,
+      Author: companyName,
+      Subject: "Recibo de pagamento",
+      Creator: "SIS Amazonika",
+    },
+  });
 
-  if (companyLine) {
-    doc.text(
-      companyLine,
-      {
-        align: "center",
-      }
-    );
+  const chunks: Buffer[] = [];
+  doc.on("data", (chunk: Buffer) => chunks.push(chunk));
+  const finished = new Promise<Buffer>((resolve, reject) => {
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+  });
+
+  const pageWidth = doc.page.width;
+  const left = doc.page.margins.left;
+  const right = pageWidth - doc.page.margins.right;
+  const contentWidth = right - left;
+
+  /* ---------- Cabeçalho ---------- */
+  doc.rect(0, 0, pageWidth, 8).fill(green);
+
+  const logoPath = [
+    path.join(process.cwd(), "assets", "logo_header.png"),
+    path.resolve(process.cwd(), "..", "backend", "assets", "logo_header.png"),
+  ].find((candidate) => fs.existsSync(candidate));
+
+  let brandX = left;
+  if (logoPath) {
+    try {
+      doc.image(logoPath, left, 28, { fit: [58, 58] });
+      brandX = left + 66;
+    } catch {
+      brandX = left;
+    }
   }
 
-  doc.moveDown(1.6);
-
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(20)
-    .fillColor("#123c32")
-    .text(
-      "RECIBO DE PAGAMENTO",
-      {
-        align: "center",
-      }
-    );
-
-  doc
-    .moveDown(0.5)
-    .font("Helvetica-Bold")
-    .fontSize(11)
-    .text(
-      receiptNumber,
-      {
-        align: "center",
-      }
-    );
-
-  doc.moveDown(2);
-
-  doc
-    .font("Helvetica")
-    .fontSize(12)
-    .fillColor("#111827")
-    .text(
-      `Recebemos de ${
-        client?.name || "-"
-      }, inscrito(a) no CPF/CNPJ ${
-        client?.cpfCnpj || "-"
-      }, a importância de ${formatCurrencyBRFromCents(
-        amountCents,
-        "Valor do recibo"
-      )}, referente ao pagamento de ${
-        transaction.description ||
-        charge.description ||
-        `lançamento financeiro nº ${transaction.id}`
-      }.`,
-      {
-        align:
-          "justify",
-        lineGap:
-          4,
-      }
-    );
-
-  doc.moveDown(1.5);
-
-  doc.text(
-    `Data do pagamento: ${formatDate(
-      paidAt
-    )}`,
-    {
-      lineGap:
-        4,
-    }
-  );
-
-  doc.text(
-    `Valor recebido: ${formatCurrencyBRFromCents(
-      amountCents,
-      "Valor recebido"
-    )}`,
-    {
-      lineGap:
-        4,
-    }
-  );
-
-  doc.text(
-    `Forma de confirmação: ${
-      confirmationSource ===
-      "BANCO_DO_BRASIL"
-        ? "Banco do Brasil - Pix"
-        : "Confirmação administrativa"
-    }`,
-    {
-      lineGap:
-        4,
-    }
-  );
-
-  if (charge.txid) {
-    doc.text(
-      `TXID: ${charge.txid}`,
-      {
-        lineGap:
-          4,
-      }
-    );
-  }
-
-  doc.moveDown(3);
-
-  doc
-    .font("Helvetica")
-    .fontSize(12)
-    .text(
-      `${
-        company.companyCity ||
-        "Macapá"
-      }/${
-        company.companyState ||
-        "AP"
-      }, ${formatDate(new Date())}.`,
-      {
-        align:
-          "right",
-      }
-    );
-
-  doc.moveDown(4);
-
-  const signatureY =
-    doc.y;
-
-  doc
-    .moveTo(
-      160,
-      signatureY
-    )
-    .lineTo(
-      435,
-      signatureY
-    )
-    .strokeColor(
-      "#111827"
-    )
-    .lineWidth(
-      0.8
-    )
-    .stroke();
-
-  doc
-    .moveDown(0.4)
-    .font("Helvetica-Bold")
-    .fontSize(11)
-    .fillColor("#111827")
-    .text(
-      company.companyLegalName ||
-        company.companyName ||
-        "AMAZONIKA Engenharia & Meio Ambiente",
-      {
-        align:
-          "center",
-      }
-    );
-
-  doc
-    .font("Helvetica")
-    .fontSize(10)
-    .fillColor("#374151")
-    .text(
-      `CNPJ: ${company.companyCnpj || "-"}`,
-      {
-        align:
-          "center",
-      }
-    );
-
-  doc.moveDown(2);
-
+  doc.font("Helvetica-Bold").fontSize(20).fillColor(green).text("AMAZONIKA", brandX, 36, {
+    width: 220,
+    characterSpacing: 0.5,
+  });
   doc
     .font("Helvetica")
     .fontSize(8.5)
-    .fillColor("#64748b")
+    .fillColor(accent)
+    .text("ENGENHARIA & MEIO AMBIENTE", brandX, doc.y + 1, { width: 220, characterSpacing: 0.8 });
+
+  const headerTextX = left + 290;
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(10)
+    .fillColor(green)
+    .text(companyName, headerTextX, 32, { width: right - headerTextX, align: "right" });
+  doc
+    .font("Helvetica")
+    .fontSize(8.5)
+    .fillColor(muted)
+    .text(`CNPJ ${formatCpfCnpj(company.companyCnpj)}`, headerTextX, doc.y + 2, {
+      width: right - headerTextX,
+      align: "right",
+    });
+  if (companyAddress) {
+    doc.text(companyAddress, headerTextX, doc.y + 1, { width: right - headerTextX, align: "right" });
+  }
+  if (companyContact) {
+    doc.text(companyContact, headerTextX, doc.y + 1, { width: right - headerTextX, align: "right" });
+  }
+
+  let y = Math.max(doc.y, 92) + 14;
+  doc.moveTo(left, y).lineTo(right, y).lineWidth(0.8).strokeColor(line).stroke();
+
+  /* ---------- Título ---------- */
+  y += 16;
+  doc.font("Helvetica-Bold").fontSize(20).fillColor(green).text("RECIBO DE PAGAMENTO", left, y, {
+    width: contentWidth * 0.6,
+  });
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(10)
+    .fillColor(green)
+    .text(`Nº ${receiptNumber}`, left + contentWidth * 0.6, y + 2, {
+      width: contentWidth * 0.4,
+      align: "right",
+    });
+  doc
+    .font("Helvetica")
+    .fontSize(8.5)
+    .fillColor(muted)
+    .text(`Emitido em ${dateTime(issuedAt)}`, left + contentWidth * 0.6, doc.y + 2, {
+      width: contentWidth * 0.4,
+      align: "right",
+    });
+
+  /* ---------- Valor em destaque ---------- */
+  y += 40;
+  doc.roundedRect(left, y, contentWidth, 58, 10).fillAndStroke("#f1f8f4", "#cfe6d8");
+  doc
+    .font("Helvetica")
+    .fontSize(9)
+    .fillColor(muted)
+    .text("VALOR RECEBIDO", left + 16, y + 10);
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(20)
+    .fillColor(green)
+    .text(formatCurrencyBRFromCents(amountCents, "Valor do recibo"), left + 16, y + 22);
+  doc
+    .font("Helvetica-Oblique")
+    .fontSize(9)
+    .fillColor(muted)
+    .text(`(${brlAmountInWords(amountCents)})`, left + 200, y + 28, {
+      width: contentWidth - 216,
+      align: "right",
+    });
+
+  /* ---------- Declaração ---------- */
+  y += 74;
+  const description =
+    transaction.description || charge?.description || `lançamento financeiro nº ${transaction.id}`;
+  doc
+    .font("Helvetica")
+    .fontSize(10.5)
+    .fillColor("#111827")
     .text(
-      "Este recibo foi gerado eletronicamente pelo SIS Amazonika após a confirmação do pagamento.",
-      {
-        align:
-          "center",
-      }
+      `Recebemos de ${client?.name || "-"}, inscrito(a) no CPF/CNPJ ${formatCpfCnpj(
+        client?.cpfCnpj
+      )}, a importância de ${formatCurrencyBRFromCents(amountCents, "Valor do recibo")} (${brlAmountInWords(
+        amountCents
+      )}), referente a ${description}, dando plena e geral quitação do valor recebido.`,
+      left,
+      y,
+      { width: contentWidth, align: "justify", lineGap: 3 }
     );
 
+  /* ---------- Quadros de dados ---------- */
+  const section = (title: string, rows: [string, string | null | undefined][]) => {
+    const visible = rows.filter(([, value]) => value != null && String(value).trim() !== "");
+    let top = doc.y + 14;
+    doc.font("Helvetica-Bold").fontSize(9).fillColor(accent).text(title.toUpperCase(), left, top, {
+      characterSpacing: 0.6,
+    });
+    top = doc.y + 4;
+    doc.moveTo(left, top).lineTo(right, top).lineWidth(0.6).strokeColor(line).stroke();
+    top += 6;
+    visible.forEach(([label, value]) => {
+      doc.font("Helvetica").fontSize(9).fillColor(muted).text(label, left, top, { width: 150 });
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(9.5)
+        .fillColor("#111827")
+        .text(String(value), left + 155, top, { width: contentWidth - 155 });
+      top = Math.max(doc.y, top + 12) + 4;
+    });
+    doc.y = top;
+  };
+
+  doc.y = doc.y + 2;
+
+  section("Pagador", [
+    ["Nome / Razão social", client?.name],
+    ["CPF / CNPJ", formatCpfCnpj(client?.cpfCnpj)],
+    ["E-mail", client?.email],
+  ]);
+
+  const installmentLabel =
+    charge?.installmentNumber || transaction.installmentNumber
+      ? `${charge?.installmentNumber || transaction.installmentNumber}${
+          charge?.totalInstallments || transaction.totalInstallments
+            ? ` de ${charge?.totalInstallments || transaction.totalInstallments}`
+            : ""
+        }`
+      : transaction.type === "ENTRADA"
+      ? "Entrada / pagamento único"
+      : null;
+
+  section("Referente a", [
+    ["Descrição", description],
+    ["Serviço", transaction.catalogService?.name],
+    ["Proposta", transaction.proposal?.proposalNumber],
+    ["Protocolo", transaction.protocol?.protocolNumber],
+    ["Parcela", installmentLabel],
+    ["Vencimento", transaction.dueDate ? formatDueDateBR(transaction.dueDate) : null],
+    ["Lançamento", `#${transaction.id}`],
+  ]);
+
+  section("Pagamento", [
+    [
+      "Forma",
+      confirmationSource === "BANCO_DO_BRASIL"
+        ? "Pix — Banco do Brasil (confirmação automática)"
+        : "Confirmação administrativa",
+    ],
+    ["Data e hora", `${dateTime(paidAt)} (horário de Brasília/Belém)`],
+    ["TXID", charge?.txid],
+    ["Identificador E2E (Bacen)", endToEndId],
+    ["Recebedor", `${companyName} — CNPJ ${formatCpfCnpj(company.companyCnpj)}`],
+  ]);
+
+  /* ---------- Autenticação: QR Code + assinatura ---------- */
+  let blockTop = doc.y + 18;
+  const blockHeight = 118;
+  if (blockTop + blockHeight + 40 > doc.page.height - doc.page.margins.bottom) {
+    doc.addPage();
+    blockTop = doc.page.margins.top;
+  }
+
+  doc.roundedRect(left, blockTop, contentWidth, blockHeight, 10).lineWidth(0.8).strokeColor(line).stroke();
+
+  if (verificationUrl) {
+    const qrBuffer = await QRCode.toBuffer(verificationUrl, {
+      errorCorrectionLevel: "M",
+      margin: 1,
+      width: 300,
+      color: { dark: green, light: "#ffffff" },
+    });
+    doc.image(qrBuffer, left + 12, blockTop + 10, { width: 98, height: 98 });
+  }
+
+  const textX = left + 124;
+  const textWidth = contentWidth - 136;
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(10)
+    .fillColor(green)
+    .text("Autenticidade do documento", textX, blockTop + 12, { width: textWidth });
+  doc
+    .font("Helvetica")
+    .fontSize(8.5)
+    .fillColor("#374151")
+    .text(
+      verificationUrl
+        ? "Leia o QR Code ou acesse o endereço abaixo para conferir este recibo na base do SIS Amazonika."
+        : "Recibo emitido eletronicamente pelo SIS Amazonika.",
+      textX,
+      doc.y + 3,
+      { width: textWidth }
+    );
+  if (verificationUrl && verificationHash) {
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(9)
+      .fillColor("#111827")
+      .text(`Código de verificação: ${shortVerificationCode(verificationHash)}`, textX, doc.y + 4, {
+        width: textWidth,
+      });
+    doc
+      .font("Helvetica")
+      .fontSize(7)
+      .fillColor(muted)
+      .text(verificationUrl, textX, doc.y + 2, { width: textWidth, link: verificationUrl });
+  }
+  doc
+    .font("Helvetica")
+    .fontSize(8)
+    .fillColor(signer ? accent : muted)
+    .text(
+      signer
+        ? `Assinado digitalmente por ${signer.subjectName} com certificado ICP-Brasil (e-CNPJ). Valide em validar.iti.gov.br.`
+        : "Documento sem assinatura digital.",
+      textX,
+      doc.y + 5,
+      { width: textWidth }
+    );
+
+  /* ---------- Local, data e rodapé ---------- */
+  doc
+    .font("Helvetica")
+    .fontSize(10)
+    .fillColor("#111827")
+    .text(
+      `${company.companyCity || "Macapá"}/${company.companyState || "AP"}, ${dateOnly(issuedAt)}.`,
+      left,
+      blockTop + blockHeight + 16,
+      { width: contentWidth, align: "right" }
+    );
+
+  const footerY = doc.page.height - doc.page.margins.bottom - 14;
+  doc
+    .font("Helvetica")
+    .fontSize(7.5)
+    .fillColor(muted)
+    .text(
+      company.companyFooterText ||
+        "Recibo gerado eletronicamente pelo SIS Amazonika após a confirmação do pagamento.",
+      left,
+      footerY,
+      { width: contentWidth, align: "center", lineBreak: false }
+    );
+  doc.rect(0, doc.page.height - 6, pageWidth, 6).fill(green);
+
   doc.end();
+  const pdfBuffer = await finished;
 
-  await new Promise<void>(
-    (resolve, reject) => {
-      stream.on(
-        "finish",
-        () => resolve()
-      );
+  const signedResult = await signPdfBuffer(pdfBuffer, {
+    reason: `Recibo de pagamento ${receiptNumber}`,
+    location: `${company.companyCity || "Macapá"}/${company.companyState || "AP"}`,
+    contactInfo: company.companyEmail || "",
+  });
 
-      stream.on(
-        "error",
-        reject
-      );
-    }
-  );
+  fs.writeFileSync(filePath, signedResult.buffer);
 
   return {
     fileName,
     filePath,
     publicPath,
+    signed: signedResult.signed,
   };
 }
 
@@ -25913,6 +26091,57 @@ app.post("/public/proposals/:token/refuse", async (req, res) => {
 // ------------------------------------------------------
 // COBRANÇAS / BOLETO PIX / DOCUMENTOS FISCAIS
 // ------------------------------------------------------
+
+/*
+ * Conferência pública de recibo (QR Code do PDF).
+ * Mostra só o necessário para provar a autenticidade;
+ * o documento do pagador aparece mascarado.
+ */
+app.get("/public/receipts/:hash", async (req, res) => {
+  try {
+    const hash = String(req.params.hash || "").trim().toLowerCase();
+
+    if (!/^[a-f0-9]{64}$/.test(hash)) {
+      return res.status(400).json({ message: "Código de verificação inválido." });
+    }
+
+    const charge = await prisma.billingCharge.findFirst({
+      where: { verificationHash: hash },
+      include: {
+        client: { select: { name: true, cpfCnpj: true } },
+        financialTransaction: {
+          select: { id: true, description: true, status: true, amountCents: true, paidAt: true },
+        },
+      },
+    });
+
+    if (!charge || !charge.financialTransaction) {
+      return res.status(404).json({ message: "Recibo não encontrado." });
+    }
+
+    const company = await getCompanySettings();
+    const paid = charge.status === "PAGA" && charge.financialTransaction.status === "PAGO";
+
+    return res.json({
+      valid: paid,
+      status: paid ? "PAGO" : charge.status,
+      receiptNumber: `REC-FIN-${String(charge.financialTransaction.id).padStart(6, "0")}`,
+      verificationCode: shortVerificationCode(hash),
+      description: charge.financialTransaction.description || charge.description,
+      payerName: charge.client?.name || null,
+      payerDocument: maskCpfCnpj(charge.client?.cpfCnpj),
+      amountCents: charge.paidAmountCents ?? charge.financialTransaction.amountCents ?? charge.amountCents,
+      paidAt: charge.paidAt || charge.financialTransaction.paidAt,
+      txid: charge.txid,
+      endToEndId: bbEndToEndIdFromRaw(charge.rawResponse),
+      issuerName: company.companyLegalName || company.companyName,
+      issuerCnpj: formatCpfCnpj(company.companyCnpj),
+    });
+  } catch (error) {
+    console.error("Erro na conferência pública do recibo:", error);
+    return res.status(500).json({ message: "Erro ao conferir o recibo." });
+  }
+});
 
 /*
  * Situação "ao vivo" da cobrança para a página pública.

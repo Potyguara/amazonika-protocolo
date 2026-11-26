@@ -60,8 +60,12 @@ git fetch -q origin "$BRANCH"
 git checkout -q -f -B "$BRANCH" FETCH_HEAD
 git log --oneline -1
 
-echo "== 3. Migration e build do backend"
+echo "== 3. Dependências, migration e build do backend"
 cd backend
+if ! git diff --quiet "$EXPECTED_HEAD" HEAD -- package.json package-lock.json; then
+  echo "Dependências do backend mudaram: npm install"
+  npm install --no-audit --no-fund
+fi
 npx prisma migrate deploy
 npx prisma generate
 npx tsc -p .
