@@ -109,6 +109,46 @@ function PublicBillingChargePage() {
     loadCharge();
   }, [token]);
 
+  /*
+   * Com a página aberta, acompanha o pagamento a cada 10 s
+   * e troca para "Pagamento confirmado" assim que o BB confirmar.
+   */
+  const chargeIsOpen = Boolean(
+    charge &&
+      ["EMITIDA", "ENVIADA", "VENCIDA"].includes(charge.status) &&
+      charge.pixCopyPaste
+  );
+
+  useEffect(() => {
+    if (!token || !chargeIsOpen || /^\d+$/.test(token)) return;
+
+    let stopped = false;
+
+    const timer = window.setInterval(async () => {
+      try {
+        const live = (await api.publicBillingChargeStatus(token)) as {
+          status?: string;
+        };
+
+        if (!stopped && live?.status === "PAGA") {
+          stopped = true;
+          window.clearInterval(timer);
+          const fresh = (await api.publicBillingCharge(
+            token
+          )) as BackendBillingCharge;
+          setCharge(fresh);
+        }
+      } catch {
+        // Sem rede ou BB indisponível: tenta de novo no próximo ciclo.
+      }
+    }, 10000);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [token, chargeIsOpen]);
+
   async function copyPixCode() {
     try {
       if (!charge?.pixCopyPaste) {
@@ -244,9 +284,26 @@ function PublicBillingChargePage() {
             {error && <div className="panel error-panel">{error}</div>}
 
             {isPaid ? (
-              <div className="success-panel">
-                Pagamento confirmado. A equipe técnica já foi liberada para
-                mobilização e execução dos serviços.
+              <div className="public-payment-confirmed">
+                <div className="public-payment-confirmed-icon" aria-hidden="true">
+                  ✓
+                </div>
+                <h3>Pagamento confirmado</h3>
+                <p>
+                  Recebemos {formatOptionalMoneyCents(charge.paidAmountCents)}
+                  {charge.paidAt
+                    ? ` em ${new Date(charge.paidAt).toLocaleString("pt-BR", {
+                        dateStyle: "short",
+                        timeStyle: "short",
+                      })}`
+                    : ""}
+                  . Obrigado!
+                </p>
+                <p>
+                  {charge.fiscalMode === "RECIBO_POSTERIOR"
+                    ? "O recibo de pagamento foi enviado para o seu e-mail."
+                    : "A confirmação foi enviada para o seu e-mail."}
+                </p>
               </div>
             ) : (
               <>

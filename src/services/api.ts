@@ -2049,6 +2049,10 @@ publicBillingCharge(identifier: string | number) {
   return request(`/public/billing-charges/${identifier}`);
 },
 
+publicBillingChargeStatus(token: string) {
+  return request(`/public/billing-charges/${token}/status`);
+},
+
 issueBbPixPayment(paymentId: number) {
   return request(`/payments/${paymentId}/issue-bb-pix`, {
     method: "POST",

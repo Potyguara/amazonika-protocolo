@@ -25914,6 +25914,94 @@ app.post("/public/proposals/:token/refuse", async (req, res) => {
 // COBRANÇAS / BOLETO PIX / DOCUMENTOS FISCAIS
 // ------------------------------------------------------
 
+/*
+ * Situação "ao vivo" da cobrança para a página pública.
+ * Só aceita o token público (nunca o id numérico). Com a página
+ * aberta, consulta o BB no máximo a cada 15 s por cobrança e dá a
+ * baixa automática assim que o Pix for pago.
+ */
+const publicChargeLastBbCheck = new Map<number, number>();
+
+app.get("/public/billing-charges/:token/status", async (req, res) => {
+  try {
+    const token = String(req.params.token || "").trim();
+
+    if (!token || /^\d+$/.test(token)) {
+      return res.status(400).json({ message: "Identificador inválido." });
+    }
+
+    let charge = await prisma.billingCharge.findFirst({
+      where: { publicToken: token },
+      select: {
+        id: true,
+        status: true,
+        provider: true,
+        txid: true,
+        financialTransactionId: true,
+        paidAt: true,
+        paidAmountCents: true,
+      },
+    });
+
+    if (!charge) {
+      return res.status(404).json({ message: "Cobrança não encontrada." });
+    }
+
+    const open = ["EMITIDA", "ENVIADA", "VENCIDA"].includes(charge.status);
+    const last = publicChargeLastBbCheck.get(charge.id) || 0;
+
+    if (
+      open &&
+      charge.provider === "BANCO_DO_BRASIL" &&
+      charge.txid &&
+      charge.financialTransactionId &&
+      Date.now() - last > 15000
+    ) {
+      publicChargeLastBbCheck.set(charge.id, Date.now());
+
+      const fake: any = {
+        statusCode: 200,
+        body: null,
+        status(code: number) { this.statusCode = code; return this; },
+        json(payload: any) { this.body = payload; return this; },
+      };
+
+      await reconcileBbBillingChargeHandler(
+        {
+          params: { id: String(charge.id) },
+          user: { id: null, name: "PAGINA_PUBLICA", email: null, role: "SYSTEM" },
+          ip: req.ip,
+        } as any,
+        fake
+      );
+
+      if (fake.body?.reconciled) {
+        charge = await prisma.billingCharge.findUnique({
+          where: { id: charge.id },
+          select: {
+            id: true,
+            status: true,
+            provider: true,
+            txid: true,
+            financialTransactionId: true,
+            paidAt: true,
+            paidAmountCents: true,
+          },
+        });
+      }
+    }
+
+    return res.json({
+      status: charge?.status,
+      paidAt: charge?.paidAt || null,
+      paidAmountCents: charge?.paidAmountCents ?? null,
+    });
+  } catch (error) {
+    console.error("Erro ao consultar situação pública da cobrança:", error);
+    return res.status(500).json({ message: "Erro ao consultar a cobrança." });
+  }
+});
+
 app.get("/public/billing-charges/:identifier", async (req, res) => {
   try {
     const identifier = String(req.params.identifier || "").trim();
@@ -30568,7 +30656,7 @@ let lastFinanceBbReconcileAt = 0;
 async function processFinanceBbReconciliation(options: { force?: boolean } = {}) {
   const intervalMinutes = Math.max(
     5,
-    Number(process.env.BB_RECONCILE_INTERVAL_MINUTES || 30) || 30
+    Number(process.env.BB_RECONCILE_INTERVAL_MINUTES || 10) || 10
   );
   const nowMs = Date.now();
 
