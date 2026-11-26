@@ -10977,6 +10977,17 @@ function isFinanceTransactionConsolidated(item: BackendFinanceTransaction) {
     item.billingCharge?.paidAt != null;
 }
 
+/** Pix cancelado e removido no BB: pode receber baixa manual (pago por fora). */
+function isBankChargeRemoved(item: BackendFinanceTransaction) {
+  const charge: any = item.billingCharge;
+  return Boolean(
+    charge &&
+      charge.status === "CANCELADA" &&
+      !charge.paidAt &&
+      String(item.chargeStatus || "").toUpperCase() === "REMOVIDA_PELO_USUARIO_RECEBEDOR"
+  );
+}
+
 function isFinanceTransactionProtected(item: BackendFinanceTransaction) {
   return item.status === "CANCELADO" ||
     isFinanceTransactionConsolidated(item) || Boolean(item.billingCharge) ||
@@ -13449,7 +13460,7 @@ async function handleSaveTransaction() {
   }
 
   async function handlePayTransaction(item: BackendFinanceTransaction) {
-    if (isFinanceTransactionProtected(item) || item.status === "CANCELADO") {
+    if ((isFinanceTransactionProtected(item) && !isBankChargeRemoved(item)) || item.status === "CANCELADO") {
       setError("Este lançamento não permite baixa administrativa.");
       return;
     }
@@ -17471,7 +17482,8 @@ async function handleDeleteSalary(id: number) {
                             </button>
                           )}
 
-                          {!isFinanceTransactionProtected(item) &&
+                          {(!isFinanceTransactionProtected(item) ||
+                            isBankChargeRemoved(item)) &&
                             item.status === "PENDENTE" && (
                               <button
                                 className="mini-button"

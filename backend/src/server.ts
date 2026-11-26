@@ -19098,8 +19098,19 @@ function financeMutationHandler(operation: "UPDATE" | "PAY" | "CANCEL" | "DELETE
          * pela conciliação/webhook correspondente, preservando a
          * origem bancária do pagamento.
          */
+        /*
+         * Exceção: Pix cancelado e removido no BB (cliente pagou por
+         * fora). Sem cobrança viva, a baixa administrativa é permitida.
+         */
+        const bankChargeRemoved =
+          current.billingCharge?.status === "CANCELADA" &&
+          !current.billingCharge?.paidAt &&
+          String(current.chargeStatus || "").toUpperCase() ===
+            "REMOVIDA_PELO_USUARIO_RECEBEDOR";
+
         if (
           operation === "PAY" &&
+          !bankChargeRemoved &&
           (
             current.billingCharge ||
             hasFinanceBankEvidence(current)
@@ -19126,7 +19137,8 @@ function financeMutationHandler(operation: "UPDATE" | "PAY" | "CANCEL" | "DELETE
           return conflict("FINANCIAL_PAYMENT_PLAN_LOCKED",
             "Este lançamento pertence a um plano. Alterações da composição deverão ocorrer pelo fluxo de reprogramação financeira, que será disponibilizado posteriormente.");
         }
-        if (current.billingCharge && (operation !== "UPDATE" || !notesOnly)) {
+        if (current.billingCharge && (operation !== "UPDATE" || !notesOnly) &&
+            !(operation === "PAY" && bankChargeRemoved)) {
           return conflict("BILLING_TRANSACTION_LOCKED",
             "Este lançamento possui cobrança vinculada. Utilize o fluxo de Cobranças para preservar a conciliação financeira.");
         }
@@ -19143,7 +19155,8 @@ function financeMutationHandler(operation: "UPDATE" | "PAY" | "CANCEL" | "DELETE
           // Repetir a baixa não altera datas nem gera outro evento de auditoria.
           return { status: 200, body: current };
         }
-        if (hasFinanceBankEvidence(current) && (operation !== "UPDATE" || !notesOnly)) {
+        if (hasFinanceBankEvidence(current) && (operation !== "UPDATE" || !notesOnly) &&
+            !(operation === "PAY" && bankChargeRemoved)) {
           return conflict("FINANCIAL_TRANSACTION_BANK_LOCKED",
             "Existem dados de cobrança bancária. Concilie a cobrança antes de alterar este lançamento.");
         }
