@@ -1282,6 +1282,8 @@ model FinancialTransaction {
   emailNotificationEnabled Boolean   @default(true)
   lastNotificationAt       DateTime?
   notificationCount        Int       @default(0)
+  // Avisos de atraso enviados desde o último vencimento (zera ao reprogramar).
+  overdueNotificationCount Int       @default(0)
 
   // Último webhook válido recebido.
   webhookLastReceivedAt DateTime?

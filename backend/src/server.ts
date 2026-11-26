@@ -11714,7 +11714,7 @@ async function processFinanceClientWhatsAppNotices() {
       dueDate: { not: null },
       billingCharge: { is: { status: { in: ["EMITIDA", "ENVIADA", "VENCIDA"] }, txid: { not: null } } },
     },
-    select: { id: true, dueDate: true, lastNotificationAt: true, notificationCount: true },
+    select: { id: true, dueDate: true, lastNotificationAt: true, notificationCount: true, overdueNotificationCount: true },
   });
 
   let sent = 0;
@@ -11725,7 +11725,7 @@ async function processFinanceClientWhatsAppNotices() {
       today,
       dueDate: transaction.dueDate!,
       lastNotificationAt: transaction.lastNotificationAt,
-      notificationCount: transaction.notificationCount || 0,
+      notificationCount: transaction.overdueNotificationCount || 0,
       settings,
     });
 
@@ -15282,8 +15282,9 @@ async function processFinanceAutoChargeEmailNotices() {
             transaction.dueDate,
           lastNotificationAt:
             transaction.lastNotificationAt,
+          // O limite vale só para avisos de atraso.
           notificationCount:
-            transaction.notificationCount || 0,
+            transaction.overdueNotificationCount || 0,
           settings,
         });
 
@@ -15402,6 +15403,10 @@ async function processFinanceAutoChargeEmailNotices() {
             increment:
               1,
           },
+          ...(noticeType === "AVISO_APOS_VENCIMENTO" ||
+          noticeType === "REPETICAO_AVISO_ATRASO"
+            ? { overdueNotificationCount: { increment: 1 } }
+            : {}),
         },
       });
 
@@ -19667,6 +19672,13 @@ app.patch(
                     financeCompetenceFromDate(
                       newDueDate
                     ),
+
+                  // Novo vencimento recomeça o ciclo de avisos.
+                  lastNotificationAt:
+                    null,
+
+                  overdueNotificationCount:
+                    0,
                 },
 
                 include: {
