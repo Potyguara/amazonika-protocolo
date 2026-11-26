@@ -2615,6 +2615,18 @@ whatsappStatus() {
   return request("/whatsapp/status");
 },
 
+whatsappConnect() {
+  return request("/whatsapp/connect", { method: "POST" });
+},
+
+whatsappQr() {
+  return request("/whatsapp/qr");
+},
+
+whatsappLogout() {
+  return request("/whatsapp/logout", { method: "POST" });
+},
+
 sendWhatsappTest() {
   return request("/whatsapp/test", { method: "POST" });
 },

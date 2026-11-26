@@ -436,3 +436,29 @@
   min-height: 0;
   margin: 0;
 }
+
+.demands-wa-connect {
+  display: flex;
+  gap: 9px;
+}
+
+.demands-wa-qr {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.demands-wa-qr img {
+  width: 230px;
+  height: 230px;
+  image-rendering: pixelated;
+  border: 1px solid #e2eae6;
+  border-radius: 12px;
+  background: #fff;
+}
+
+@media (max-width: 760px) {
+  .demands-wa-qr {
+    flex-direction: column;
+  }
+}

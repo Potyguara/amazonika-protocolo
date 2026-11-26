@@ -36,9 +36,12 @@ DATABASE_TYPE=sqlite
 STORAGE_TYPE=local
 LOG_LEVEL=info
 WEBHOOK_SSRF_PROTECT=true
+AUTO_START_SESSIONS=true
 EOF
   chmod 600 .env
 fi
+# Religa a sessão do WhatsApp sozinho depois de reiniciar a VPS/container.
+grep -q '^AUTO_START_SESSIONS=' .env || echo 'AUTO_START_SESSIONS=true' >> .env
 
 USE_IMAGE=1
 if ! docker pull -q "$IMAGE" >/dev/null 2>&1; then
@@ -105,18 +108,7 @@ set_env OPENWA_API_KEY "$KEY"
 set_env OPENWA_SESSION "$SESSION"
 unset KEY
 
-echo "== 5. Criando a sessão \"$SESSION\" no OpenWA"
-APIKEY=$(grep '^OPENWA_API_KEY=' "$ENVF" | cut -d= -f2-)
-curl -sS -m 15 -o /dev/null -w "    criar sessão: HTTP %{http_code}\n" \
-  -X POST http://127.0.0.1:2785/api/sessions \
-  -H "X-API-Key: $APIKEY" -H "Content-Type: application/json" \
-  -d "{\"name\":\"$SESSION\"}" || true
-curl -sS -m 15 -o /dev/null -w "    iniciar sessão: HTTP %{http_code}\n" \
-  -X POST "http://127.0.0.1:2785/api/sessions/$SESSION/start" \
-  -H "X-API-Key: $APIKEY" || true
-unset APIKEY
-
-echo "== 6. Reiniciando a API do SIS"
+echo "== 5. Reiniciando a API do SIS"
 pm2 restart sis-amazonika-api --update-env >/dev/null
 sleep 3
 pm2 status sis-amazonika-api | grep sis-amazonika-api || true
@@ -124,11 +116,7 @@ pm2 status sis-amazonika-api | grep sis-amazonika-api || true
 cat <<'EOF'
 
 PRONTO. Falta ler o QR Code com o WhatsApp da empresa:
-  1. No seu PC (PowerShell), abra um túnel e deixe a janela aberta:
-       ssh -L 2785:127.0.0.1:2785 root@2.24.125.171
-  2. No navegador do PC, abra  http://localhost:2785
-     Se pedir chave de acesso, rode na VPS:  docker exec openwa-api cat /app/data/.api-key
-     (copie e cole direto no navegador; não envie no chat)
-  3. Abra a sessão "sis" e leia o QR Code em WhatsApp > Aparelhos conectados.
-  4. No SIS: Demandas > WhatsApp > cadastre seu número e clique em "Enviar teste para mim".
+  No SIS: Demandas > WhatsApp > "Conectar WhatsApp". O QR Code aparece na tela;
+  leia com o celular em WhatsApp > Aparelhos conectados. Depois clique em
+  "Enviar teste para mim".
 EOF

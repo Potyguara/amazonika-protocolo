@@ -11,6 +11,9 @@ import {
   normalizeWhatsAppPhone,
   sendWhatsAppText,
   whatsappConfig,
+  whatsappConnect,
+  whatsappLogout,
+  whatsappQrCode,
   whatsappSessionStatus,
 } from "../../services/whatsappService";
 
@@ -730,6 +733,31 @@ export function registerDemandRoutes({ app, prisma, authMiddleware, requireRoles
     });
 
     return res.json({ ...status, recent: last });
+  });
+
+  /** Conectar o número: cria/inicia a sessão no OpenWA. */
+  app.post("/whatsapp/connect", ...managers, async (_req: any, res: any) => {
+    try {
+      return res.json(await whatsappConnect());
+    } catch (error: any) {
+      return res.status(400).json({ message: error?.message || "Não foi possível conectar." });
+    }
+  });
+
+  app.get("/whatsapp/qr", ...managers, async (_req: any, res: any) => {
+    try {
+      return res.json(await whatsappQrCode());
+    } catch (error: any) {
+      return res.status(400).json({ message: error?.message || "Não foi possível obter o QR Code." });
+    }
+  });
+
+  app.post("/whatsapp/logout", ...managers, async (_req: any, res: any) => {
+    try {
+      return res.json(await whatsappLogout());
+    } catch (error: any) {
+      return res.status(400).json({ message: error?.message || "Não foi possível desconectar." });
+    }
   });
 
   /** Envia uma mensagem de teste para o WhatsApp do próprio usuário. */

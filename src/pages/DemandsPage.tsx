@@ -717,18 +717,7 @@ function WhatsappPanel({
 
         {isManager && (
           <>
-            <div className="full demands-wa-status">
-              <strong>Conexão do OpenWA</strong>
-              {!status ? (
-                <span>Consultando...</span>
-              ) : status.error ? (
-                <span className="late">{status.error}</span>
-              ) : (
-                <span>
-                  Sessão "{status.session}": {status.status}
-                </span>
-              )}
-            </div>
+            <WhatsappConnection />
 
             <div className="full demands-wa-people">
               <strong>Equipe</strong>
@@ -779,6 +768,145 @@ function WhatsappPanel({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+const WA_STATUS_LABEL: Record<string, string> = {
+  ready: "Conectado",
+  qr_ready: "Aguardando leitura do QR Code",
+  initializing: "Iniciando...",
+  authenticating: "Autenticando...",
+  created: "Criada, não iniciada",
+  disconnected: "Desconectado",
+  action_required: "Ação necessária no celular",
+  failed: "Falhou",
+  sem_sessao: "Ainda não conectado",
+};
+
+function WhatsappConnection() {
+  const [status, setStatus] = useState<any>(null);
+  const [qr, setQr] = useState<string | null>(null);
+  const [note, setNote] = useState("");
+  const [connecting, setConnecting] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function refreshStatus() {
+    try {
+      setStatus(await api.whatsappStatus());
+    } catch (err) {
+      setStatus({ error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  useEffect(() => {
+    refreshStatus();
+  }, []);
+
+  // Enquanto conecta, busca o QR a cada 3 s até o status virar "ready".
+  useEffect(() => {
+    if (!connecting) return;
+    let stopped = false;
+
+    async function tick() {
+      try {
+        const data: any = await api.whatsappQr();
+        if (stopped) return;
+        if (data.status === "ready") {
+          setQr(null);
+          setNote(`WhatsApp conectado${data.phone ? ` (${data.phone})` : ""}.`);
+          setConnecting(false);
+          refreshStatus();
+          return;
+        }
+        setQr(data.qrCode || null);
+        setNote(data.qrCode ? "" : data.message || WA_STATUS_LABEL[data.status] || data.status);
+      } catch (err) {
+        if (!stopped) setNote(err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    tick();
+    const timer = window.setInterval(tick, 3000);
+    const timeout = window.setTimeout(() => {
+      setConnecting(false);
+      setQr(null);
+      setNote("Tempo esgotado. Clique em Conectar WhatsApp de novo.");
+    }, 4 * 60 * 1000);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      window.clearTimeout(timeout);
+    };
+  }, [connecting]);
+
+  async function connect() {
+    try {
+      setBusy(true);
+      setNote("Iniciando a sessão...");
+      await api.whatsappConnect();
+      setConnecting(true);
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function logout() {
+    if (!window.confirm("Desconectar o WhatsApp atual? Os alertas param até você ler o QR Code de novo.")) return;
+    try {
+      setBusy(true);
+      await api.whatsappLogout();
+      setNote("WhatsApp desconectado.");
+      await refreshStatus();
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const ready = status?.status === "ready";
+
+  return (
+    <div className="full demands-wa-status">
+      <strong>Conexão do WhatsApp (OpenWA)</strong>
+      {!status ? (
+        <span>Consultando...</span>
+      ) : status.error && !status.status ? (
+        <span className="late">{status.error}</span>
+      ) : (
+        <span className={ready ? "ok" : "late"}>
+          {WA_STATUS_LABEL[status.status] || status.status}
+          {ready && status.phone ? ` — ${status.phone}` : ""}
+        </span>
+      )}
+
+      <div className="demands-wa-connect">
+        {!ready && (
+          <button type="button" className="button primary" disabled={busy || connecting} onClick={connect}>
+            {connecting ? "Aguardando leitura..." : "Conectar WhatsApp"}
+          </button>
+        )}
+        {ready && (
+          <button type="button" className="button secondary" disabled={busy} onClick={logout}>
+            Desconectar / trocar número
+          </button>
+        )}
+      </div>
+
+      {qr && (
+        <div className="demands-wa-qr">
+          <img src={qr.startsWith("data:") ? qr : `data:image/png;base64,${qr}`} alt="QR Code do WhatsApp" />
+          <span>
+            No celular da empresa: WhatsApp &gt; Configurações &gt; Aparelhos conectados &gt; Conectar um aparelho, e
+            aponte para este código.
+          </span>
+        </div>
+      )}
+      {note && <span>{note}</span>}
     </div>
   );
 }

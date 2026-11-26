@@ -93,14 +93,20 @@ export async function sendWhatsAppText(
   }
 
   try {
-    const response = await axios.post(
-      `${config.baseUrl}/api/sessions/${encodeURIComponent(config.session)}/messages/send-text`,
-      { chatId: whatsappChatId(normalized), text },
-      {
-        headers: { "X-API-Key": config.apiKey },
-        timeout: 20000,
+    const response = await withSessionId(false, async (sessionId) => {
+      if (!sessionId) {
+        throw new Error(`Sessão "${config.session}" não existe no OpenWA. Conecte o WhatsApp em Demandas > WhatsApp.`);
       }
-    );
+
+      return axios.post(
+        `${config.baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/messages/send-text`,
+        { chatId: whatsappChatId(normalized), text },
+        {
+          headers: { "X-API-Key": config.apiKey },
+          timeout: 20000,
+        }
+      );
+    });
 
     const data = response.data || {};
     const messageId =
@@ -121,6 +127,144 @@ export async function sendWhatsAppText(
   }
 }
 
+/*
+ * O OpenWA identifica a sessão pelo id (UUID), não pelo nome.
+ * O SIS guarda só o nome (OPENWA_SESSION) e descobre o id.
+ */
+let cachedSessionId: { name: string; id: string } | null = null;
+
+function openwa() {
+  const config = whatsappConfig();
+  return {
+    config,
+    http: axios.create({
+      baseURL: `${config.baseUrl}/api`,
+      headers: { "X-API-Key": config.apiKey || "" },
+      timeout: 15000,
+    }),
+  };
+}
+
+function unwrap(data: any) {
+  return data && typeof data === "object" && "data" in data && !Array.isArray(data) ? data.data : data;
+}
+
+function openwaError(error: any) {
+  const detail = error?.response?.data?.message || error?.response?.data?.error || error?.message || String(error);
+  return Array.isArray(detail) ? detail.join("; ") : String(detail);
+}
+
+async function resolveSessionId(create: boolean): Promise<string | null> {
+  const { config, http } = openwa();
+
+  if (cachedSessionId?.name === config.session) return cachedSessionId.id;
+
+  const response = await http.get("/sessions", { params: { name: config.session } });
+  const list = unwrap(response.data);
+  const found = (Array.isArray(list) ? list : []).find((item: any) => item?.name === config.session);
+
+  if (found?.id) {
+    cachedSessionId = { name: config.session, id: String(found.id) };
+    return cachedSessionId.id;
+  }
+
+  if (!create) return null;
+
+  const created = unwrap((await http.post("/sessions", { name: config.session })).data);
+  if (!created?.id) throw new Error("O OpenWA não devolveu o id da sessão criada.");
+
+  cachedSessionId = { name: config.session, id: String(created.id) };
+  return cachedSessionId.id;
+}
+
+function isNotFound(error: any) {
+  return error?.response?.status === 404;
+}
+
+/** Roda fn com o id da sessão; se o OpenWA não achar (id velho), redescobre e tenta de novo. */
+async function withSessionId<T>(create: boolean, fn: (id: string | null) => Promise<T>): Promise<T> {
+  try {
+    return await fn(await resolveSessionId(create));
+  } catch (error: any) {
+    if (!isNotFound(error) || !cachedSessionId) throw error;
+    cachedSessionId = null;
+    return fn(await resolveSessionId(create));
+  }
+}
+
+function requireConfigured() {
+  const config = whatsappConfig();
+  if (!config.enabled) throw new Error("WhatsApp desativado (WHATSAPP_ENABLED=false no servidor).");
+  if (!config.apiKey) throw new Error("OPENWA_API_KEY não configurada no servidor.");
+  return config;
+}
+
+/** Cria a sessão se faltar e inicia o motor (gera o QR Code). */
+export async function whatsappConnect() {
+  requireConfigured();
+  const { http } = openwa();
+
+  try {
+    return await withSessionId(true, async (id) => {
+      const session = unwrap((await http.get(`/sessions/${id}`)).data);
+
+      if (session?.status !== "ready") {
+        try {
+          await http.post(`/sessions/${id}/start`);
+        } catch (error: any) {
+          // 400 = já iniciada: segue para o QR.
+          if (error?.response?.status !== 400) throw error;
+        }
+      }
+
+      const fresh = unwrap((await http.get(`/sessions/${id}`)).data);
+      return { status: String(fresh?.status || "desconhecido"), phone: (fresh?.phone as string) || null };
+    });
+  } catch (error: any) {
+    throw new Error(`OpenWA: ${openwaError(error)}`);
+  }
+}
+
+/** QR Code atual (data URL) ou o motivo de não haver um. */
+export async function whatsappQrCode() {
+  requireConfigured();
+  const { http } = openwa();
+
+  return withSessionId(false, async (id) => {
+    if (!id) return { qrCode: null, status: "sem_sessao", message: "Clique em Conectar WhatsApp." };
+
+    const session = unwrap((await http.get(`/sessions/${id}`)).data);
+
+    if (session?.status === "ready") {
+      return { qrCode: null, status: "ready", phone: session.phone || null, message: "WhatsApp conectado." };
+    }
+
+    try {
+      const data = unwrap((await http.get(`/sessions/${id}/qr`)).data);
+      const raw = String(data?.qrCode || "");
+      return { qrCode: raw || null, status: String(data?.status || session?.status), message: null };
+    } catch (error: any) {
+      if (isNotFound(error)) throw error;
+      return { qrCode: null, status: String(session?.status || "desconhecido"), message: openwaError(error) };
+    }
+  });
+}
+
+/** Desliga o número atual (para trocar de chip). */
+export async function whatsappLogout() {
+  requireConfigured();
+  const { http } = openwa();
+  try {
+    return await withSessionId(false, async (id) => {
+      if (!id) return { status: "sem_sessao" };
+      const data = unwrap((await http.post(`/sessions/${id}/logout`)).data);
+      return { status: String(data?.status || "disconnected") };
+    });
+  } catch (error: any) {
+    throw new Error(`OpenWA: ${openwaError(error)}`);
+  }
+}
+
 /** Estado da sessão no OpenWA, para a tela de configuração. */
 export async function whatsappSessionStatus() {
   const config = whatsappConfig();
@@ -131,23 +275,35 @@ export async function whatsappSessionStatus() {
       enabled: config.enabled,
       session: config.session,
       status: null as string | null,
+      phone: null as string | null,
       error: !config.enabled ? "WhatsApp desativado." : "OPENWA_API_KEY não configurada.",
     };
   }
 
   try {
-    const response = await axios.get(
-      `${config.baseUrl}/api/sessions/${encodeURIComponent(config.session)}`,
-      { headers: { "X-API-Key": config.apiKey }, timeout: 10000 }
+    const { http } = openwa();
+    const data = await withSessionId(false, async (id) =>
+      id ? unwrap((await http.get(`/sessions/${id}`)).data) || {} : null
     );
-    const data = response.data?.data || response.data || {};
+
+    if (!data) {
+      return {
+        configured: true,
+        enabled: true,
+        session: config.session,
+        status: "sem_sessao",
+        phone: null as string | null,
+        error: null as string | null,
+      };
+    }
 
     return {
       configured: true,
       enabled: true,
       session: config.session,
-      status: String(data.status || data.state || "desconhecido"),
-      error: null as string | null,
+      status: String(data.status || "desconhecido"),
+      phone: (data.phone as string) || null,
+      error: (data.lastError as string) || null,
     };
   } catch (error: any) {
     return {
@@ -155,10 +311,8 @@ export async function whatsappSessionStatus() {
       enabled: true,
       session: config.session,
       status: null as string | null,
-      error:
-        error?.response?.status === 404
-          ? `Sessão "${config.session}" não existe no OpenWA.`
-          : `OpenWA inacessível: ${error?.message || error}`,
+      phone: null as string | null,
+      error: `OpenWA inacessível: ${openwaError(error)}`,
     };
   }
 }
