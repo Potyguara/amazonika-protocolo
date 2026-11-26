@@ -229,6 +229,15 @@ class CadesSigner extends Signer {
   }
 }
 
+function pdfAscii(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7e]/g, "?")
+    .replace(/[()\\]/g, " ")
+    .trim();
+}
+
 /** Nome do titular do certificado, para exibir no documento (ou null). */
 export function pdfSignerInfo(): { subjectName: string; validUntil: Date } | null {
   try {
@@ -258,12 +267,14 @@ export async function signPdfBuffer(
       return { buffer: pdfBuffer, signed: false, error: "Certificado vencido." };
     }
 
+    // O placeholder grava acentos com codificação quebrada (BOM UTF-16
+    // dentro de bytes UTF-8), e o validador do ITI rejeita o arquivo.
     const withPlaceholder = plainAddPlaceholder({
       pdfBuffer,
-      reason: info.reason,
-      location: info.location,
-      contactInfo: info.contactInfo || "",
-      name: material.subjectName,
+      reason: pdfAscii(info.reason),
+      location: pdfAscii(info.location),
+      contactInfo: pdfAscii(info.contactInfo || ""),
+      name: pdfAscii(material.subjectName),
       signatureLength: 16384,
       subFilter: SUBFILTER_ETSI_CADES_DETACHED,
     });
