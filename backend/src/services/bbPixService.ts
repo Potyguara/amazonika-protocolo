@@ -224,6 +224,13 @@ export async function checkBbPixConnection() {
     result.pixApi = "ok";
     result.pixApiStatus = response.status;
   } catch (error: any) {
+    // 404 "NaoEncontrado" = conexão ok, apenas nenhuma cobrança no período.
+    if (error?.response?.status === 404) {
+      result.pixApi = "ok";
+      result.pixApiStatus = 404;
+      result.pixApiNote = "Nenhuma cobrança nas últimas 24h.";
+      return result;
+    }
     result.pixApi = "erro";
     result.pixApiStatus = error?.response?.status || null;
     result.pixApiError = error?.response?.data || error?.message || String(error);

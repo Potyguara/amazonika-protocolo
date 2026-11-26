@@ -10,7 +10,7 @@ set -euo pipefail
 APP=/var/www/sis-amazonika
 BRANCH=claude/project-thread-84d44r
 # Versão que deve estar no ar antes de atualizar (deploy anterior).
-EXPECTED_HEAD=${EXPECTED_HEAD:-6ec38f9}
+EXPECTED_HEAD=${EXPECTED_HEAD:-b7c6de8}
 TS=$(date +%Y%m%d-%H%M%S)
 B=/root/sis-backups/$TS
 
