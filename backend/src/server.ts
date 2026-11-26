@@ -15138,6 +15138,15 @@ async function processFinanceSchedulerTick() {
       null,
   };
 
+  try {
+    result.reconciliation =
+      await processFinanceBbReconciliation();
+  } catch (error: any) {
+    result.reconciliation = {
+      executed: false,
+      error: error?.message || String(error),
+    };
+  }
   if (!settings.enabled) {
     result.charge = {
       executed:
@@ -30049,11 +30058,11 @@ app.post(
   }
 );
 
-app.post(
-  "/billing-charges/:id/reconcile-bb",
-  authMiddleware,
-  requireRoles(["GERENTE", "PROGRAMADOR"]),
-  async (req: AuthRequest, res) => {
+/*
+ * Conciliação de uma cobrança BB do Financeiro V2.
+ * Usada pelo botão "Conciliar BB" e pelo agendador automático.
+ */
+const reconcileBbBillingChargeHandler = async (req: AuthRequest, res: any) => {
     try {
       const id = Number(req.params.id);
 
@@ -30509,8 +30518,90 @@ app.post(
           "Não foi possível consultar ou conciliar a cobrança no Banco do Brasil.",
       });
     }
-  }
+};
+
+app.post(
+  "/billing-charges/:id/reconcile-bb",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  reconcileBbBillingChargeHandler
 );
+
+/*
+ * Baixa automática: consulta no BB as cobranças em aberto
+ * e concilia as que já foram pagas. Roda no agendador
+ * financeiro, no máximo a cada BB_RECONCILE_INTERVAL_MINUTES.
+ */
+let lastFinanceBbReconcileAt = 0;
+
+async function processFinanceBbReconciliation(options: { force?: boolean } = {}) {
+  const intervalMinutes = Math.max(
+    5,
+    Number(process.env.BB_RECONCILE_INTERVAL_MINUTES || 30) || 30
+  );
+  const nowMs = Date.now();
+
+  if (!options.force && nowMs - lastFinanceBbReconcileAt < intervalMinutes * 60 * 1000) {
+    return { executed: false, reason: `Intervalo de ${intervalMinutes} min ainda não passou.` };
+  }
+
+  lastFinanceBbReconcileAt = nowMs;
+
+  const openCharges = await prisma.billingCharge.findMany({
+    where: {
+      provider: "BANCO_DO_BRASIL",
+      status: { in: ["EMITIDA", "ENVIADA", "VENCIDA"] },
+      txid: { not: null },
+      financialTransactionId: { not: null },
+      financialTransaction: { status: "PENDENTE" },
+    },
+    select: { id: true },
+    orderBy: { id: "asc" },
+    take: 200,
+  });
+
+  const summary = {
+    executed: true,
+    checked: 0,
+    paid: 0,
+    pending: 0,
+    errors: 0,
+    paidChargeIds: [] as number[],
+    errorDetails: [] as { id: number; message: string }[],
+  };
+
+  for (const { id } of openCharges) {
+    const fake: any = {
+      statusCode: 200,
+      body: null,
+      status(code: number) { this.statusCode = code; return this; },
+      json(payload: any) { this.body = payload; return this; },
+    };
+
+    await reconcileBbBillingChargeHandler(
+      {
+        params: { id: String(id) },
+        user: { id: null, name: "CRON", email: null, role: "SYSTEM" },
+        ip: "127.0.0.1",
+      } as any,
+      fake
+    );
+
+    summary.checked += 1;
+
+    if (fake.statusCode >= 400) {
+      summary.errors += 1;
+      summary.errorDetails.push({ id, message: String(fake.body?.message || fake.statusCode) });
+    } else if (fake.body?.reconciled && !fake.body?.alreadyReconciled) {
+      summary.paid += 1;
+      summary.paidChargeIds.push(id);
+    } else {
+      summary.pending += 1;
+    }
+  }
+
+  return summary;
+}
 
 app.post(
   "/billing-charges/:id/mark-paid",
