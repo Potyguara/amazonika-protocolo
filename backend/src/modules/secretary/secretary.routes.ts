@@ -72,13 +72,15 @@ const SECRETARY_ALLOWED: Rule[] = [
   ["PATCH", new RegExp(`^/field-schedules/${ID}/status$`)],
   ["DELETE", new RegExp(`^/field-schedules/${ID}$`)],
 
-  // Financeiro > Lançamentos: listar, cadastrar, ver plano e dar baixa.
+  // Financeiro > Lançamentos: listar, cadastrar, ver plano, dar baixa e
+  // reprogramar vencimento (com justificativa registrada na auditoria).
   // Editar, cancelar, excluir e emitir cobrança continuam com os gestores.
   ["GET", /^\/finance\/categories$/],
   ["GET", /^\/finance\/transactions$/],
   ["POST", /^\/finance\/transactions$/],
   ["GET", new RegExp(`^/finance/transactions/${ID}/payment-plan$`)],
   ["PATCH", new RegExp(`^/finance/transactions/${ID}/pay$`)],
+  ["PATCH", new RegExp(`^/finance/transactions/${ID}/reprogram-due-date$`)],
   ["GET", /^\/catalog\/services$/],
 ];
 

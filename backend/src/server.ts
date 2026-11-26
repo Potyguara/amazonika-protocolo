@@ -18853,7 +18853,7 @@ function financeMutationHandler(operation: "UPDATE" | "PAY" | "CANCEL" | "DELETE
 app.patch(
   "/finance/transactions/:id/reprogram-due-date",
   authMiddleware,
-  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  requireRoles(["GERENTE", "PROGRAMADOR", "SECRETARIA"]),
   async (req: any, res: any) => {
     const id =
       Number(req.params.id);
@@ -18968,6 +18968,16 @@ app.patch(
       return res.status(404).json({
         message:
           "Lançamento financeiro não encontrado.",
+      });
+    }
+
+    if (
+      req.user?.role === "SECRETARIA" &&
+      current.source === "SALARIO"
+    ) {
+      return res.status(403).json({
+        message:
+          "Lançamentos de salário são feitos pelos gestores.",
       });
     }
 

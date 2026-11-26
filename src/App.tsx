@@ -16109,7 +16109,7 @@ async function handleDeleteSalary(id: number) {
                                   )}
 
                                 {obligation.status === "PENDENTE" && (
-                                  <button hidden={isSecretary}
+                                  <button
                                     type="button"
                                     className="secondary-action"
                                     onClick={() =>
@@ -17717,7 +17717,7 @@ async function handleDeleteSalary(id: number) {
                               )}
 
                             {item.status === "PENDENTE" && (
-                              <button hidden={isSecretary}
+                              <button
                                 className="mini-button"
                                 type="button"
                                 disabled={reprogrammingDueDateInProgress}
