@@ -21,6 +21,15 @@ if ! grep -q '^CRON_SECRET=.\+' "$ENV_FILE"; then
   sleep 5
 fi
 
+# 1b. Modo de ensaio: por padrão a automação não atende nenhum cliente.
+#     Para testar, troque 0 pelo ID do cliente fictício e reinicie a API.
+if ! grep -q '^FINANCE_AUTOMATION_TEST_CLIENT_IDS=' "$ENV_FILE"; then
+  echo "FINANCE_AUTOMATION_TEST_CLIENT_IDS=0" >> "$ENV_FILE"
+  echo "Modo de ensaio ativado (nenhum cliente recebe cobrança automática)."
+  pm2 restart sis-amazonika-api >/dev/null
+  sleep 5
+fi
+
 # 2. Script chamado pelo cron (lê a senha do .env na hora).
 cat > "$TICK" <<'SCRIPT'
 #!/bin/bash
@@ -49,6 +58,7 @@ ROT
 echo "Cron instalado: $CRON"
 DB=$APP/backend/prisma/dev.db
 echo "Automação ligada na tela? $(sqlite3 "$DB" 'select case when enabled=1 then "SIM" else "NAO" end from FinanceAutoChargeSettings where id=1;' 2>/dev/null || echo 'NAO (ainda sem configuração)')"
+echo "Clientes liberados para a automação (ensaio): $(grep '^FINANCE_AUTOMATION_TEST_CLIENT_IDS=' "$ENV_FILE" | cut -d= -f2-)"
 echo "Lançamentos pendentes marcados para cobrança automática: $(sqlite3 "$DB" "select count(*) from FinancialTransaction where status='PENDENTE' and type in ('ENTRADA','PARCELA') and autoChargeEnabled=1;")"
 echo "Primeira execução agora:"
 "$TICK"

@@ -12628,6 +12628,27 @@ async function sendFinancePaymentConfirmationEmail(
   }
 }
 
+/*
+ * Modo de ensaio da automação financeira.
+ * Com FINANCE_AUTOMATION_TEST_CLIENT_IDS=12,34 no .env, a emissão
+ * automática de Pix e os avisos por e-mail só atendem esses clientes,
+ * mesmo que outros lançamentos estejam marcados para cobrança automática.
+ * Vazio ou ausente = todos os lançamentos marcados.
+ */
+function financeAutomationTestClientIds(): number[] | null {
+  const raw = String(process.env.FINANCE_AUTOMATION_TEST_CLIENT_IDS || "").trim();
+  if (!raw) return null;
+  return raw
+    .split(/[,;\s]+/)
+    .map((v) => Number(v))
+    .filter((v) => Number.isInteger(v) && v > 0);
+}
+
+function financeAutomationClientFilter() {
+  const ids = financeAutomationTestClientIds();
+  return ids ? { clientId: { in: ids } } : {};
+}
+
 async function processFinanceAutoCharges(
   options?: {
     daysAhead?: number;
@@ -12744,6 +12765,7 @@ async function processFinanceAutoCharges(
             ? {
                 autoChargeEnabled:
                   true,
+                ...financeAutomationClientFilter(),
               }
             : {}),
 
@@ -14545,6 +14567,7 @@ async function processFinanceAutoChargeEmailNotices() {
           "PENDENTE",
         autoChargeEnabled:
           true,
+        ...financeAutomationClientFilter(),
         dueDate: {
           not:
             null,
