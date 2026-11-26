@@ -362,6 +362,22 @@ function addDays(date: Date, days: number) {
   return result;
 }
 
+/*
+ * Vencimentos são datas sem hora, gravadas à meia-noite UTC.
+ * Formatar em America/Belem mostraria o dia anterior.
+ */
+function formatDueDateBR(value?: string | Date | null) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "UTC",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date);
+}
+
 function formatDateOnly(date: Date) {
   return date.toISOString().slice(0, 10);
 }
@@ -11609,13 +11625,7 @@ async function sendFinanceInitialChargeEmail(
       );
 
     const dueDate =
-      new Intl.DateTimeFormat(
-        "pt-BR",
-        {
-          timeZone:
-            "America/Belem",
-        }
-      ).format(
+      formatDueDateBR(
         charge.dueDate
       );
 
@@ -14414,7 +14424,7 @@ function getFinanceNoticeIntro(params: {
   dueDate: Date;
 }) {
   const dueDateText =
-    params.dueDate.toLocaleDateString("pt-BR");
+    formatDueDateBR(params.dueDate);
 
   if (
     params.noticeType ===
@@ -14736,8 +14746,8 @@ async function processFinanceAutoChargeEmailNotices() {
         );
 
       const dueDateText =
-        transaction.dueDate.toLocaleDateString(
-          "pt-BR"
+        formatDueDateBR(
+          transaction.dueDate
         );
 
       const subject =
@@ -29227,9 +29237,7 @@ app.post(
                     "Valor da cobrança para e-mail"
                   )
                 )}</p>
-                <p><strong>Vencimento:</strong> ${new Intl.DateTimeFormat("pt-BR", {
-                  timeZone: "America/Belem",
-                }).format(charge.dueDate)}</p>
+                <p><strong>Vencimento:</strong> ${formatDueDateBR(charge.dueDate)}</p>
                 <p><strong>Documento fiscal:</strong> ${fiscalInfo}</p>
               </div>
 
