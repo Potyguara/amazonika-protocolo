@@ -2,6 +2,7 @@ import "./App.css";
 import StandaloneProposalsPage from "./pages/StandaloneProposalsPage";
 import StandaloneProposalPublicPage from "./pages/StandaloneProposalPublicPage";
 import FieldSchedulePage from "./pages/FieldSchedulePage";
+import DemandsPage from "./pages/DemandsPage";
 import FieldTravelMapPage from "./pages/FieldTravelMapPage";
 import StandaloneProposalEditorPage from "./pages/StandaloneProposalEditorPage";
 import {
@@ -50,6 +51,7 @@ import {
   X,
   Eye,
   EyeOff,
+  ListChecks,
 } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
 import {
@@ -3040,6 +3042,12 @@ const nav = [
     to: "/app/agendamentos",
     icon: CalendarDays,
     roles: ["ATENDENTE", "GERENTE", "PROGRAMADOR", "SECRETARIA"],
+  },
+  {
+    label: "Demandas",
+    to: "/app/demandas",
+    icon: ListChecks,
+    roles: ["GERENTE", "PROGRAMADOR", "SECRETARIA"],
   },
   {
     label: "Cronograma de Campo",
@@ -20499,6 +20507,15 @@ function App() {
           element={
             <ProtectedRoute allowed={["GERENTE", "PROGRAMADOR"]}>
               <StandaloneProposalEditorPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="demandas"
+          element={
+            <ProtectedRoute allowed={["GERENTE", "PROGRAMADOR", "SECRETARIA"]}>
+              <DemandsPage />
             </ProtectedRoute>
           }
         />

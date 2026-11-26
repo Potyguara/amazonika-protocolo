@@ -82,6 +82,17 @@ const SECRETARY_ALLOWED: Rule[] = [
   ["PATCH", new RegExp(`^/finance/transactions/${ID}/pay$`)],
   ["PATCH", new RegExp(`^/finance/transactions/${ID}/reprogram-due-date$`)],
   ["GET", /^\/catalog\/services$/],
+
+  // Demandas (agenda interna) e o próprio WhatsApp para alertas.
+  // Excluir demanda e ver o estado do OpenWA ficam com os gestores.
+  ["GET", /^\/demands$/],
+  ["GET", /^\/demands\/people$/],
+  ["POST", /^\/demands$/],
+  ["POST", /^\/demands\/reorder$/],
+  ["PATCH", new RegExp(`^/demands/${ID}$`)],
+  ["GET", /^\/me\/whatsapp$/],
+  ["PUT", /^\/me\/whatsapp$/],
+  ["POST", /^\/whatsapp\/test$/],
 ];
 
 export function isSecretaryAllowed(method: string, path: string) {

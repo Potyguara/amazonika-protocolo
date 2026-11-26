@@ -2569,4 +2569,54 @@ updateCatalogPackageItems(
   });
 },
 
+
+demands(params?: { assigneeId?: string; status?: string; type?: string }) {
+  const query = new URLSearchParams();
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value) query.set(key, value);
+  });
+  const suffix = query.toString() ? `?${query}` : "";
+  return request(`/demands${suffix}`);
+},
+
+demandPeople() {
+  return request("/demands/people");
+},
+
+createDemand(data: Record<string, unknown>) {
+  return request("/demands", { method: "POST", body: JSON.stringify(data) });
+},
+
+updateDemand(id: number, data: Record<string, unknown>) {
+  return request(`/demands/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+},
+
+deleteDemand(id: number) {
+  return request(`/demands/${id}`, { method: "DELETE" });
+},
+
+reorderDemands(ids: number[]) {
+  return request("/demands/reorder", { method: "POST", body: JSON.stringify({ ids }) });
+},
+
+myWhatsapp() {
+  return request("/me/whatsapp");
+},
+
+saveMyWhatsapp(data: { whatsappPhone: string; whatsappAlertsEnabled: boolean }) {
+  return request("/me/whatsapp", { method: "PUT", body: JSON.stringify(data) });
+},
+
+savePersonWhatsapp(id: number, data: { whatsappPhone: string; whatsappAlertsEnabled?: boolean }) {
+  return request(`/demands/people/${id}/whatsapp`, { method: "PUT", body: JSON.stringify(data) });
+},
+
+whatsappStatus() {
+  return request("/whatsapp/status");
+},
+
+sendWhatsappTest() {
+  return request("/whatsapp/test", { method: "POST" });
+},
+
 };

@@ -289,6 +289,13 @@ model User {
   lastLoginAt DateTime?
   lastLoginIp String?
 
+  // WhatsApp para alertas internos (Demandas). Só dígitos, com DDI: 5596991234567.
+  whatsappPhone         String?
+  whatsappAlertsEnabled Boolean @default(true)
+
+  demandsAssigned Demand[] @relation("DemandAssignee")
+  demandsCreated  Demand[] @relation("DemandCreatedBy")
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -2258,4 +2265,102 @@ model FieldScheduleNotification {
   @@index([scheduledFor])
   @@index([status])
   @@index([scheduleId])
+}
+
+/**
+ * ======================================================
+ * DEMANDAS (agenda interna com alertas por WhatsApp)
+ * ======================================================
+ */
+
+enum DemandType {
+  TRABALHO
+  VIAGEM
+  PAGAMENTO
+  LEMBRETE
+  OUTRO
+}
+
+enum DemandStatus {
+  A_FAZER
+  EM_ANDAMENTO
+  CONCLUIDA
+  CANCELADA
+}
+
+enum DemandPriority {
+  BAIXA
+  NORMAL
+  ALTA
+  URGENTE
+}
+
+model Demand {
+  id Int @id @default(autoincrement())
+
+  title       String
+  description String?
+
+  type     DemandType     @default(TRABALHO)
+  status   DemandStatus   @default(A_FAZER)
+  priority DemandPriority @default(NORMAL)
+
+  // Prazo (data e hora). Sem prazo, entra só no resumo diário.
+  dueAt DateTime?
+
+  // Antecedência do lembrete antes do prazo, em minutos (0 = sem lembrete).
+  remindBeforeMinutes Int @default(1440)
+
+  // Ordem de execução na fila do responsável (menor primeiro).
+  sortOrder Int @default(0)
+
+  assigneeId Int?
+  assignee   User? @relation("DemandAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  createdById Int?
+  createdBy   User? @relation("DemandCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  protocolId Int?
+  clientId   Int?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  notifications DemandNotification[]
+
+  @@index([assigneeId, status])
+  @@index([dueAt])
+  @@index([status])
+}
+
+model DemandNotification {
+  id Int @id @default(autoincrement())
+
+  demandId Int?
+  demand   Demand? @relation(fields: [demandId], references: [id], onDelete: Cascade)
+
+  userId Int
+
+  // ASSIGNED, DUE_SOON, OVERDUE, DAILY_DIGEST, TEST
+  kind String
+
+  // Evita disparo duplicado: ex. "DUE_SOON:12:2026-11-27T10:00".
+  dedupeKey String @unique
+
+  phone String
+
+  // SENT, FAILED, SKIPPED
+  status String
+
+  errorText String?
+  messageId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([demandId])
+  @@index([userId])
+  @@index([createdAt])
 }

@@ -59,6 +59,7 @@ import { registerCatalogRoutes } from "./modules/catalog/catalog.routes";
 import { registerStandaloneProposalRoutes } from "./modules/standalone-proposals/standalone-proposals.routes";
 import { blockStandaloneProposalStaticAccess } from "./modules/standalone-proposals/standalone-upload-guard";
 import { registerFieldScheduleRoutes } from "./modules/field-schedule/field-schedule.routes";
+import { processDemandAlerts, registerDemandRoutes } from "./modules/demands/demands.routes";
 import { restrictSecretaryAccess, secretaryMayUseRoute } from "./modules/secretary/secretary.routes";
 import { registerPartnerReferralRoutes } from "./modules/partners/partner-referrals.routes";
 import { registerPartnerCommissionRoutes } from "./modules/partners/partner-commissions.routes";
@@ -15367,6 +15368,18 @@ async function processFinanceSchedulerTick() {
       error: error?.message || String(error),
     };
   }
+
+  // Demandas: alertas e resumo diário por WhatsApp.
+  try {
+    result.demands =
+      await processDemandAlerts(prisma, now);
+  } catch (error: any) {
+    result.demands = {
+      executed: false,
+      error: error?.message || String(error),
+    };
+  }
+
   if (!settings.enabled) {
     result.charge = {
       executed:
@@ -32276,6 +32289,13 @@ registerFieldScheduleRoutes({
   createTransporterFromSettings,
   getSmtpSettings,
   getEmailImageAttachments,
+});
+
+registerDemandRoutes({
+  app,
+  prisma,
+  authMiddleware,
+  requireRoles,
 });
 
 app.get("/health", (_req, res) => {
