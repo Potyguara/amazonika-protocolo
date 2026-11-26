@@ -13,19 +13,36 @@ const NOME = "Cliente Teste Plinio";
   if (clients.length !== 1) throw new Error(`Esperava 1 cliente "${NOME}", achei ${clients.length}.`);
   const clientId = clients[0].id;
 
-  const txs = await p.financialTransaction.findMany({
+  const plano = String(process.env.PLANO || "").trim();
+  const all = await p.financialTransaction.findMany({
     where: { clientId },
+    select: { installmentGroupId: true, installmentNumber: true, status: true, amountCents: true, dueDate: true, id: true },
+    orderBy: { dueDate: "asc" },
+  });
+  if (!plano) {
+    const groups = {};
+    for (const t of all) (groups[t.installmentGroupId || `avulso-${t.id}`] ||= []).push(t);
+    console.log(`Planos do cliente ${NOME} (id ${clientId}):`);
+    for (const [g, items] of Object.entries(groups)) {
+      console.log(`  PLANO=${g}`);
+      for (const t of items) console.log(`     #${t.id} parcela ${t.installmentNumber ?? "-"} ${t.status} venc ${t.dueDate ? t.dueDate.toISOString().slice(0, 10) : "-"} R$ ${((t.amountCents ?? 0) / 100).toFixed(2)}`);
+    }
+    console.log("\nRode de novo com PLANO=<código> para ver só aquele plano.");
+    return;
+  }
+
+  const txs = await p.financialTransaction.findMany({
+    where: { clientId, installmentGroupId: plano },
     include: { billingCharge: true, partnerCommission: true },
     orderBy: { dueDate: "asc" },
   });
-  const charges = await p.billingCharge.findMany({ where: { clientId } });
+  if (!txs.length) throw new Error(`PAROU: plano ${plano} não encontrado para ${NOME}.`);
+  const charges = txs.map((t) => t.billingCharge).filter(Boolean);
 
   console.log(`Cliente ${NOME} (id ${clientId})`);
   for (const t of txs) {
     console.log(`  lançamento #${t.id} ${t.status} venc ${t.dueDate ? t.dueDate.toISOString().slice(0, 10) : "-"} | cobrança: ${t.billingCharge ? `#${t.billingCharge.id} ${t.billingCharge.status}` : "nenhuma"}`);
   }
-  const extra = charges.filter((c) => !txs.some((t) => t.billingCharge && t.billingCharge.id === c.id));
-  for (const c of extra) console.log(`  cobrança avulsa #${c.id} ${c.status}`);
 
   const paid = txs.filter((t) => t.status === "PAGO" || t.paidAt);
   if (paid.length && process.env.INCLUIR_PAGOS !== "1") {
@@ -39,7 +56,7 @@ const NOME = "Cliente Teste Plinio";
   if (txs.some((t) => t.partnerCommission)) throw new Error("PAROU: há comissão de parceiro vinculada.");
 
   if (process.env.APAGAR !== "1") {
-    console.log(`\nTeste: apagaria ${txs.length} lançamento(s) e ${charges.length} cobrança(s). Para apagar: APAGAR=1 node ../scripts/apagar-testes-financeiro.cjs`);
+    console.log(`\nTeste: apagaria ${txs.length} lançamento(s) e ${charges.length} cobrança(s). Para apagar: PLANO=${plano} APAGAR=1 INCLUIR_PAGOS=1 node ../scripts/apagar-testes-financeiro.cjs`);
     return;
   }
 
