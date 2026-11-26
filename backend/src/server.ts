@@ -12439,7 +12439,8 @@ async function generateFinanceReceiptPdf(
 
 async function sendFinancePaymentConfirmationEmail(
   transactionId: number,
-  confirmationSource: "BANCO_DO_BRASIL" | "MANUAL"
+  confirmationSource: "BANCO_DO_BRASIL" | "MANUAL",
+  options: { resend?: boolean; requestedBy?: AuthRequest["user"] } = {}
 ) {
   const transaction =
     await prisma.financialTransaction.findUnique({
@@ -12476,7 +12477,7 @@ async function sendFinancePaymentConfirmationEmail(
   const settings =
     await getFinanceAutoChargeSettings();
 
-  if (!settings.sendEmail) {
+  if (!settings.sendEmail && !options.resend) {
     return {
       status: "SKIPPED",
       reason: "Envio automático de e-mail está desativado.",
@@ -12484,7 +12485,8 @@ async function sendFinancePaymentConfirmationEmail(
   }
 
   if (
-    transaction.emailNotificationEnabled === false
+    transaction.emailNotificationEnabled === false &&
+    !options.resend
   ) {
     return {
       status: "SKIPPED",
@@ -12519,7 +12521,7 @@ async function sendFinancePaymentConfirmationEmail(
       },
     });
 
-  if (previousSuccess) {
+  if (previousSuccess && !options.resend) {
     return {
       status: "SKIPPED",
       reason:
@@ -12722,22 +12724,29 @@ async function sendFinancePaymentConfirmationEmail(
       );
     }
 
+    const requester =
+      options.requestedBy;
+
     await prisma.auditLog.create({
       data: {
-        userId: null,
+        userId: requester?.id ?? null,
         userName:
-          "SIS Amazonika",
-        userEmail: null,
+          requester?.name || "SIS Amazonika",
+        userEmail: requester?.email ?? null,
         userRole:
-          "SYSTEM",
+          requester?.role || "SYSTEM",
         action:
-          "FINANCE_PAYMENT_CONFIRMATION_EMAIL_SENT",
+          options.resend
+            ? "FINANCE_PAYMENT_RECEIPT_RESENT"
+            : "FINANCE_PAYMENT_CONFIRMATION_EMAIL_SENT",
         entity:
           "FinancialTransaction",
         entityId:
           String(transaction.id),
         description:
-          `Aviso de pagamento confirmado enviado para ${client.email}.`,
+          options.resend
+            ? `Recibo de pagamento reenviado para ${client.email}.`
+            : `Aviso de pagamento confirmado enviado para ${client.email}.`,
         metadata:
           JSON.stringify({
             transactionId:
@@ -19421,6 +19430,72 @@ app.patch(
   }
 );
 
+
+app.post(
+  "/finance/transactions/:id/resend-receipt",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  async (req: AuthRequest, res: any) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        message: "ID do lançamento inválido.",
+      });
+    }
+
+    const transaction =
+      await prisma.financialTransaction.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          status: true,
+          paymentProvider: true,
+          billingCharge: {
+            select: { status: true },
+          },
+        },
+      });
+
+    if (!transaction) {
+      return res.status(404).json({
+        message: "Lançamento não encontrado.",
+      });
+    }
+
+    if (
+      transaction.status !== "PAGO" ||
+      transaction.billingCharge?.status !== "PAGA"
+    ) {
+      return res.status(400).json({
+        message:
+          "Só é possível reenviar o recibo de cobranças pagas.",
+      });
+    }
+
+    const result =
+      await sendFinancePaymentConfirmationEmail(
+        id,
+        transaction.paymentProvider === "BANCO_DO_BRASIL"
+          ? "BANCO_DO_BRASIL"
+          : "MANUAL",
+        { resend: true, requestedBy: req.user }
+      );
+
+    if (result.status === "SENT") {
+      return res.json({
+        message: "Recibo reenviado para o e-mail do cliente.",
+      });
+    }
+
+    return res.status(400).json({
+      message:
+        (result as any).reason ||
+        (result as any).message ||
+        "Não foi possível reenviar o recibo.",
+    });
+  }
+);
 
 app.patch(
   "/finance/transactions/:id/notification-preferences",

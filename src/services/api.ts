@@ -811,6 +811,12 @@ reprogramFinanceTransactionDueDate(
   );
 },
 
+resendFinanceTransactionReceipt(id: number) {
+  return request(`/finance/transactions/${id}/resend-receipt`, {
+    method: "POST",
+  });
+},
+
 updateFinanceTransactionNotificationPreferences(
   id: number,
   data: {

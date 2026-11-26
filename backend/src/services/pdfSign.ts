@@ -1,8 +1,9 @@
+import crypto from "crypto";
 import fs from "fs";
 import forge from "node-forge";
 import signpdf from "@signpdf/signpdf";
 import { plainAddPlaceholder } from "@signpdf/placeholder-plain";
-import { P12Signer } from "@signpdf/signer-p12";
+import { Signer, SUBFILTER_ETSI_CADES_DETACHED } from "@signpdf/utils";
 
 /*
  * ======================================================
@@ -22,8 +23,9 @@ import { P12Signer } from "@signpdf/signer-p12";
  */
 
 type SignerMaterial = {
-  p12: Buffer;
-  passphrase: string;
+  privateKeyPem: string;
+  leaf: forge.pki.Certificate;
+  chain: forge.pki.Certificate[];
   subjectName: string;
   validUntil: Date;
 };
@@ -95,22 +97,136 @@ function loadSignerMaterial(): SignerMaterial | null {
   const leaf = certs[leafIndex];
   const chain = [leaf, ...certs.filter((_, index) => index !== leafIndex)];
 
-  const passphrase = forge.util.encode64(forge.random.getBytesSync(18));
-  const asn1 = forge.pkcs12.toPkcs12Asn1(privateKey, chain, passphrase, {
-    algorithm: "3des",
-  });
-  const p12 = Buffer.from(forge.asn1.toDer(asn1).getBytes(), "binary");
-
   const cn = leaf.subject.getField("CN");
 
   cachedMaterial = {
-    p12,
-    passphrase,
+    privateKeyPem: forge.pki.privateKeyToPem(privateKey),
+    leaf,
+    chain,
     subjectName: String(cn?.value || "Certificado ICP-Brasil"),
     validUntil: leaf.validity.notAfter,
   };
 
   return cachedMaterial;
+}
+
+const asn1 = forge.asn1;
+const OID = {
+  data: "1.2.840.113549.1.7.1",
+  signedData: "1.2.840.113549.1.7.2",
+  contentType: "1.2.840.113549.1.9.3",
+  messageDigest: "1.2.840.113549.1.9.4",
+  signingCertificateV2: "1.2.840.113549.1.9.16.2.47",
+  sha256: "2.16.840.1.101.3.4.2.1",
+  sha256WithRSA: "1.2.840.113549.1.1.11",
+};
+
+function oid(value: string) {
+  return asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OID, false, asn1.oidToDer(value).getBytes());
+}
+
+function seq(items: forge.asn1.Asn1[]) {
+  return asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, items);
+}
+
+function set(items: forge.asn1.Asn1[]) {
+  return asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SET, true, items);
+}
+
+function octets(bytes: Buffer) {
+  return asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OCTETSTRING, false, bytes.toString("binary"));
+}
+
+function int(value: number) {
+  return asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, false, asn1.integerToDer(value).getBytes());
+}
+
+function der(node: forge.asn1.Asn1) {
+  return Buffer.from(asn1.toDer(node).getBytes(), "binary");
+}
+
+function algorithm(value: string) {
+  return seq([oid(value), asn1.create(asn1.Class.UNIVERSAL, asn1.Type.NULL, false, "")]);
+}
+
+function attribute(type: string, value: forge.asn1.Asn1) {
+  return seq([oid(type), set([value])]);
+}
+
+/** Elementos de um SET OF em DER precisam estar ordenados pela codificação. */
+function derSet(items: forge.asn1.Asn1[]) {
+  return items
+    .map((item) => ({ item, bytes: der(item) }))
+    .sort((a, b) => Buffer.compare(a.bytes, b.bytes))
+    .map((entry) => entry.item);
+}
+
+/**
+ * Assinatura CAdES-BES (PAdES básico), exigida pelo validador do ITI:
+ * atributos content-type, message-digest e signing-certificate-v2,
+ * sem signing-time (o horário fica no campo /M do PDF).
+ */
+class CadesSigner extends Signer {
+  constructor(private material: SignerMaterial) {
+    super();
+  }
+
+  async sign(pdfBuffer: Buffer): Promise<Buffer> {
+    const { leaf, chain, privateKeyPem } = this.material;
+    const leafDer = der(forge.pki.certificateToAsn1(leaf));
+    const leafAsn1 = forge.pki.certificateToAsn1(leaf);
+    // TBSCertificate: [0] version, serialNumber, signature, issuer, ...
+    const tbs = (leafAsn1.value as forge.asn1.Asn1[])[0];
+    const tbsFields = tbs.value as forge.asn1.Asn1[];
+    const serialNumber = tbsFields[1];
+    const issuerName = tbsFields[3];
+
+    const essCertIdV2 = seq([
+      octets(crypto.createHash("sha256").update(leafDer).digest()),
+      seq([
+        seq([asn1.create(asn1.Class.CONTEXT_SPECIFIC, 4, true, [issuerName])]),
+        serialNumber,
+      ]),
+    ]);
+
+    const signedAttrs = derSet([
+      attribute(OID.contentType, oid(OID.data)),
+      attribute(OID.messageDigest, octets(crypto.createHash("sha256").update(pdfBuffer).digest())),
+      attribute(OID.signingCertificateV2, seq([seq([essCertIdV2])])),
+    ]);
+
+    // A assinatura cobre os atributos codificados como SET (tag 0x31).
+    const signature = crypto
+      .createSign("RSA-SHA256")
+      .update(der(set(signedAttrs)))
+      .sign(privateKeyPem);
+
+    const signerInfo = seq([
+      int(1),
+      seq([issuerName, serialNumber]),
+      algorithm(OID.sha256),
+      asn1.create(asn1.Class.CONTEXT_SPECIFIC, 0, true, signedAttrs),
+      algorithm(OID.sha256WithRSA),
+      octets(signature),
+    ]);
+
+    const signedData = seq([
+      int(1),
+      set([algorithm(OID.sha256)]),
+      seq([oid(OID.data)]),
+      asn1.create(
+        asn1.Class.CONTEXT_SPECIFIC,
+        0,
+        true,
+        chain.map((cert) => forge.pki.certificateToAsn1(cert))
+      ),
+      set([signerInfo]),
+    ]);
+
+    return der(
+      seq([oid(OID.signedData), asn1.create(asn1.Class.CONTEXT_SPECIFIC, 0, true, [signedData])])
+    );
+  }
 }
 
 /** Nome do titular do certificado, para exibir no documento (ou null). */
@@ -149,9 +265,10 @@ export async function signPdfBuffer(
       contactInfo: info.contactInfo || "",
       name: material.subjectName,
       signatureLength: 16384,
+      subFilter: SUBFILTER_ETSI_CADES_DETACHED,
     });
 
-    const signer = new P12Signer(material.p12, { passphrase: material.passphrase });
+    const signer = new CadesSigner(material);
     const signed = await signpdf.sign(withPlaceholder, signer);
 
     return { buffer: Buffer.from(signed), signed: true };

@@ -11476,6 +11476,10 @@ function FinancePage() {
     processingBankChargeInProgress,
     setProcessingBankChargeInProgress,
   ] = useState(false);
+  const [
+    resendingReceiptTransactionId,
+    setResendingReceiptTransactionId,
+  ] = useState<number | null>(null);
 
 
   const [
@@ -17588,6 +17592,51 @@ async function handleDeleteSalary(id: number) {
                                   }}
                                 >
                                   Consultar BB
+                                </button>
+                              )}
+
+                            {item.status === "PAGO" &&
+                              item.billingCharge?.status === "PAGA" && (
+                                <button hidden={isSecretary}
+                                  className="mini-button"
+                                  type="button"
+                                  disabled={resendingReceiptTransactionId === item.id}
+                                  onClick={async () => {
+                                    if (
+                                      !window.confirm(
+                                        "Reenviar o recibo de pagamento para o e-mail do cliente?"
+                                      )
+                                    ) {
+                                      return;
+                                    }
+
+                                    try {
+                                      clearMessages();
+                                      setResendingReceiptTransactionId(item.id);
+
+                                      const result =
+                                        (await api.resendFinanceTransactionReceipt(
+                                          item.id
+                                        )) as { message?: string };
+
+                                      setSuccess(
+                                        result.message ||
+                                          "Recibo reenviado para o e-mail do cliente."
+                                      );
+                                    } catch (error) {
+                                      setError(
+                                        error instanceof Error
+                                          ? error.message
+                                          : "Não foi possível reenviar o recibo."
+                                      );
+                                    } finally {
+                                      setResendingReceiptTransactionId(null);
+                                    }
+                                  }}
+                                >
+                                  {resendingReceiptTransactionId === item.id
+                                    ? "Enviando..."
+                                    : "Reenviar recibo"}
                                 </button>
                               )}
 
