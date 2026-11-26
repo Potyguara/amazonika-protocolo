@@ -486,7 +486,8 @@ export function registerDemandRoutes({ app, prisma, authMiddleware, requireRoles
   const staff = [authMiddleware, requireRoles([...STAFF_ROLES])];
   const managers = [authMiddleware, requireRoles(MANAGER_ROLES)];
 
-  app.get("/demands/people", ...staff, async (_req: any, res: any) => {
+  app.get("/demands/people", ...staff, async (req: any, res: any) => {
+    const canSeePhones = MANAGER_ROLES.includes(req.user?.role);
     const users = await prisma.user.findMany({
       where: { active: true, role: { in: [...STAFF_ROLES] } },
       select: { id: true, name: true, role: true, whatsappPhone: true, whatsappAlertsEnabled: true },
@@ -500,6 +501,7 @@ export function registerDemandRoutes({ app, prisma, authMiddleware, requireRoles
         role: user.role,
         hasWhatsapp: Boolean(normalizeWhatsAppPhone(user.whatsappPhone)),
         whatsappMasked: maskWhatsAppPhone(normalizeWhatsAppPhone(user.whatsappPhone)),
+        whatsappPhone: canSeePhones ? user.whatsappPhone || "" : undefined,
         whatsappAlertsEnabled: user.whatsappAlertsEnabled,
       }))
     );

@@ -384,7 +384,7 @@
 
 .demands-wa-person {
   display: grid;
-  grid-template-columns: 1fr 150px auto;
+  grid-template-columns: 1fr auto;
   gap: 8px;
   align-items: center;
 }
@@ -461,4 +461,28 @@
   .demands-wa-qr {
     flex-direction: column;
   }
+}
+
+.demands-wa-person input {
+  grid-column: 1 / -1;
+}
+
+.demands-wa-person:has(input) span {
+  grid-column: 1 / -1;
+}
+
+.demands-wa-buttons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.demands-wa-buttons .button {
+  padding: 7px 12px;
+  font-size: 13px;
+}
+
+.demands-wa-buttons .button.danger {
+  color: #b23b2a;
 }

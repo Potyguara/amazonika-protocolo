@@ -26,6 +26,7 @@ type Person = {
   role: string;
   hasWhatsapp: boolean;
   whatsappMasked: string;
+  whatsappPhone?: string;
   whatsappAlertsEnabled: boolean;
 };
 
@@ -721,35 +722,103 @@ function WhatsappPanel({
 
             <div className="full demands-wa-people">
               <strong>Equipe</strong>
-              {people.map((person) => (
-                <div key={person.id} className="demands-wa-person">
-                  <span>
-                    {person.name}
-                    <small>
-                      {person.hasWhatsapp ? person.whatsappMasked : "sem WhatsApp"}
-                      {person.hasWhatsapp && !person.whatsappAlertsEnabled ? " (alertas desligados)" : ""}
-                    </small>
-                  </span>
-                  <input
-                    placeholder="DDD + número"
-                    value={editing[person.id] ?? ""}
-                    onChange={(e) => setEditing({ ...editing, [person.id]: e.target.value })}
-                  />
-                  <button
-                    type="button"
-                    className="button secondary"
-                    disabled={busy || !(editing[person.id] || "").trim()}
-                    onClick={() =>
-                      run(
-                        () => api.savePersonWhatsapp(person.id, { whatsappPhone: editing[person.id] }),
-                        `WhatsApp de ${person.name.split(" ")[0]} salvo.`
-                      ).then(() => setEditing({ ...editing, [person.id]: "" }))
-                    }
-                  >
-                    Salvar
-                  </button>
-                </div>
-              ))}
+              {people.map((person) => {
+                const first = person.name.split(" ")[0];
+                const isEditing = editing[person.id] !== undefined;
+                const stopEditing = () => {
+                  const next = { ...editing };
+                  delete next[person.id];
+                  setEditing(next);
+                };
+
+                return (
+                  <div key={person.id} className="demands-wa-person">
+                    <span>
+                      {person.name}
+                      <small>
+                        {person.hasWhatsapp ? person.whatsappPhone || person.whatsappMasked : "sem WhatsApp"}
+                        {person.hasWhatsapp && !person.whatsappAlertsEnabled ? " (alertas desligados)" : ""}
+                      </small>
+                    </span>
+
+                    {isEditing ? (
+                      <>
+                        <input
+                          autoFocus
+                          placeholder="DDD + número"
+                          value={editing[person.id]}
+                          onChange={(e) => setEditing({ ...editing, [person.id]: e.target.value })}
+                        />
+                        <div className="demands-wa-buttons">
+                          <button
+                            type="button"
+                            className="button primary"
+                            disabled={busy || !editing[person.id].trim()}
+                            onClick={() =>
+                              run(
+                                () => api.savePersonWhatsapp(person.id, { whatsappPhone: editing[person.id] }),
+                                `WhatsApp de ${first} salvo.`
+                              ).then(stopEditing)
+                            }
+                          >
+                            Salvar
+                          </button>
+                          <button type="button" className="button secondary" onClick={stopEditing}>
+                            Cancelar
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="demands-wa-buttons">
+                        <button
+                          type="button"
+                          className="button secondary"
+                          onClick={() => setEditing({ ...editing, [person.id]: person.whatsappPhone || "" })}
+                        >
+                          {person.hasWhatsapp ? "Editar" : "Cadastrar"}
+                        </button>
+                        {person.hasWhatsapp && (
+                          <button
+                            type="button"
+                            className="button secondary"
+                            disabled={busy}
+                            onClick={() =>
+                              run(
+                                () =>
+                                  api.savePersonWhatsapp(person.id, {
+                                    whatsappPhone: person.whatsappPhone || "",
+                                    whatsappAlertsEnabled: !person.whatsappAlertsEnabled,
+                                  }),
+                                person.whatsappAlertsEnabled
+                                  ? `Alertas de ${first} desligados.`
+                                  : `Alertas de ${first} ligados.`
+                              )
+                            }
+                          >
+                            {person.whatsappAlertsEnabled ? "Pausar alertas" : "Ativar alertas"}
+                          </button>
+                        )}
+                        {person.hasWhatsapp && (
+                          <button
+                            type="button"
+                            className="button secondary danger"
+                            disabled={busy}
+                            onClick={() => {
+                              if (!window.confirm(`Apagar o WhatsApp de ${person.name}? Essa pessoa deixa de receber alertas.`)) return;
+                              run(
+                                () => api.savePersonWhatsapp(person.id, { whatsappPhone: "" }),
+                                `WhatsApp de ${first} apagado.`
+                              );
+                            }}
+                          >
+                            Apagar
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
             {status?.recent?.length > 0 && (
