@@ -60,6 +60,7 @@ import { registerStandaloneProposalRoutes } from "./modules/standalone-proposals
 import { blockStandaloneProposalStaticAccess } from "./modules/standalone-proposals/standalone-upload-guard";
 import { registerFieldScheduleRoutes } from "./modules/field-schedule/field-schedule.routes";
 import { processDemandAlerts, registerDemandRoutes } from "./modules/demands/demands.routes";
+import { normalizeWhatsAppPhone, sendWhatsAppText } from "./services/whatsappService";
 import { restrictSecretaryAccess, secretaryMayUseRoute } from "./modules/secretary/secretary.routes";
 import { registerPartnerReferralRoutes } from "./modules/partners/partner-referrals.routes";
 import { registerPartnerCommissionRoutes } from "./modules/partners/partner-commissions.routes";
@@ -11380,6 +11381,233 @@ function financeDaysBetween(
   );
 }
 
+/*
+ * ======================================================
+ * COBRANÇA AO CLIENTE POR WHATSAPP (OpenWA)
+ * ======================================================
+ *
+ * Liga com "Enviar avisos por WhatsApp" nas configurações da
+ * automação financeira. Respeita FINANCE_AUTOMATION_TEST_CLIENT_IDS:
+ * com a trava ativa, só os clientes de teste recebem.
+ * Cada aviso tem uma chave única, então nunca sai repetido.
+ */
+type ClientBillingWhatsAppKind =
+  | "NEW_CHARGE"
+  | "PAYMENT_CONFIRMED"
+  | `NOTICE_${string}`;
+
+function firstNameOf(name?: string | null) {
+  return String(name || "").trim().split(/\s+/)[0] || "cliente";
+}
+
+function clientBillingWhatsAppText(params: {
+  kind: ClientBillingWhatsAppKind;
+  clientName: string;
+  description: string;
+  amountText: string;
+  dueDateText: string;
+  publicUrl: string;
+  companyName: string;
+  daysUntilDue?: number | null;
+}) {
+  const hello = `Olá, ${firstNameOf(params.clientName)}!`;
+  const footer = `\n\n${params.companyName}`;
+
+  if (params.kind === "PAYMENT_CONFIRMED") {
+    return `${hello} Recebemos o seu pagamento de *${params.amountText}* referente a ${params.description}. Obrigado!\n\nO recibo foi enviado para o seu e-mail e também está disponível em:\n${params.publicUrl}${footer}`;
+  }
+
+  const details = `*${params.description}*\nValor: *${params.amountText}*\nVencimento: *${params.dueDateText}*\n\nPague por Pix (QR Code ou copia e cola) pelo link:\n${params.publicUrl}`;
+
+  if (params.kind === "NEW_CHARGE") {
+    return `${hello} Emitimos a sua cobrança:\n\n${details}${footer}`;
+  }
+
+  const days = params.daysUntilDue ?? null;
+  let intro = "Lembrete da sua cobrança:";
+
+  if (params.kind.includes("NO_DIA")) intro = "Sua cobrança vence *hoje*:";
+  else if (params.kind.includes("ANTES") && days !== null && days > 0)
+    intro = `Lembrete: sua cobrança vence em ${days} dia${days > 1 ? "s" : ""}:`;
+  else if (days !== null && days < 0)
+    intro = "Consta em aberto a cobrança abaixo. Se já pagou, desconsidere esta mensagem:";
+
+  return `${hello} ${intro}\n\n${details}${footer}`;
+}
+
+async function sendClientBillingWhatsApp(params: {
+  kind: ClientBillingWhatsAppKind;
+  dedupeKey: string;
+  clientId: number | null;
+  transactionId: number | null;
+  billingChargeId: number | null;
+  phoneRaw: string | null | undefined;
+  text: string;
+}) {
+  const testIds = financeAutomationTestClientIds();
+
+  if (testIds && (!params.clientId || !testIds.includes(params.clientId))) {
+    return { status: "SKIPPED", reason: "Cliente fora da lista de teste." };
+  }
+
+  const existing = await prisma.clientWhatsAppNotification.findUnique({
+    where: { dedupeKey: params.dedupeKey },
+  });
+
+  if (existing) return { status: "SKIPPED", reason: "Aviso já enviado." };
+
+  const failures = await prisma.clientWhatsAppNotification.count({
+    where: { dedupeKey: { startsWith: `${params.dedupeKey}#FAIL` } },
+  });
+
+  if (failures >= 3) return { status: "SKIPPED", reason: "Desistiu após 3 falhas." };
+
+  const phone = normalizeWhatsAppPhone(params.phoneRaw);
+
+  const base = {
+    clientId: params.clientId,
+    transactionId: params.transactionId,
+    billingChargeId: params.billingChargeId,
+    kind: params.kind,
+    phone: phone || "",
+  };
+
+  if (!phone) {
+    await prisma.clientWhatsAppNotification.create({
+      data: { ...base, dedupeKey: params.dedupeKey, status: "SKIPPED", errorText: "Cliente sem WhatsApp/telefone válido." },
+    });
+    return { status: "SKIPPED", reason: "Cliente sem WhatsApp." };
+  }
+
+  const result = await sendWhatsAppText(phone, params.text);
+
+  if (result.ok) {
+    await prisma.clientWhatsAppNotification.create({
+      data: { ...base, dedupeKey: params.dedupeKey, status: "SENT", messageId: result.messageId || null },
+    });
+    return { status: "SENT" };
+  }
+
+  if (result.skipped) {
+    return { status: "SKIPPED", reason: result.error };
+  }
+
+  await prisma.clientWhatsAppNotification.create({
+    data: {
+      ...base,
+      dedupeKey: `${params.dedupeKey}#FAIL${failures + 1}`,
+      status: "FAILED",
+      errorText: result.error || null,
+    },
+  });
+
+  return { status: "FAILED", reason: result.error };
+}
+
+/** Monta e envia o WhatsApp de uma cobrança (nova, aviso ou pagamento). */
+async function notifyClientBillingWhatsApp(
+  transactionId: number,
+  kind: ClientBillingWhatsAppKind,
+  extra: { dedupeSuffix?: string; daysUntilDue?: number | null } = {}
+) {
+  try {
+    const settings = await getFinanceAutoChargeSettings();
+
+    if (!settings.sendWhatsapp) return { status: "SKIPPED", reason: "WhatsApp desligado na automação." };
+
+    const transaction = await prisma.financialTransaction.findUnique({
+      where: { id: transactionId },
+      include: { client: true, billingCharge: { include: { client: true } } },
+    });
+
+    const charge = transaction?.billingCharge;
+    const client = transaction?.client || charge?.client || null;
+
+    if (!transaction || !charge || !client) return { status: "SKIPPED", reason: "Sem cobrança ou cliente." };
+
+    const company = await getCompanySettings();
+    const cents = charge.paidAmountCents ?? charge.amountCents ?? transaction.amountCents ?? 0;
+    const dueDate = transaction.dueDate || charge.dueDate || null;
+
+    const text = clientBillingWhatsAppText({
+      kind,
+      clientName: client.name,
+      description: charge.description || transaction.description,
+      amountText: formatCurrencyBRFromCents(cents),
+      dueDateText: dueDate ? formatDueDateBR(dueDate) : "-",
+      publicUrl: getChargePublicUrl(charge),
+      companyName: company.companyName || "Amazonika Engenharia",
+      daysUntilDue: extra.daysUntilDue,
+    });
+
+    return await sendClientBillingWhatsApp({
+      kind,
+      dedupeKey: `${kind}:${charge.id}:${charge.txid || "sem-txid"}${extra.dedupeSuffix ? `:${extra.dedupeSuffix}` : ""}`,
+      clientId: client.id,
+      transactionId: transaction.id,
+      billingChargeId: charge.id,
+      phoneRaw: client.whatsapp || client.phone,
+      text,
+    });
+  } catch (error: any) {
+    console.error("Falha no WhatsApp de cobrança:", error?.message || error);
+    return { status: "FAILED", reason: error?.message || String(error) };
+  }
+}
+
+/**
+ * Avisos de vencimento por WhatsApp. Roda antes dos avisos por e-mail
+ * (que atualizam lastNotificationAt) para enxergar a mesma janela.
+ */
+async function processFinanceClientWhatsAppNotices() {
+  const settings = await getFinanceAutoChargeSettings();
+
+  if (!settings.enabled || !settings.sendWhatsapp) {
+    return { executed: false, reason: "WhatsApp de cobrança desligado." };
+  }
+
+  const today = new Date();
+  const transactions = await prisma.financialTransaction.findMany({
+    where: {
+      type: { in: ["ENTRADA", "PARCELA"] },
+      status: "PENDENTE",
+      autoChargeEnabled: true,
+      ...financeAutomationClientFilter(),
+      dueDate: { not: null },
+      billingCharge: { is: { status: { in: ["EMITIDA", "ENVIADA", "VENCIDA"] }, txid: { not: null } } },
+    },
+    select: { id: true, dueDate: true, lastNotificationAt: true, notificationCount: true },
+  });
+
+  let sent = 0;
+  let failed = 0;
+
+  for (const transaction of transactions) {
+    const noticeType = resolveFinanceNoticeType({
+      today,
+      dueDate: transaction.dueDate!,
+      lastNotificationAt: transaction.lastNotificationAt,
+      notificationCount: transaction.notificationCount || 0,
+      settings,
+    });
+
+    if (!noticeType) continue;
+
+    const result = await notifyClientBillingWhatsApp(transaction.id, `NOTICE_${noticeType}`, {
+      dedupeSuffix: formatDateOnly(today),
+      daysUntilDue: dateDiffInDays(today, transaction.dueDate!),
+    });
+
+    if (result.status === "SENT") {
+      sent += 1;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    if (result.status === "FAILED") failed += 1;
+  }
+
+  return { executed: true, checked: transactions.length, sent, failed };
+}
+
 async function sendFinanceInitialChargeEmail(
   transactionId: number
 ): Promise<FinanceInitialChargeEmailResult> {
@@ -11425,6 +11653,9 @@ async function sendFinanceInitialChargeEmail(
         "Cobrança bancária ainda não vinculada ao lançamento.",
     };
   }
+
+  // WhatsApp da nova cobrança (independe do e-mail; tem chave própria).
+  void notifyClientBillingWhatsApp(transaction.id, "NEW_CHARGE");
 
   /*
    * Idempotência:
@@ -12473,6 +12704,10 @@ async function sendFinancePaymentConfirmationEmail(
       status: "SKIPPED",
       reason: "Cobrança não vinculada ao lançamento financeiro.",
     };
+  }
+
+  if (!options.resend) {
+    void notifyClientBillingWhatsApp(transaction.id, "PAYMENT_CONFIRMED");
   }
 
   const settings =
@@ -14643,6 +14878,15 @@ async function processFinanceAutoChargeEmailNotices() {
   const settings =
     await getFinanceAutoChargeSettings();
 
+  // WhatsApp primeiro: os avisos por e-mail atualizam lastNotificationAt.
+  let whatsapp: any = null;
+
+  try {
+    whatsapp = await processFinanceClientWhatsAppNotices();
+  } catch (error: any) {
+    whatsapp = { executed: false, error: error?.message || String(error) };
+  }
+
   const today =
     new Date();
 
@@ -15122,6 +15366,7 @@ async function processFinanceAutoChargeEmailNotices() {
     skipped,
     errors,
     results,
+    whatsapp,
   };
 }
 

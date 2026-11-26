@@ -2364,3 +2364,33 @@ model DemandNotification {
   @@index([userId])
   @@index([createdAt])
 }
+
+/**
+ * Avisos de cobrança enviados ao cliente por WhatsApp (OpenWA).
+ */
+model ClientWhatsAppNotification {
+  id Int @id @default(autoincrement())
+
+  clientId        Int?
+  transactionId   Int?
+  billingChargeId Int?
+
+  // NEW_CHARGE, NOTICE_<tipo>, PAYMENT_CONFIRMED
+  kind String
+
+  dedupeKey String @unique
+
+  phone String
+
+  // SENT, FAILED, SKIPPED
+  status String
+
+  errorText String?
+  messageId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([clientId])
+  @@index([transactionId])
+  @@index([createdAt])
+}
