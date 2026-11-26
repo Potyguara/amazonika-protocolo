@@ -317,7 +317,7 @@ export default function DemandsPage() {
           <h1>Demandas</h1>
           <p>
             O que cada um faz, em que ordem e até quando. Os avisos saem pelo WhatsApp: ao receber
-            uma demanda, antes do prazo, quando atrasa e num resumo diário às 7h.
+            uma demanda, antes do prazo, num resumo diário às 7h e, se atrasar, às 9h e às 15h até ser concluída.
           </p>
         </div>
         <div className="demands-header-actions">
