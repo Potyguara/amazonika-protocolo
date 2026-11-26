@@ -1,5 +1,7 @@
 import { assertMoneyCents, centsToBbValue } from "../lib/money";
-import axios from "axios";
+import axios, { AxiosInstance } from "axios";
+import fs from "fs";
+import https from "https";
 
 type BbTokenResponse = {
   access_token: string;
@@ -83,9 +85,9 @@ function validateBbEnvironment() {
       );
     }
 
-    if (pixApiHost !== "api.bb.com.br") {
+    if (pixApiHost !== "api-pix.bb.com.br" && pixApiHost !== "api.bb.com.br") {
       throw new Error(
-        `Configuração BB inconsistente: BB_ENV=production exige api.bb.com.br, recebido ${pixApiHost}.`
+        `Configuração BB inconsistente: BB_ENV=production exige api-pix.bb.com.br, recebido ${pixApiHost}.`
       );
     }
 
@@ -95,6 +97,139 @@ function validateBbEnvironment() {
   throw new Error(
     `BB_ENV inválido: ${env}. Valores permitidos: sandbox ou production.`
   );
+}
+
+/*
+ * ======================================================
+ * CONEXÃO COM O BB (mTLS em produção)
+ * ======================================================
+ *
+ * Em produção o BB exige certificado do cliente (mTLS) na API Pix.
+ * Configure UM dos formatos no backend/.env:
+ *   BB_CERT_PFX_PATH=/root/bb-certs/amazonika.pfx
+ *   BB_CERT_PFX_PASSPHRASE=...
+ * ou
+ *   BB_CERT_PATH=/root/bb-certs/cert.pem
+ *   BB_CERT_KEY_PATH=/root/bb-certs/key.pem
+ *   BB_CERT_KEY_PASSPHRASE=... (se a chave tiver senha)
+ *
+ * O cabeçalho da chave de aplicação é gw-dev-app-key no sandbox e
+ * gw-app-key em produção (BB_APP_KEY_HEADER sobrescreve).
+ */
+let cachedBbAgent: https.Agent | null | undefined;
+
+function optionalEnv(name: string) {
+  const value = process.env[name];
+  return value && String(value).trim() ? String(value).trim() : null;
+}
+
+function isBbProduction() {
+  return String(process.env.BB_ENV || "").trim().toLowerCase() === "production";
+}
+
+function bbHttpsAgent(): https.Agent | null {
+  if (cachedBbAgent !== undefined) return cachedBbAgent;
+
+  const pfxPath = optionalEnv("BB_CERT_PFX_PATH");
+  const certPath = optionalEnv("BB_CERT_PATH");
+  const keyPath = optionalEnv("BB_CERT_KEY_PATH");
+
+  if (pfxPath) {
+    cachedBbAgent = new https.Agent({
+      pfx: fs.readFileSync(pfxPath),
+      passphrase: optionalEnv("BB_CERT_PFX_PASSPHRASE") || undefined,
+      keepAlive: true,
+    });
+  } else if (certPath && keyPath) {
+    cachedBbAgent = new https.Agent({
+      cert: fs.readFileSync(certPath),
+      key: fs.readFileSync(keyPath),
+      passphrase: optionalEnv("BB_CERT_KEY_PASSPHRASE") || undefined,
+      keepAlive: true,
+    });
+  } else {
+    cachedBbAgent = null;
+  }
+
+  return cachedBbAgent;
+}
+
+/** Cliente HTTP para o BB: usa o certificado (mTLS) quando configurado. */
+function bbHttp(): AxiosInstance {
+  const agent = bbHttpsAgent();
+
+  if (!agent && isBbProduction()) {
+    throw new Error(
+      "BB_ENV=production exige certificado mTLS: configure BB_CERT_PFX_PATH (e BB_CERT_PFX_PASSPHRASE) ou BB_CERT_PATH + BB_CERT_KEY_PATH no backend/.env."
+    );
+  }
+
+  return axios.create(agent ? { httpsAgent: agent } : {});
+}
+
+function bbAppKeyHeader() {
+  return (
+    optionalEnv("BB_APP_KEY_HEADER") ||
+    (isBbProduction() ? "gw-app-key" : "gw-dev-app-key")
+  );
+}
+
+/** Diagnóstico sem segredos: o que está configurado e se o token sai. */
+export async function checkBbPixConnection() {
+  const result: Record<string, unknown> = {
+    env: process.env.BB_ENV || null,
+    oauthUrl: process.env.BB_OAUTH_URL || null,
+    pixApiUrl: process.env.BB_PIX_API_URL || null,
+    clientId: Boolean(optionalEnv("BB_CLIENT_ID")),
+    clientSecret: Boolean(optionalEnv("BB_CLIENT_SECRET")),
+    appKey: Boolean(optionalEnv("BB_APP_KEY")),
+    appKeyHeader: bbAppKeyHeader(),
+    pixKey: Boolean(optionalEnv("BB_PIX_KEY")),
+    certificate: optionalEnv("BB_CERT_PFX_PATH")
+      ? "pfx"
+      : optionalEnv("BB_CERT_PATH") && optionalEnv("BB_CERT_KEY_PATH")
+      ? "pem"
+      : null,
+  };
+
+  try {
+    bbHttpsAgent();
+    result.certificateLoaded = Boolean(cachedBbAgent);
+  } catch (error: any) {
+    result.certificateLoaded = false;
+    result.certificateError = error?.message || String(error);
+    return result;
+  }
+
+  try {
+    const token = await getBbAccessToken();
+    result.oauth = token ? "ok" : "sem token";
+  } catch (error: any) {
+    result.oauth = "erro";
+    result.oauthStatus = error?.response?.status || null;
+    result.oauthError = error?.response?.data || error?.message || String(error);
+    return result;
+  }
+
+  try {
+    const appKey = requiredEnv("BB_APP_KEY");
+    const pixApiUrl = requiredEnv("BB_PIX_API_URL").replace(/\/$/, "");
+    const token = await getBbAccessToken();
+    const now = new Date();
+    const inicio = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+    const response = await bbHttp().get(`${pixApiUrl}/cob`, {
+      params: { inicio, fim: now.toISOString(), [bbAppKeyHeader()]: appKey },
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    result.pixApi = "ok";
+    result.pixApiStatus = response.status;
+  } catch (error: any) {
+    result.pixApi = "erro";
+    result.pixApiStatus = error?.response?.status || null;
+    result.pixApiError = error?.response?.data || error?.message || String(error);
+  }
+
+  return result;
 }
 
 function normalizeDocument(value?: string | null) {
@@ -131,7 +266,7 @@ export async function getBbAccessToken() {
     "pix.read pix.write cob.read cob.write cobv.read cobv.write"
   );
 
-  const response = await axios.post<BbTokenResponse>(oauthUrl, params, {
+  const response = await bbHttp().post<BbTokenResponse>(oauthUrl, params, {
     headers: {
       Authorization: `Basic ${credentials}`,
       "Content-Type": "application/x-www-form-urlencoded",
@@ -206,9 +341,9 @@ console.log("BB PIX REQUEST:", {
 });
 
 try {
-  const response = await axios.put(url, payload, {
+  const response = await bbHttp().put(url, payload, {
     params: {
-      "gw-dev-app-key": appKey,
+      [bbAppKeyHeader()]: appKey,
     },
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -224,7 +359,7 @@ try {
     data: error?.response?.data,
     url,
     params: {
-      "gw-dev-app-key": appKey ? "***APP_KEY_PRESENTE***" : null,
+      [bbAppKeyHeader()]: appKey ? "***APP_KEY_PRESENTE***" : null,
     },
     payload,
   });
@@ -245,9 +380,9 @@ export async function getBbPixCharge(txid: string) {
     sanitizedTxid
   )}`;
 
-  const response = await axios.get(url, {
+  const response = await bbHttp().get(url, {
     params: {
-      "gw-dev-app-key": appKey,
+      [bbAppKeyHeader()]: appKey,
     },
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -338,9 +473,9 @@ export async function createBbPixDueCharge(input: CreateBbPixDueChargeInput) {
   )}`;
 
 try {
-  const response = await axios.put(url, payload, {
+  const response = await bbHttp().put(url, payload, {
     params: {
-      "gw-dev-app-key": appKey,
+      [bbAppKeyHeader()]: appKey,
     },
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -356,7 +491,7 @@ try {
     data: error?.response?.data,
     url,
     params: {
-      "gw-dev-app-key": appKey ? "***APP_KEY_PRESENTE***" : null,
+      [bbAppKeyHeader()]: appKey ? "***APP_KEY_PRESENTE***" : null,
     },
     payload,
   });
@@ -384,9 +519,9 @@ export async function getBbPixDueCharge(txid: string) {
   )}`;
 
   try {
-    const response = await axios.get(url, {
+    const response = await bbHttp().get(url, {
       params: {
-        "gw-dev-app-key": appKey,
+        [bbAppKeyHeader()]: appKey,
       },
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -471,12 +606,12 @@ export async function updateBbPixDueChargeDueDate(input: {
 
   try {
     const response =
-      await axios.patch(
+      await bbHttp().patch(
         url,
         payload,
         {
           params: {
-            "gw-dev-app-key":
+            [bbAppKeyHeader()]:
               appKey,
           },
 
@@ -557,12 +692,12 @@ export async function removeBbPixDueCharge(
 
   try {
     const response =
-      await axios.patch(
+      await bbHttp().patch(
         url,
         payload,
         {
           params: {
-            "gw-dev-app-key":
+            [bbAppKeyHeader()]:
               appKey,
           },
 

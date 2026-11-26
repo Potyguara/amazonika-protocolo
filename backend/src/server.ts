@@ -74,6 +74,7 @@ import {
   getBbPixDueCharge,
   updateBbPixDueChargeDueDate,
   removeBbPixDueCharge,
+  checkBbPixConnection,
 } from "./services/bbPixService";
 
 type UserRole = "CLIENTE" | "ATENDENTE" | "GERENTE" | "PROGRAMADOR" | "SECRETARIA";
@@ -31599,6 +31600,20 @@ app.post(
 );
 
 
+// Diagnóstico do Pix BB (sem expor segredos): config, certificado, OAuth e consulta /cob.
+app.get(
+  "/bb-pix/connection-check",
+  authMiddleware,
+  requireRoles(["PROGRAMADOR"]),
+  async (_req, res) => {
+    try {
+      return res.json(await checkBbPixConnection());
+    } catch (error: any) {
+      return res.status(500).json({ message: error?.message || "Falha no diagnóstico do Pix BB." });
+    }
+  }
+);
+
 //#__________________________________#rota temporaria
 
 app.post(
@@ -31617,7 +31632,7 @@ app.post(
         amountInCents: 100, // R$ 1,00
         debtorName: "Plinio Marcos Bahia Potyguara",
         debtorCpfCnpj: "73268070272",
-        description: "Teste de cobrança PIX BB Sandbox",
+        description: "Teste de cobrança PIX BB",
       });
 
       return res.json({

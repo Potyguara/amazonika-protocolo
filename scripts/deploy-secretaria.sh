@@ -10,12 +10,13 @@ set -euo pipefail
 APP=/var/www/sis-amazonika
 BRANCH=claude/project-thread-84d44r
 # Versão que deve estar no ar antes de atualizar (deploy anterior).
-EXPECTED_HEAD=1f360b23150419de7ebe7591e6bae6217edffa43
+EXPECTED_HEAD=${EXPECTED_HEAD:-6ec38f9}
 TS=$(date +%Y%m%d-%H%M%S)
 B=/root/sis-backups/$TS
 
 cd "$APP"
 CURRENT_HEAD=$(git rev-parse HEAD)
+EXPECTED_HEAD=$(git rev-parse "$EXPECTED_HEAD")
 
 if [ "$CURRENT_HEAD" != "$EXPECTED_HEAD" ]; then
   echo "PAROU: HEAD inesperado ($CURRENT_HEAD). Nada foi alterado."
