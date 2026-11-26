@@ -6,6 +6,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { PrismaClient } from "@prisma/client";
+import { pdfSignerInfo, signPdfBuffer } from "../../services/pdfSign";
 
 const GREEN = "#155E49";
 const DARK = "#17231F";
@@ -1295,7 +1296,7 @@ function publicStandaloneProposalUrl(publicToken: string): string {
 function drawProposalVerification(doc: PDFKit.PDFDocument, proposal: any, url: string) {
   const qr = QRCode.create(url, { errorCorrectionLevel: "M" });
   const yPadding = 12;
-  const height = 156;
+  const height = 168;
   ensureSpace(doc, height + 15);
   const y = doc.y + 5;
   doc.roundedRect(PAGE_LEFT, y, CONTENT_WIDTH, height, 7)
@@ -1332,6 +1333,13 @@ function drawProposalVerification(doc: PDFKit.PDFDocument, proposal: any, url: s
       tx, codeY + 42, { width, lineGap: 3 });
   doc.font("Helvetica").fontSize(6.2).fillColor(MUTED)
     .text(url, tx, codeY + 84, { width, lineGap: 2 });
+  const signer = pdfSignerInfo();
+  doc.font("Helvetica-Bold").fontSize(7).fillColor(signer ? GREEN : MUTED)
+    .text(
+      signer
+        ? `Assinado digitalmente por ${signer.subjectName} (ICP-Brasil, e-CNPJ). Valide em validar.iti.gov.br.`
+        : "Documento emitido eletronicamente pelo SIS Amazonika.",
+      tx, codeY + 112, { width, lineGap: 2 });
   doc.x = PAGE_LEFT;
   doc.y = y + height + yPadding;
 }
@@ -1848,6 +1856,26 @@ export async function generateStandaloneProposalPdf(
       );
     }
   );
+
+  /*
+   * Assinatura digital ICP-Brasil (e-CNPJ da empresa).
+   * O hash registrado é o do PDF já assinado.
+   */
+  const signedResult =
+    await signPdfBuffer(
+      fs.readFileSync(filePath),
+      {
+        reason: `Proposta comercial ${proposal.proposalNumber}`,
+        location:
+          [company?.city, company?.state].filter(Boolean).join("/") ||
+          "Macapá/AP",
+        contactInfo: company?.email || "",
+      }
+    );
+
+  if (signedResult.signed) {
+    fs.writeFileSync(filePath, signedResult.buffer);
+  }
 
   const hash =
     fileSha256(
