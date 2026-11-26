@@ -11578,6 +11578,18 @@ async function sendClientBillingWhatsApp(params: {
     return { status: "SKIPPED", reason: "Cliente sem WhatsApp." };
   }
 
+  // Reserva a chave antes de enviar, para dois ciclos simultâneos
+  // não mandarem a mesma mensagem duas vezes.
+  let reservation: { id: number };
+  try {
+    reservation = await prisma.clientWhatsAppNotification.create({
+      data: { ...base, dedupeKey: params.dedupeKey, status: "SENDING" },
+    });
+  } catch (error: any) {
+    if (error?.code === "P2002") return { status: "SKIPPED", reason: "Aviso já enviado." };
+    throw error;
+  }
+
   const png = params.card ? tryRenderCardPng(params.card) : null;
   const result = png
     ? await sendWhatsAppImage(phone, png, params.caption || params.text, params.text)
@@ -11589,19 +11601,22 @@ async function sendClientBillingWhatsApp(params: {
   }
 
   if (result.ok) {
-    await prisma.clientWhatsAppNotification.create({
-      data: { ...base, dedupeKey: params.dedupeKey, status: "SENT", messageId: result.messageId || null },
+    await prisma.clientWhatsAppNotification.update({
+      where: { id: reservation.id },
+      data: { status: "SENT", messageId: result.messageId || null },
     });
     return { status: "SENT" };
   }
 
   if (result.skipped) {
+    // WhatsApp desligado: libera a chave para enviar quando religar.
+    await prisma.clientWhatsAppNotification.delete({ where: { id: reservation.id } });
     return { status: "SKIPPED", reason: result.error };
   }
 
-  await prisma.clientWhatsAppNotification.create({
+  await prisma.clientWhatsAppNotification.update({
+    where: { id: reservation.id },
     data: {
-      ...base,
       dedupeKey: `${params.dedupeKey}#FAIL${failures + 1}`,
       status: "FAILED",
       errorText: result.error || null,

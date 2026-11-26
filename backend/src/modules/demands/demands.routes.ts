@@ -311,27 +311,50 @@ async function notifyUser(
   if (!user || !user.active || !user.whatsappAlertsEnabled || !phone) {
     await record("SKIPPED", {
       errorText: !phone ? "Usuário sem WhatsApp cadastrado." : "Alertas desativados para o usuário.",
+    }).catch((error: any) => {
+      if (error?.code !== "P2002") throw error;
     });
     return { status: "SKIPPED" as const };
+  }
+
+  // Reserva a chave ANTES de enviar: se dois ciclos do cron rodarem
+  // juntos, o segundo esbarra no índice único e não manda de novo.
+  let reservation: { id: number };
+  try {
+    reservation = await record("SENDING", {});
+  } catch (error: any) {
+    if (error?.code === "P2002") return { status: "DUPLICATE" as const };
+    throw error;
   }
 
   const png = params.card ? tryRenderCardPng(params.card) : null;
   const result = await sendWhatsAppImage(phone, png, params.caption || params.text, params.text);
 
   if (result.ok) {
-    await record("SENT", { messageId: result.messageId });
+    await prisma.demandNotification.update({
+      where: { id: reservation.id },
+      data: { status: "SENT", messageId: result.messageId || null },
+    });
     return { status: "SENT" as const };
   }
 
   if (result.skipped) {
     // WhatsApp desligado: registra para não acumular alertas velhos.
-    await record("SKIPPED", { errorText: result.error });
+    await prisma.demandNotification.update({
+      where: { id: reservation.id },
+      data: { status: "SKIPPED", errorText: result.error || null },
+    });
     return { status: "SKIPPED" as const, error: result.error };
   }
 
-  await record("FAILED", {
-    errorText: result.error,
-    key: `${params.dedupeKey}#FAIL${failures + 1}`,
+  // Falhou: libera a chave para nova tentativa e guarda a falha à parte.
+  await prisma.demandNotification.update({
+    where: { id: reservation.id },
+    data: {
+      status: "FAILED",
+      errorText: result.error || null,
+      dedupeKey: `${params.dedupeKey}#FAIL${failures + 1}`,
+    },
   });
 
   return { status: "FAILED" as const, error: result.error };
@@ -371,7 +394,21 @@ async function notifyAssignment(prisma: PrismaClient, demand: DemandWithPeople, 
  * Processamento periódico (chamado pelo cron)
  * ---------------------------------------------------- */
 
+let demandAlertsRunning = false;
+
 export async function processDemandAlerts(prisma: PrismaClient, now = new Date()) {
+  if (demandAlertsRunning) {
+    return { dueSoon: 0, overdue: 0, digests: 0, failed: 0, skipped: 0, executed: false, reason: "Ciclo anterior ainda em andamento." };
+  }
+  demandAlertsRunning = true;
+  try {
+    return await runDemandAlerts(prisma, now);
+  } finally {
+    demandAlertsRunning = false;
+  }
+}
+
+async function runDemandAlerts(prisma: PrismaClient, now: Date) {
   const summary = { dueSoon: 0, overdue: 0, digests: 0, failed: 0, skipped: 0 };
   const config = whatsappConfig();
 
@@ -468,25 +505,58 @@ export async function processDemandAlerts(prisma: PrismaClient, now = new Date()
         whatsappAlertsEnabled: true,
         whatsappPhone: { not: null },
       },
-      select: { id: true, name: true, role: true },
+      select: { id: true, name: true, role: true, whatsappPhone: true },
     });
 
-    for (const user of users) {
-      const dedupeKey = `DIGEST:${user.id}:${dayKey}`;
-      const exists = await prisma.demandNotification.findUnique({ where: { dedupeKey } });
+    // Contas diferentes com o mesmo WhatsApp (ex.: gerente e programador)
+    // recebem UMA agenda só, juntando o conteúdo das duas.
+    const roleOrder: Record<string, number> = { GERENTE: 0, SECRETARIA: 1, PROGRAMADOR: 2 };
+    const byPhone = new Map<string, typeof users>();
+    for (const user of [...users].sort((a, b) => (roleOrder[a.role] ?? 9) - (roleOrder[b.role] ?? 9) || a.id - b.id)) {
+      const phone = normalizeWhatsAppPhone(user.whatsappPhone);
+      if (!phone) continue;
+      byPhone.set(phone, [...(byPhone.get(phone) || []), user]);
+    }
+
+    for (const group of byPhone.values()) {
+      const keys = group.map((user) => `DIGEST:${user.id}:${dayKey}`);
+      const exists = await prisma.demandNotification.findFirst({ where: { dedupeKey: { in: keys } } });
       if (exists) continue;
 
-      const digest = await buildDailyDigest(prisma, user, now);
-      if (!digest) continue;
+      const digests = (await Promise.all(group.map((user) => buildDailyDigest(prisma, user, now)))).filter(
+        (item): item is NonNullable<typeof item> => Boolean(item)
+      );
+      if (!digests.length) continue;
+
+      const digest = mergeDigests(digests);
+      const primary = group[0];
 
       const result = await notifyUser(prisma, {
-        userId: user.id,
+        userId: primary.id,
         kind: "DAILY_DIGEST",
-        dedupeKey,
+        dedupeKey: keys[0],
         text: digest.text,
         card: digest.card,
         caption: digest.caption,
       });
+
+      if (result.status === "SENT") {
+        for (const [index, user] of group.entries()) {
+          if (index === 0) continue;
+          await prisma.demandNotification
+            .create({
+              data: {
+                userId: user.id,
+                kind: "DAILY_DIGEST",
+                dedupeKey: keys[index],
+                phone: normalizeWhatsAppPhone(user.whatsappPhone) || "",
+                status: "SKIPPED",
+                errorText: `Mesmo WhatsApp de ${primary.name}: agenda enviada junto.`,
+              },
+            })
+            .catch(() => null);
+        }
+      }
 
       if (result.status === "SENT") summary.digests += 1;
       count(result.status);
@@ -497,11 +567,46 @@ export async function processDemandAlerts(prisma: PrismaClient, now = new Date()
   return { ...summary, executed: true };
 }
 
+type DailyDigest = { text: string; card: CardSpec; caption: string };
+
+/** Junta agendas de contas que dividem o mesmo WhatsApp, sem repetir itens. */
+function mergeDigests(digests: DailyDigest[]): DailyDigest {
+  if (digests.length === 1) return digests[0];
+
+  const [first] = digests;
+  const seen = new Set<string>();
+  const list: CardListItem[] = [];
+  for (const digest of digests) {
+    for (const item of digest.card.list || []) {
+      const key = `${item.text}|${item.meta || ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      list.push(item);
+    }
+  }
+
+  const bodies = digests.map((digest) => digest.text.split("\n").slice(2, -2).join("\n").trim()).filter(Boolean);
+  const uniqueBodies = [...new Set(bodies)];
+  const textLines = first.text.split("\n");
+  const text = [textLines[0], "", uniqueBodies.join("\n\n"), "", textLines[textLines.length - 1]].join("\n");
+  const caption = first.caption.replace(/\(\d+ (itens|item)\)/, `(${list.length} ${list.length === 1 ? "item" : "itens"})`);
+
+  const overdue = list.filter((item) => item.tone === "red").length;
+  const rows = [...(first.card.rows || [])];
+  if (rows[1]) {
+    rows[1] = overdue
+      ? { label: "Atrasadas", value: String(overdue), icon: "alert", tone: "red" }
+      : { label: "Itens na agenda", value: String(list.length), icon: "clock" };
+  }
+
+  return { text, caption, card: { ...first.card, rows, list } };
+}
+
 async function buildDailyDigest(
   prisma: PrismaClient,
   user: { id: number; name: string; role: string },
   now: Date
-) {
+): Promise<DailyDigest | null> {
   const sections: string[] = [];
   const items: CardListItem[] = [];
   const endOfToday = new Date(`${localDayKey(now)}T23:59:59${TZ_OFFSET}`);
