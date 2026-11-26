@@ -297,9 +297,9 @@ function PublicBillingChargePage() {
                       </button>
 
                       <small>
-                        Após o pagamento, a confirmação será realizada pela
-                        equipe da AMAZONIKA ou automaticamente quando a
-                        integração bancária estiver em produção.
+                        Após o pagamento, a confirmação é feita
+                        automaticamente pelo Banco do Brasil, em geral em
+                        até 30 minutos.
                       </small>
                     </div>
                   </section>
