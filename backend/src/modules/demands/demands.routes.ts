@@ -9,13 +9,14 @@ import {
 import {
   maskWhatsAppPhone,
   normalizeWhatsAppPhone,
-  sendWhatsAppText,
+  sendWhatsAppImage,
   whatsappConfig,
   whatsappConnect,
   whatsappLogout,
   whatsappQrCode,
   whatsappSessionStatus,
 } from "../../services/whatsappService";
+import { CardIcon, CardListItem, CardSpec, CardTone, tryRenderCardPng } from "../../services/whatsappCard";
 
 /*
  * ======================================================
@@ -83,6 +84,103 @@ const demandInclude = {
 } satisfies Prisma.DemandInclude;
 
 type DemandWithPeople = Prisma.DemandGetPayload<{ include: typeof demandInclude }>;
+
+/* ------------------------------------------------------
+ * Card (imagem) de cada alerta
+ * ---------------------------------------------------- */
+
+const PRIORITY_TONE: Record<DemandPriority, CardTone> = {
+  BAIXA: "blue",
+  NORMAL: "green",
+  ALTA: "amber",
+  URGENTE: "red",
+};
+
+const TYPE_ICON: Record<DemandType, CardIcon> = {
+  TRABALHO: "clipboard",
+  VIAGEM: "pin",
+  PAGAMENTO: "money",
+  LEMBRETE: "bell",
+  OUTRO: "clipboard",
+};
+
+function priorityRow(priority: DemandPriority) {
+  return {
+    label: "Prioridade",
+    value: PRIORITY_LABEL[priority],
+    icon: "flag" as CardIcon,
+    badge: PRIORITY_TONE[priority],
+  };
+}
+
+function untilText(dueAt: Date, now: Date) {
+  const minutes = Math.max(0, Math.round((dueAt.getTime() - now.getTime()) / 60000));
+  if (minutes < 60) return `em ${minutes} min`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `em ${hours} h`;
+  return `em ${Math.round(hours / 24)} dias`;
+}
+
+function demandCard(
+  kind: "ASSIGNED" | "DUE_SOON" | "OVERDUE",
+  demand: DemandWithPeople,
+  now = new Date()
+): CardSpec {
+  const base = {
+    boxTitle: demand.title,
+    boxSubtitle: demand.description || TYPE_LABEL[demand.type],
+    boxIcon: TYPE_ICON[demand.type],
+    link: appUrl(),
+  };
+
+  if (kind === "ASSIGNED") {
+    return {
+      ...base,
+      pill: demand.type === "OUTRO" ? "Nova demanda" : TYPE_LABEL[demand.type],
+      pillIcon: "bell",
+      tone: "green",
+      titleLead: "Nova demanda",
+      titleAccent: "para você",
+      rows: [
+        demand.dueAt ? { label: "Prazo", value: formatDateTime(demand.dueAt), icon: "calendar" as CardIcon } : null,
+        priorityRow(demand.priority),
+        demand.createdBy?.name
+          ? { label: "Atribuída por", value: demand.createdBy.name, icon: "user" as CardIcon }
+          : null,
+      ].filter(Boolean) as CardSpec["rows"],
+    };
+  }
+
+  if (kind === "DUE_SOON") {
+    return {
+      ...base,
+      pill: "Lembrete",
+      pillIcon: "clock",
+      tone: "amber",
+      titleLead: "O prazo está",
+      titleAccent: "chegando",
+      rows: [
+        { label: "Prazo", value: formatDateTime(demand.dueAt!), icon: "calendar" },
+        { label: "Vence", value: untilText(demand.dueAt!, now), icon: "clock", tone: "amber" },
+        priorityRow(demand.priority),
+      ],
+    };
+  }
+
+  return {
+    ...base,
+    pill: "Atrasada",
+    pillIcon: "alert",
+    tone: "red",
+    titleLead: "Prazo",
+    titleAccent: "vencido",
+    rows: [
+      { label: "Prazo era", value: formatDateTime(demand.dueAt!), icon: "calendar", tone: "red" },
+      { label: "Situação", value: STATUS_LABEL[demand.status], icon: "clipboard" },
+      priorityRow(demand.priority),
+    ],
+  };
+}
 
 function cleanText(value: unknown, max: number) {
   const text = String(value ?? "").trim();
@@ -172,6 +270,9 @@ async function notifyUser(
     dedupeKey: string;
     text: string;
     demandId?: number | null;
+    /** Card em imagem; o texto vira legenda curta e reserva. */
+    card?: CardSpec | null;
+    caption?: string;
   }
 ) {
   const already = await prisma.demandNotification.findUnique({
@@ -214,7 +315,8 @@ async function notifyUser(
     return { status: "SKIPPED" as const };
   }
 
-  const result = await sendWhatsAppText(phone, params.text);
+  const png = params.card ? tryRenderCardPng(params.card) : null;
+  const result = await sendWhatsAppImage(phone, png, params.caption || params.text, params.text);
 
   if (result.ok) {
     await record("SENT", { messageId: result.messageId });
@@ -260,6 +362,8 @@ async function notifyAssignment(prisma: PrismaClient, demand: DemandWithPeople, 
     dedupeKey: `ASSIGNED:${demand.id}:${demand.assigneeId}:${demand.updatedAt.getTime()}`,
     demandId: demand.id,
     text: lines.join("\n"),
+    card: demandCard("ASSIGNED", demand),
+    caption: `*Nova demanda para você:* ${demand.title}\n${appUrl()}`,
   });
 }
 
@@ -312,6 +416,8 @@ export async function processDemandAlerts(prisma: PrismaClient, now = new Date()
           "",
           appUrl(),
         ].join("\n"),
+        card: demandCard("OVERDUE", demand, now),
+        caption: `*Prazo vencido:* ${demand.title}\n${appUrl()}`,
       });
 
       if (result.status === "SENT") summary.overdue += 1;
@@ -340,6 +446,8 @@ export async function processDemandAlerts(prisma: PrismaClient, now = new Date()
           ]
             .filter((line) => line !== null)
             .join("\n"),
+          card: demandCard("DUE_SOON", demand, now),
+          caption: `*Lembrete:* ${demand.title} (prazo ${formatDateTime(dueAt)})\n${appUrl()}`,
         });
 
         if (result.status === "SENT") summary.dueSoon += 1;
@@ -368,14 +476,16 @@ export async function processDemandAlerts(prisma: PrismaClient, now = new Date()
       const exists = await prisma.demandNotification.findUnique({ where: { dedupeKey } });
       if (exists) continue;
 
-      const text = await buildDailyDigest(prisma, user, now);
-      if (!text) continue;
+      const digest = await buildDailyDigest(prisma, user, now);
+      if (!digest) continue;
 
       const result = await notifyUser(prisma, {
         userId: user.id,
         kind: "DAILY_DIGEST",
         dedupeKey,
-        text,
+        text: digest.text,
+        card: digest.card,
+        caption: digest.caption,
       });
 
       if (result.status === "SENT") summary.digests += 1;
@@ -393,6 +503,7 @@ async function buildDailyDigest(
   now: Date
 ) {
   const sections: string[] = [];
+  const items: CardListItem[] = [];
   const endOfToday = new Date(`${localDayKey(now)}T23:59:59${TZ_OFFSET}`);
 
   const demands = await prisma.demand.findMany({
@@ -404,6 +515,14 @@ async function buildDailyDigest(
   const overdue = demands.filter((d) => d.dueAt && d.dueAt < now);
   const today = demands.filter((d) => d.dueAt && d.dueAt >= now && d.dueAt <= endOfToday);
   const rest = demands.filter((d) => !overdue.includes(d) && !today.includes(d));
+
+  const demandMeta = (d: (typeof demands)[number], prefix: string) =>
+    [prefix, d.dueAt ? formatDateTime(d.dueAt) : null, d.priority === "URGENTE" || d.priority === "ALTA" ? PRIORITY_LABEL[d.priority] : null]
+      .filter(Boolean)
+      .join(" · ");
+  overdue.forEach((d) => items.push({ text: d.title, meta: demandMeta(d, "Atrasada"), tone: "red" }));
+  today.forEach((d) => items.push({ text: d.title, meta: demandMeta(d, "Hoje"), tone: "amber" }));
+  rest.forEach((d) => items.push({ text: d.title, meta: demandMeta(d, "Na fila"), tone: "green" }));
 
   if (overdue.length) sections.push(`*Atrasadas (${overdue.length})*\n${overdue.slice(0, 10).map(demandLine).join("\n")}`);
   if (today.length) sections.push(`*Para hoje (${today.length})*\n${today.slice(0, 10).map(demandLine).join("\n")}`);
@@ -423,6 +542,17 @@ async function buildDailyDigest(
     },
     orderBy: { startDate: "asc" },
     take: 10,
+  });
+
+  trips.forEach((trip) => {
+    const where = [trip.municipality, trip.state].filter(Boolean).join("/");
+    items.push({
+      text: trip.title,
+      meta: [`Campo ${formatDay(trip.startDate, "UTC")}`, trip.departureTime ? `saída ${trip.departureTime}` : null, where || null]
+        .filter(Boolean)
+        .join(" · "),
+      tone: "blue",
+    });
   });
 
   if (trips.length) {
@@ -461,6 +591,13 @@ async function buildDailyDigest(
       return `• ${t.description}${who}: ${brl(cents)}${late}`;
     };
 
+    const payMeta = (t: (typeof due)[number]) =>
+      [brl(t.amountCents ?? 0), t.dueDate! < startOfToday ? `venceu ${formatDay(t.dueDate!, "UTC")}` : "vence hoje", t.client?.name || null]
+        .filter(Boolean)
+        .join(" · ");
+    pay.forEach((t) => items.push({ text: `Pagar: ${t.description}`, meta: payMeta(t), tone: "amber" }));
+    receive.forEach((t) => items.push({ text: `Receber: ${t.description}`, meta: payMeta(t), tone: "violet" }));
+
     if (pay.length) sections.push(`*Contas a pagar (${pay.length})*\n${pay.slice(0, 8).map(line).join("\n")}`);
     if (receive.length) sections.push(`*A receber vencendo/vencido (${receive.length})*\n${receive.slice(0, 8).map(line).join("\n")}`);
   }
@@ -468,14 +605,39 @@ async function buildDailyDigest(
   if (!sections.length) return null;
 
   const firstName = user.name.split(" ")[0];
+  const weekday = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, weekday: "long" }).format(now);
 
-  return [
+  const text = [
     `Bom dia, ${firstName}! Sua agenda de ${formatDay(now)}:`,
     "",
     sections.join("\n\n"),
     "",
     appUrl(),
   ].join("\n");
+
+  const card: CardSpec = {
+    pill: "Agenda do dia",
+    pillIcon: "calendar",
+    tone: "green",
+    titleLead: "Bom dia,",
+    titleAccent: `${firstName}!`,
+    rows: [
+      { label: weekday.charAt(0).toUpperCase() + weekday.slice(1), value: formatDay(now), icon: "calendar" },
+      overdue.length
+        ? { label: "Atrasadas", value: String(overdue.length), icon: "alert", tone: "red" }
+        : { label: "Para hoje", value: String(today.length), icon: "clock" },
+    ],
+    listTitle: "Sua agenda",
+    list: items,
+    listMax: 8,
+    link: appUrl(),
+  };
+
+  return {
+    text,
+    card,
+    caption: `*Bom dia, ${firstName}!* Sua agenda de ${formatDay(now)} (${items.length} ${items.length === 1 ? "item" : "itens"}).\n${appUrl()}`,
+  };
 }
 
 /* ------------------------------------------------------
@@ -769,6 +931,19 @@ export function registerDemandRoutes({ app, prisma, authMiddleware, requireRoles
       kind: "TEST",
       dedupeKey: `TEST:${req.user.id}:${Date.now()}`,
       text: `Teste do SIS Amazonika: os alertas de Demandas chegarão por aqui. (${formatDateTime(new Date())})`,
+      caption: `Teste do SIS Amazonika (${formatDateTime(new Date())})`,
+      card: {
+        pill: "Teste",
+        pillIcon: "check",
+        tone: "green",
+        titleLead: "WhatsApp",
+        titleAccent: "conectado",
+        boxTitle: "Os alertas do SIS chegarão por aqui",
+        boxSubtitle: "Novas demandas, lembretes de prazo, atrasos e a agenda do dia.",
+        boxIcon: "check",
+        rows: [{ label: "Enviado em", value: formatDateTime(new Date()), icon: "clock" }],
+        link: appUrl(),
+      },
     });
 
     if (result.status === "SENT") return res.json({ message: "Mensagem de teste enviada." });

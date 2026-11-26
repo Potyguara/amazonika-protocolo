@@ -60,7 +60,8 @@ import { registerStandaloneProposalRoutes } from "./modules/standalone-proposals
 import { blockStandaloneProposalStaticAccess } from "./modules/standalone-proposals/standalone-upload-guard";
 import { registerFieldScheduleRoutes } from "./modules/field-schedule/field-schedule.routes";
 import { processDemandAlerts, registerDemandRoutes } from "./modules/demands/demands.routes";
-import { normalizeWhatsAppPhone, sendWhatsAppText } from "./services/whatsappService";
+import { normalizeWhatsAppPhone, sendWhatsAppImage, sendWhatsAppText } from "./services/whatsappService";
+import { CardSpec, tryRenderCardPng } from "./services/whatsappCard";
 import { restrictSecretaryAccess, secretaryMayUseRoute } from "./modules/secretary/secretary.routes";
 import { registerPartnerReferralRoutes } from "./modules/partners/partner-referrals.routes";
 import { registerPartnerCommissionRoutes } from "./modules/partners/partner-commissions.routes";
@@ -11435,6 +11436,100 @@ function clientBillingWhatsAppText(params: {
   return `${hello} ${intro}\n\n${details}${footer}`;
 }
 
+/** Card em imagem da cobrança, com o mesmo conteúdo do texto. */
+function clientBillingWhatsAppCard(params: {
+  kind: ClientBillingWhatsAppKind;
+  clientName: string;
+  description: string;
+  amountText: string;
+  dueDateText: string;
+  paidAtText?: string | null;
+  publicUrl: string;
+  companyName: string;
+  daysUntilDue?: number | null;
+  qrDataUri?: string | null;
+}): { card: CardSpec; caption: string } {
+  const hello = `Olá, ${firstNameOf(params.clientName)}!`;
+
+  if (params.kind === "PAYMENT_CONFIRMED") {
+    return {
+      card: {
+        pill: "Pago",
+        pillIcon: "check",
+        tone: "green",
+        titleLead: "Pagamento",
+        titleAccent: "confirmado",
+        boxTitle: params.description,
+        boxSubtitle: "Obrigado! O recibo está disponível no link abaixo.",
+        boxIcon: "check",
+        rows: [
+          { label: "Valor pago", value: params.amountText, icon: "money" },
+          params.paidAtText ? { label: "Pago em", value: params.paidAtText, icon: "calendar" } : null,
+          { label: "Recebido por", value: params.companyName, icon: "user" },
+        ].filter(Boolean) as CardSpec["rows"],
+        link: params.publicUrl,
+      },
+      caption: `${hello} Recebemos o seu pagamento de *${params.amountText}*. Obrigado!\nRecibo: ${params.publicUrl}`,
+    };
+  }
+
+  const days = params.daysUntilDue ?? null;
+  let tone: CardSpec["tone"] = "green";
+  let pill = "Cobrança";
+  let titleLead = "Cobrança";
+  let titleAccent = "emitida";
+  let intro = "Emitimos a sua cobrança.";
+
+  if (params.kind !== "NEW_CHARGE") {
+    if (params.kind.includes("NO_DIA")) {
+      tone = "amber";
+      pill = "Vence hoje";
+      titleLead = "Sua cobrança";
+      titleAccent = "vence hoje";
+      intro = "Sua cobrança vence *hoje*.";
+    } else if (days !== null && days < 0) {
+      tone = "red";
+      pill = "Em aberto";
+      titleLead = "Cobrança";
+      titleAccent = "em aberto";
+      intro = "Consta em aberto a cobrança abaixo. Se já pagou, desconsidere.";
+    } else {
+      tone = "amber";
+      pill = "Lembrete";
+      titleLead = "Vence em";
+      titleAccent = days !== null && days > 0 ? `${days} dia${days > 1 ? "s" : ""}` : "breve";
+      intro = "Lembrete da sua cobrança.";
+    }
+  }
+
+  return {
+    card: {
+      pill,
+      pillIcon: params.kind === "NEW_CHARGE" ? "money" : tone === "red" ? "alert" : "clock",
+      tone,
+      titleLead,
+      titleAccent,
+      boxTitle: params.description,
+      boxSubtitle: `${params.companyName} · pague por Pix`,
+      boxIcon: "money",
+      rows: [
+        { label: "Valor", value: params.amountText, icon: "money" },
+        {
+          label: "Vencimento",
+          value: params.dueDateText,
+          icon: "calendar",
+          tone: tone === "green" ? undefined : tone,
+        },
+      ],
+      qr: params.qrDataUri
+        ? { dataUri: params.qrDataUri, label: "Pix: leia o QR Code ou use o código copia e cola" }
+        : undefined,
+      link: params.publicUrl,
+    },
+    caption: `${hello} ${intro}\n*${params.description}*: ${params.amountText}, vencimento ${params.dueDateText}.\nPague pelo link: ${params.publicUrl}`,
+  };
+}
+
 async function sendClientBillingWhatsApp(params: {
   kind: ClientBillingWhatsAppKind;
   dedupeKey: string;
@@ -11443,6 +11538,10 @@ async function sendClientBillingWhatsApp(params: {
   billingChargeId: number | null;
   phoneRaw: string | null | undefined;
   text: string;
+  card?: CardSpec | null;
+  caption?: string;
+  /** Mensagem extra depois do card (ex.: Pix copia e cola). */
+  followUpText?: string | null;
 }) {
   const testIds = financeAutomationTestClientIds();
 
@@ -11479,7 +11578,15 @@ async function sendClientBillingWhatsApp(params: {
     return { status: "SKIPPED", reason: "Cliente sem WhatsApp." };
   }
 
-  const result = await sendWhatsAppText(phone, params.text);
+  const png = params.card ? tryRenderCardPng(params.card) : null;
+  const result = png
+    ? await sendWhatsAppImage(phone, png, params.caption || params.text, params.text)
+    : await sendWhatsAppText(phone, params.text);
+
+  if (result.ok && png && params.followUpText) {
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await sendWhatsAppText(phone, params.followUpText).catch(() => null);
+  }
 
   if (result.ok) {
     await prisma.clientWhatsAppNotification.create({
@@ -11529,7 +11636,7 @@ async function notifyClientBillingWhatsApp(
     const cents = charge.paidAmountCents ?? charge.amountCents ?? transaction.amountCents ?? 0;
     const dueDate = transaction.dueDate || charge.dueDate || null;
 
-    const text = clientBillingWhatsAppText({
+    const fields = {
       kind,
       clientName: client.name,
       description: charge.description || transaction.description,
@@ -11538,6 +11645,19 @@ async function notifyClientBillingWhatsApp(
       publicUrl: getChargePublicUrl(charge),
       companyName: company.companyName || "Amazonika Engenharia",
       daysUntilDue: extra.daysUntilDue,
+    };
+    const text = clientBillingWhatsAppText(fields);
+
+    const pixCode = kind === "PAYMENT_CONFIRMED" ? null : charge.pixCopyPaste || null;
+    const qrDataUri = pixCode
+      ? await QRCode.toDataURL(pixCode, { margin: 1, width: 680, errorCorrectionLevel: "M" }).catch(() => null)
+      : null;
+    const { card, caption } = clientBillingWhatsAppCard({
+      ...fields,
+      paidAtText: charge.paidAt
+        ? new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Belem", dateStyle: "short", timeStyle: "short" }).format(charge.paidAt)
+        : null,
+      qrDataUri,
     });
 
     return await sendClientBillingWhatsApp({
@@ -11548,6 +11668,9 @@ async function notifyClientBillingWhatsApp(
       billingChargeId: charge.id,
       phoneRaw: client.whatsapp || client.phone,
       text,
+      card,
+      caption,
+      followUpText: pixCode,
     });
   } catch (error: any) {
     console.error("Falha no WhatsApp de cobrança:", error?.message || error);

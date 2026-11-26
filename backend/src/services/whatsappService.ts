@@ -76,6 +76,42 @@ export async function sendWhatsAppText(
   phone: string,
   text: string
 ): Promise<WhatsAppSendResult> {
+  return postMessage(phone, "send-text", (chatId) => ({ chatId, text: text.slice(0, 4096) }));
+}
+
+/**
+ * Envia uma imagem (PNG) com legenda. Se o envio da imagem falhar,
+ * manda só o texto da legenda, para o aviso nunca se perder.
+ */
+export async function sendWhatsAppImage(
+  phone: string,
+  png: Buffer | null,
+  caption: string,
+  fallbackText: string = caption
+): Promise<WhatsAppSendResult> {
+  if (!png) return sendWhatsAppText(phone, fallbackText);
+
+  const shortCaption = caption.length > 1024 ? `${caption.slice(0, 1020)}…` : caption;
+  const result = await postMessage(phone, "send-image", (chatId) => ({
+    chatId,
+    base64: `data:image/png;base64,${png.toString("base64")}`,
+    mimetype: "image/png",
+    caption: shortCaption,
+  }));
+
+  if (result.ok || result.skipped) return result;
+
+  const fallback = await sendWhatsAppText(phone, fallbackText);
+  return fallback.ok
+    ? { ...fallback, error: `Imagem falhou, enviado só texto (${result.error})`.slice(0, 500) }
+    : fallback;
+}
+
+async function postMessage(
+  phone: string,
+  endpoint: "send-text" | "send-image",
+  body: (chatId: string) => Record<string, unknown>
+): Promise<WhatsAppSendResult> {
   const config = whatsappConfig();
 
   if (!config.enabled) {
@@ -99,11 +135,12 @@ export async function sendWhatsAppText(
       }
 
       return axios.post(
-        `${config.baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/messages/send-text`,
-        { chatId: whatsappChatId(normalized), text },
+        `${config.baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/messages/${endpoint}`,
+        body(whatsappChatId(normalized)),
         {
           headers: { "X-API-Key": config.apiKey },
-          timeout: 20000,
+          timeout: endpoint === "send-image" ? 45000 : 20000,
+          maxBodyLength: 20 * 1024 * 1024,
         }
       );
     });
