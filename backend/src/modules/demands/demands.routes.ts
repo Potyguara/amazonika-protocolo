@@ -28,8 +28,8 @@ import { CardIcon, CardListItem, CardSpec, CardTone, tryRenderCardPng } from "..
  * por WhatsApp (OpenWA):
  *   - ao atribuir a demanda a alguém;
  *   - antes do prazo (remindBeforeMinutes);
- *   - quando o prazo passa, repetindo todo dia nos horários de
- *     DEMANDS_OVERDUE_REPEAT_HOURS (padrão 9h e 15h) até concluir;
+ *   - quando o prazo passa, repetindo todo dia nos horários
+ *     configurados (padrão 9h e 15h) até concluir;
  *   - resumo diário às DEMANDS_DIGEST_HOUR (padrão 7h) com a
  *     fila da pessoa, viagens do Cronograma de Campo dos
  *     próximos dias e, para gerente e secretária, os
@@ -369,6 +369,7 @@ function pause(ms: number) {
 
 async function notifyAssignment(prisma: PrismaClient, demand: DemandWithPeople, actorId?: number | null) {
   if (!demand.assigneeId || demand.assigneeId === actorId) return;
+  if (!(await loadDemandSettings(prisma)).assignEnabled) return;
 
   const lines = [
     `*Nova demanda para você* (${TYPE_LABEL[demand.type]})`,
@@ -394,16 +395,117 @@ async function notifyAssignment(prisma: PrismaClient, demand: DemandWithPeople, 
 }
 
 /* ------------------------------------------------------
+ * Configurações dos avisos (tela do programador)
+ * ---------------------------------------------------- */
+
+export type DemandAlertSettings = {
+  assignEnabled: boolean;
+  dueSoonEnabled: boolean;
+  overdueEnabled: boolean;
+  overdueRepeatHours: number[];
+  digestEnabled: boolean;
+  digestHour: number;
+};
+
+const SETTINGS_GROUP = "DEMANDS";
+const SETTING_KEYS: Record<keyof DemandAlertSettings, string> = {
+  assignEnabled: "DEMANDS_ASSIGN_ENABLED",
+  dueSoonEnabled: "DEMANDS_DUE_SOON_ENABLED",
+  overdueEnabled: "DEMANDS_OVERDUE_ENABLED",
+  overdueRepeatHours: "DEMANDS_OVERDUE_REPEAT_HOURS",
+  digestEnabled: "DEMANDS_DIGEST_ENABLED",
+  digestHour: "DEMANDS_DIGEST_HOUR",
+};
+
+function parseHours(raw: string) {
+  return [
+    ...new Set(
+      raw
+        .split(/[,;\s]+/)
+        .filter(Boolean)
+        .map(Number)
+        .filter((hour) => Number.isInteger(hour) && hour >= 0 && hour <= 23)
+    ),
+  ].sort((a, b) => a - b);
+}
+
+function defaultSettings(): DemandAlertSettings {
+  const digestHour = Number(process.env.DEMANDS_DIGEST_HOUR ?? 7);
+  return {
+    assignEnabled: true,
+    dueSoonEnabled: true,
+    overdueEnabled: true,
+    overdueRepeatHours: parseHours(String(process.env.DEMANDS_OVERDUE_REPEAT_HOURS ?? "9,15")),
+    digestEnabled: true,
+    digestHour: Number.isInteger(digestHour) && digestHour >= 0 && digestHour <= 23 ? digestHour : 7,
+  };
+}
+
+// Valor em memória, atualizado a cada ciclo do cron e ao salvar na tela.
+let demandSettings: DemandAlertSettings = defaultSettings();
+
+export async function loadDemandSettings(prisma: PrismaClient) {
+  const rows = await prisma.systemSetting.findMany({ where: { group: SETTINGS_GROUP } });
+  const byKey = new Map(rows.map((row) => [row.key, row.value ?? ""]));
+  const base = defaultSettings();
+  const bool = (key: string, fallback: boolean) =>
+    byKey.has(key) ? byKey.get(key) === "true" : fallback;
+
+  const hour = byKey.has(SETTING_KEYS.digestHour) ? Number(byKey.get(SETTING_KEYS.digestHour)) : base.digestHour;
+
+  demandSettings = {
+    assignEnabled: bool(SETTING_KEYS.assignEnabled, base.assignEnabled),
+    dueSoonEnabled: bool(SETTING_KEYS.dueSoonEnabled, base.dueSoonEnabled),
+    overdueEnabled: bool(SETTING_KEYS.overdueEnabled, base.overdueEnabled),
+    overdueRepeatHours: byKey.has(SETTING_KEYS.overdueRepeatHours)
+      ? parseHours(byKey.get(SETTING_KEYS.overdueRepeatHours) || "")
+      : base.overdueRepeatHours,
+    digestEnabled: bool(SETTING_KEYS.digestEnabled, base.digestEnabled),
+    digestHour: Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : base.digestHour,
+  };
+  return demandSettings;
+}
+
+async function saveDemandSettings(prisma: PrismaClient, body: any) {
+  const current = await loadDemandSettings(prisma);
+  const next: DemandAlertSettings = { ...current };
+
+  for (const key of ["assignEnabled", "dueSoonEnabled", "overdueEnabled", "digestEnabled"] as const) {
+    if (body?.[key] !== undefined) next[key] = Boolean(body[key]);
+  }
+  if (body?.digestHour !== undefined) {
+    const hour = Number(body.digestHour);
+    if (!Number.isInteger(hour) || hour < 0 || hour > 23) throw new Error("Horário da agenda inválido (0 a 23).");
+    next.digestHour = hour;
+  }
+  if (body?.overdueRepeatHours !== undefined) {
+    const raw = Array.isArray(body.overdueRepeatHours) ? body.overdueRepeatHours.join(",") : String(body.overdueRepeatHours);
+    next.overdueRepeatHours = parseHours(raw);
+    if (next.overdueRepeatHours.length > 6) throw new Error("Use no máximo 6 horários de repetição.");
+  }
+
+  const value = (key: keyof DemandAlertSettings) =>
+    key === "overdueRepeatHours" ? next.overdueRepeatHours.join(",") : String(next[key]);
+
+  await prisma.$transaction(
+    (Object.keys(SETTING_KEYS) as (keyof DemandAlertSettings)[]).map((key) =>
+      prisma.systemSetting.upsert({
+        where: { key: SETTING_KEYS[key] },
+        create: { key: SETTING_KEYS[key], value: value(key), group: SETTINGS_GROUP },
+        update: { value: value(key), group: SETTINGS_GROUP },
+      })
+    )
+  );
+
+  return loadDemandSettings(prisma);
+}
+
+/* ------------------------------------------------------
  * Processamento periódico (chamado pelo cron)
  * ---------------------------------------------------- */
 
 function overdueRepeatHours() {
-  return String(process.env.DEMANDS_OVERDUE_REPEAT_HOURS ?? "9,15")
-    .split(/[,;\s]+/)
-    .filter(Boolean)
-    .map(Number)
-    .filter((hour) => Number.isInteger(hour) && hour >= 0 && hour <= 23)
-    .sort((a, b) => a - b);
+  return demandSettings.overdueRepeatHours;
 }
 
 function overdueRepeatHoursText() {
@@ -451,6 +553,8 @@ async function runDemandAlerts(prisma: PrismaClient, now: Date) {
     return { ...summary, executed: false, reason: "WhatsApp desativado." };
   }
 
+  const settings = await loadDemandSettings(prisma);
+
   const count = (status: string) => {
     if (status === "FAILED") summary.failed += 1;
     if (status === "SKIPPED") summary.skipped += 1;
@@ -470,8 +574,9 @@ async function runDemandAlerts(prisma: PrismaClient, now: Date) {
     const dueKey = dueAt.toISOString();
 
     if (dueAt.getTime() <= now.getTime()) {
+      if (!settings.overdueEnabled) continue;
       // Primeiro aviso assim que o prazo vence; depois repete todo dia
-      // nos horários de DEMANDS_OVERDUE_REPEAT_HOURS (padrão 9h e 15h)
+      // nos horários configurados na tela (padrão 9h e 15h)
       // até a demanda ser concluída ou cancelada.
       const firstKey = `OVERDUE:${demand.id}:${dueKey}`;
       const first = await prisma.demandNotification.findUnique({ where: { dedupeKey: firstKey } });
@@ -518,7 +623,7 @@ async function runDemandAlerts(prisma: PrismaClient, now: Date) {
       continue;
     }
 
-    if (demand.remindBeforeMinutes > 0) {
+    if (settings.dueSoonEnabled && demand.remindBeforeMinutes > 0) {
       const remindAt = dueAt.getTime() - demand.remindBeforeMinutes * 60 * 1000;
 
       if (now.getTime() >= remindAt) {
@@ -549,9 +654,9 @@ async function runDemandAlerts(prisma: PrismaClient, now: Date) {
     }
   }
 
-  const digestHour = Number(process.env.DEMANDS_DIGEST_HOUR || 7);
+  const digestHour = settings.digestHour;
 
-  if (localHour(now) >= digestHour) {
+  if (settings.digestEnabled && localHour(now) >= digestHour) {
     const dayKey = localDayKey(now);
     const users = await prisma.user.findMany({
       where: {
@@ -1045,6 +1150,20 @@ export function registerDemandRoutes({ app, prisma, authMiddleware, requireRoles
       return res.json(await saveWhatsapp(id, req.body));
     } catch (error: any) {
       return res.status(400).json({ message: error?.message || "Não foi possível salvar." });
+    }
+  });
+
+  /** Configurações dos avisos: todos os gestores veem; só o programador altera. */
+  app.get("/demands/settings", ...managers, async (_req: any, res: any) => {
+    return res.json(await loadDemandSettings(prisma));
+  });
+
+  app.put("/demands/settings", authMiddleware, requireRoles(["PROGRAMADOR"]), async (req: any, res: any) => {
+    try {
+      const settings = await saveDemandSettings(prisma, req.body || {});
+      return res.json({ ...settings, message: "Configurações dos avisos salvas." });
+    } catch (error: any) {
+      return res.status(400).json({ message: error?.message || "Configuração inválida." });
     }
   });
 

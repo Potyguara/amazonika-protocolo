@@ -486,3 +486,71 @@
 .demands-wa-buttons .button.danger {
   color: #b23b2a;
 }
+
+.demands-wa-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid #e8efeb;
+  padding-top: 12px;
+  font-size: 13px;
+}
+
+.demands-wa-settings small {
+  color: #68776f;
+}
+
+.demands-modal .demands-wa-settings label.demands-check {
+  align-self: flex-start;
+  padding-bottom: 0;
+  font-weight: 600;
+}
+
+.demands-wa-settings-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.demands-wa-settings-row select {
+  width: auto;
+  min-height: 0;
+  padding: 6px 10px;
+}
+
+.demands-wa-hours {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 26px;
+}
+
+.demands-wa-hours > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.demands-wa-hours button {
+  min-width: 46px;
+  padding: 6px 8px;
+  border-radius: 9px;
+  border: 1px solid #dbe5e0;
+  background: #fff;
+  color: #35473f;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.demands-wa-hours button.on {
+  background: #17634c;
+  border-color: #17634c;
+  color: #fff;
+}
+
+.demands-wa-hours button:disabled {
+  cursor: default;
+  opacity: .7;
+}

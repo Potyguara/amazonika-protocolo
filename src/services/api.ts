@@ -2631,4 +2631,15 @@ sendWhatsappTest() {
   return request("/whatsapp/test", { method: "POST" });
 },
 
+demandSettings() {
+  return request("/demands/settings");
+},
+
+saveDemandSettings(data: Record<string, unknown>) {
+  return request("/demands/settings", {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+},
+
 };

@@ -317,7 +317,7 @@ export default function DemandsPage() {
           <h1>Demandas</h1>
           <p>
             O que cada um faz, em que ordem e até quando. Os avisos saem pelo WhatsApp: ao receber
-            uma demanda, antes do prazo, num resumo diário às 7h e, se atrasar, às 9h e às 15h até ser concluída.
+            uma demanda, antes do prazo, na agenda do dia e, se atrasar, repetindo até ser concluída.
           </p>
         </div>
         <div className="demands-header-actions">
@@ -612,6 +612,7 @@ export default function DemandsPage() {
       {showWhatsapp && (
         <WhatsappPanel
           isManager={isManager}
+          isProgrammer={role === "PROGRAMADOR"}
           people={people}
           onClose={() => setShowWhatsapp(false)}
           onChanged={load}
@@ -623,11 +624,13 @@ export default function DemandsPage() {
 
 function WhatsappPanel({
   isManager,
+  isProgrammer,
   people,
   onClose,
   onChanged,
 }: {
   isManager: boolean;
+  isProgrammer: boolean;
   people: Person[];
   onClose: () => void;
   onChanged: () => void;
@@ -719,6 +722,8 @@ function WhatsappPanel({
         {isManager && (
           <>
             <WhatsappConnection />
+
+            <AlertSettings canEdit={isProgrammer} />
 
             <div className="full demands-wa-people">
               <strong>Equipe</strong>
@@ -852,6 +857,142 @@ const WA_STATUS_LABEL: Record<string, string> = {
   failed: "Falhou",
   sem_sessao: "Ainda não conectado",
 };
+
+type AlertSettingsData = {
+  assignEnabled: boolean;
+  dueSoonEnabled: boolean;
+  overdueEnabled: boolean;
+  overdueRepeatHours: number[];
+  digestEnabled: boolean;
+  digestHour: number;
+};
+
+const HOUR_OPTIONS = Array.from({ length: 24 }, (_, hour) => hour);
+
+function AlertSettings({ canEdit }: { canEdit: boolean }) {
+  const [data, setData] = useState<AlertSettingsData | null>(null);
+  const [note, setNote] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api
+      .demandSettings()
+      .then((result: any) => setData(result))
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+  }, []);
+
+  if (!data) {
+    return (
+      <div className="full demands-wa-settings">
+        <strong>Quando os avisos saem</strong>
+        <span>{error || "Carregando..."}</span>
+      </div>
+    );
+  }
+
+  const set = (patch: Partial<AlertSettingsData>) => {
+    setNote("");
+    setData({ ...data, ...patch });
+  };
+
+  const toggleHour = (hour: number) => {
+    const has = data.overdueRepeatHours.includes(hour);
+    set({
+      overdueRepeatHours: has
+        ? data.overdueRepeatHours.filter((item) => item !== hour)
+        : [...data.overdueRepeatHours, hour].sort((a, b) => a - b),
+    });
+  };
+
+  async function save() {
+    try {
+      setSaving(true);
+      setError("");
+      const result: any = await api.saveDemandSettings(data as unknown as Record<string, unknown>);
+      setData(result);
+      setNote(result?.message || "Salvo.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const check = (key: keyof AlertSettingsData, label: string) => (
+    <label className="demands-check">
+      <input
+        type="checkbox"
+        disabled={!canEdit}
+        checked={Boolean(data[key])}
+        onChange={(e) => set({ [key]: e.target.checked } as Partial<AlertSettingsData>)}
+      />
+      {label}
+    </label>
+  );
+
+  return (
+    <div className="full demands-wa-settings">
+      <strong>Quando os avisos saem</strong>
+      {!canEdit && <small>Só o perfil Programador altera estas opções.</small>}
+
+      {check("assignEnabled", "Avisar quando alguém recebe uma demanda")}
+      {check("dueSoonEnabled", "Lembrete antes do prazo (o tempo é escolhido em cada demanda)")}
+
+      <div className="demands-wa-settings-row">
+        {check("digestEnabled", "Agenda do dia às")}
+        <select
+          disabled={!canEdit || !data.digestEnabled}
+          value={data.digestHour}
+          onChange={(e) => set({ digestHour: Number(e.target.value) })}
+        >
+          {HOUR_OPTIONS.map((hour) => (
+            <option key={hour} value={hour}>
+              {String(hour).padStart(2, "0")}:00
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {check("overdueEnabled", "Avisar quando o prazo vence")}
+
+      {data.overdueEnabled && (
+        <div className="demands-wa-hours">
+          <span>Repetir o aviso de atraso, todo dia, até concluir, às:</span>
+          <div>
+            {HOUR_OPTIONS.filter((hour) => hour >= 6 && hour <= 22).map((hour) => (
+              <button
+                key={hour}
+                type="button"
+                disabled={!canEdit}
+                className={data.overdueRepeatHours.includes(hour) ? "on" : ""}
+                onClick={() => toggleHour(hour)}
+              >
+                {hour}h
+              </button>
+            ))}
+          </div>
+          <small>
+            {data.overdueRepeatHours.length
+              ? `Repete às ${data.overdueRepeatHours.map((hour) => `${hour}h`).join(", ")}.`
+              : "Nenhum horário marcado: o aviso de atraso sai uma vez só."}
+          </small>
+        </div>
+      )}
+
+      {error && <span className="late">{error}</span>}
+      {note && <span className="ok">{note}</span>}
+
+      {canEdit && (
+        <div className="demands-wa-buttons">
+          <button type="button" className="button primary" disabled={saving} onClick={save}>
+            {saving ? "Salvando..." : "Salvar horários"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function WhatsappConnection() {
   const [status, setStatus] = useState<any>(null);
