@@ -28,7 +28,8 @@ import { CardIcon, CardListItem, CardSpec, CardTone, tryRenderCardPng } from "..
  * por WhatsApp (OpenWA):
  *   - ao atribuir a demanda a alguém;
  *   - antes do prazo (remindBeforeMinutes);
- *   - quando o prazo passa;
+ *   - quando o prazo passa, repetindo todo dia nos horários de
+ *     DEMANDS_OVERDUE_REPEAT_HOURS (padrão 9h e 15h) até concluir;
  *   - resumo diário às DEMANDS_DIGEST_HOUR (padrão 7h) com a
  *     fila da pessoa, viagens do Cronograma de Campo dos
  *     próximos dias e, para gerente e secretária, os
@@ -174,8 +175,10 @@ function demandCard(
     tone: "red",
     titleLead: "Prazo",
     titleAccent: "vencido",
+    footnote: `Este aviso se repete${overdueRepeatHoursText()} até a demanda ser concluída no SIS.`,
     rows: [
       { label: "Prazo era", value: formatDateTime(demand.dueAt!), icon: "calendar", tone: "red" },
+      { label: "Atrasada", value: overdueText(demand.dueAt!, now), icon: "clock", tone: "red" },
       { label: "Situação", value: STATUS_LABEL[demand.status], icon: "clipboard" },
       priorityRow(demand.priority),
     ],
@@ -394,6 +397,38 @@ async function notifyAssignment(prisma: PrismaClient, demand: DemandWithPeople, 
  * Processamento periódico (chamado pelo cron)
  * ---------------------------------------------------- */
 
+function overdueRepeatHours() {
+  return String(process.env.DEMANDS_OVERDUE_REPEAT_HOURS ?? "9,15")
+    .split(/[,;\s]+/)
+    .filter(Boolean)
+    .map(Number)
+    .filter((hour) => Number.isInteger(hour) && hour >= 0 && hour <= 23)
+    .sort((a, b) => a - b);
+}
+
+function overdueRepeatHoursText() {
+  const hours = overdueRepeatHours().map((hour) => `${hour}h`);
+  if (!hours.length) return "";
+  return ` todo dia às ${hours.length > 1 ? `${hours.slice(0, -1).join(", ")} e ${hours[hours.length - 1]}` : hours[0]}`;
+}
+
+/** Último horário de repetição do aviso de atraso já alcançado hoje. */
+function overdueRepeatSlot(now: Date) {
+  const hours = overdueRepeatHours();
+  const current = localHour(now);
+  // Só dentro de 2h depois do horário, para não "compensar" fora de hora.
+  const passed = hours.filter((hour) => hour <= current && current - hour < 2);
+  return passed.length ? passed[passed.length - 1] : null;
+}
+
+function overdueText(dueAt: Date, now: Date) {
+  const minutes = Math.max(0, Math.round((now.getTime() - dueAt.getTime()) / 60000));
+  if (minutes < 60) return `há ${minutes} min`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `há ${hours} h`;
+  return `há ${Math.floor(hours / 24)} dias`;
+}
+
 let demandAlertsRunning = false;
 
 export async function processDemandAlerts(prisma: PrismaClient, now = new Date()) {
@@ -435,26 +470,46 @@ async function runDemandAlerts(prisma: PrismaClient, now: Date) {
     const dueKey = dueAt.toISOString();
 
     if (dueAt.getTime() <= now.getTime()) {
-      // Só avisa atraso de prazos que venceram nas últimas 48h;
-      // os mais antigos aparecem no resumo diário.
-      if (now.getTime() - dueAt.getTime() > 48 * 3600 * 1000) continue;
+      // Primeiro aviso assim que o prazo vence; depois repete todo dia
+      // nos horários de DEMANDS_OVERDUE_REPEAT_HOURS (padrão 9h e 15h)
+      // até a demanda ser concluída ou cancelada.
+      const firstKey = `OVERDUE:${demand.id}:${dueKey}`;
+      const first = await prisma.demandNotification.findUnique({ where: { dedupeKey: firstKey } });
+      let dedupeKey = firstKey;
+
+      if (first) {
+        const slot = overdueRepeatSlot(now);
+        if (slot === null) continue;
+        // Não repete se o último aviso de atraso saiu há menos de 3h.
+        const recent = await prisma.demandNotification.findFirst({
+          where: {
+            demandId: demand.id,
+            kind: "OVERDUE",
+            status: "SENT",
+            createdAt: { gte: new Date(now.getTime() - 3 * 3600 * 1000) },
+          },
+        });
+        if (recent) continue;
+        dedupeKey = `OVERDUE:${demand.id}:${dueKey}:${localDayKey(now)}:${slot}`;
+      }
 
       const result = await notifyUser(prisma, {
         userId: demand.assigneeId!,
         kind: "OVERDUE",
-        dedupeKey: `OVERDUE:${demand.id}:${dueKey}`,
+        dedupeKey,
         demandId: demand.id,
         text: [
           "*Demanda com prazo vencido*",
           "",
           `*${demand.title}*`,
-          `Prazo era: ${formatDateTime(dueAt)}`,
+          `Prazo era: ${formatDateTime(dueAt)} (atrasada ${overdueText(dueAt, now)})`,
           `Situação: ${STATUS_LABEL[demand.status]}`,
+          `Este aviso se repete${overdueRepeatHoursText()} até a demanda ser concluída.`,
           "",
           appUrl(),
         ].join("\n"),
         card: demandCard("OVERDUE", demand, now),
-        caption: `*Prazo vencido:* ${demand.title}\n${appUrl()}`,
+        caption: `*Prazo vencido (${overdueText(dueAt, now)}):* ${demand.title}\nConclua no SIS para parar os avisos: ${appUrl()}`,
       });
 
       if (result.status === "SENT") summary.overdue += 1;
