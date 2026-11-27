@@ -20485,6 +20485,7 @@ function App() {
       <Route path="/proposta-avulsa/:token" element={<StandaloneProposalPublicPage />} />
       <Route path="/contrato/:token" element={<PublicContractPage />} />
       <Route path="/cobranca/:token" element={<PublicBillingChargePage />} />
+      <Route path="/p/:token" element={<PublicBillingChargePage />} />
       <Route path="/recibo/:hash" element={<PublicReceiptVerificationPage />} />
 
       <Route

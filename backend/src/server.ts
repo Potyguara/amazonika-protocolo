@@ -60,7 +60,7 @@ import { registerStandaloneProposalRoutes } from "./modules/standalone-proposals
 import { blockStandaloneProposalStaticAccess } from "./modules/standalone-proposals/standalone-upload-guard";
 import { registerFieldScheduleRoutes } from "./modules/field-schedule/field-schedule.routes";
 import { processDemandAlerts, registerDemandRoutes } from "./modules/demands/demands.routes";
-import { normalizeWhatsAppPhone, sendWhatsAppImage, sendWhatsAppText } from "./services/whatsappService";
+import { normalizeWhatsAppPhone, sendWhatsAppDocument, sendWhatsAppImage, sendWhatsAppText } from "./services/whatsappService";
 import { CardSpec, tryRenderCardPng } from "./services/whatsappCard";
 import { restrictSecretaryAccess, secretaryMayUseRoute } from "./modules/secretary/secretary.routes";
 import { registerPartnerReferralRoutes } from "./modules/partners/partner-referrals.routes";
@@ -351,6 +351,34 @@ function getChargePublicUrl(
       : charge.publicToken || String(charge.id);
 
   return `${publicBaseUrl}/cobranca/${publicIdentifier}`;
+}
+
+/*
+ * Link curto da cobrança para WhatsApp: /p/<12 primeiros caracteres do token>.
+ * O token tem 64 caracteres aleatórios; 12 hex (48 bits) bastam para não
+ * ser adivinhado e cabem bem na mensagem.
+ */
+const SHORT_CHARGE_CODE_LENGTH = 12;
+
+function getChargeShortUrl(charge: { id: number; publicToken?: string | null }) {
+  const token = charge.publicToken || "";
+
+  if (token.length < 32) return getChargePublicUrl(charge);
+
+  return `${getBillingPublicBaseUrl()}/p/${token.slice(0, SHORT_CHARGE_CODE_LENGTH)}`;
+}
+
+/** Troca o código curto pelo token completo (só se for único). */
+async function expandShortChargeToken(identifier: string) {
+  if (!new RegExp(`^[0-9a-f]{${SHORT_CHARGE_CODE_LENGTH}}$`, "i").test(identifier)) return identifier;
+
+  const matches = await prisma.billingCharge.findMany({
+    where: { publicToken: { startsWith: identifier.toLowerCase() } },
+    select: { publicToken: true },
+    take: 2,
+  });
+
+  return matches.length === 1 && matches[0].publicToken ? matches[0].publicToken : identifier;
 }
 
 function safeJson(value: unknown) {
@@ -11122,6 +11150,19 @@ function normalizeFinanceSchedulerTimeZone(
 }
 
 
+/**
+ * Fila única no processo: avisos e emissões nunca rodam em paralelo
+ * (cron a cada 5 min + botões manuais). Quem chega depois espera o
+ * anterior terminar e então vê o que já foi enviado.
+ */
+let financeJobQueue: Promise<unknown> = Promise.resolve();
+
+function runFinanceJobSerialized<T>(job: () => Promise<T>): Promise<T> {
+  const next = financeJobQueue.then(job, job);
+  financeJobQueue = next.catch(() => undefined);
+  return next;
+}
+
 async function getFinanceAutoChargeSettings() {
   return prisma.financeAutoChargeSettings.upsert({
     where: {
@@ -11410,15 +11451,17 @@ function clientBillingWhatsAppText(params: {
   publicUrl: string;
   companyName: string;
   daysUntilDue?: number | null;
+  serviceName?: string | null;
 }) {
   const hello = `Olá, ${firstNameOf(params.clientName)}!`;
   const footer = `\n\n${params.companyName}`;
+  const what = params.serviceName ? `*${params.serviceName}*` : `*${params.description}*`;
 
   if (params.kind === "PAYMENT_CONFIRMED") {
-    return `${hello} Recebemos o seu pagamento de *${params.amountText}* referente a ${params.description}. Obrigado!\n\nO recibo foi enviado para o seu e-mail e também está disponível em:\n${params.publicUrl}${footer}`;
+    return `${hello} Recebemos o seu pagamento de *${params.amountText}* referente a ${what}. Obrigado!\n\nO recibo em PDF segue nesta conversa e também está disponível em:\n${params.publicUrl}${footer}`;
   }
 
-  const details = `*${params.description}*\nValor: *${params.amountText}*\nVencimento: *${params.dueDateText}*\n\nPague por Pix (QR Code ou copia e cola) pelo link:\n${params.publicUrl}`;
+  const details = `${params.serviceName ? `Serviço: *${params.serviceName}*` : `*${params.description}*`}\nValor: *${params.amountText}*\nVencimento: *${params.dueDateText}*\n\nPague por Pix pelo QR Code, pelo código abaixo ou pelo link:\n${params.publicUrl}`;
 
   if (params.kind === "NEW_CHARGE") {
     return `${hello} Emitimos a sua cobrança:\n\n${details}${footer}`;
@@ -11448,8 +11491,10 @@ function clientBillingWhatsAppCard(params: {
   companyName: string;
   daysUntilDue?: number | null;
   qrDataUri?: string | null;
+  serviceName?: string | null;
 }): { card: CardSpec; caption: string } {
   const hello = `Olá, ${firstNameOf(params.clientName)}!`;
+  const boxTitle = params.serviceName || params.description;
 
   if (params.kind === "PAYMENT_CONFIRMED") {
     return {
@@ -11459,8 +11504,8 @@ function clientBillingWhatsAppCard(params: {
         tone: "green",
         titleLead: "Pagamento",
         titleAccent: "confirmado",
-        boxTitle: params.description,
-        boxSubtitle: "Obrigado! O recibo está disponível no link abaixo.",
+        boxTitle,
+        boxSubtitle: "Obrigado! O recibo em PDF segue nesta conversa.",
         boxIcon: "check",
         rows: [
           { label: "Valor pago", value: params.amountText, icon: "money" },
@@ -11469,7 +11514,7 @@ function clientBillingWhatsAppCard(params: {
         ].filter(Boolean) as CardSpec["rows"],
         link: params.publicUrl,
       },
-      caption: `${hello} Recebemos o seu pagamento de *${params.amountText}*. Obrigado!\nRecibo: ${params.publicUrl}`,
+      caption: `${hello} Recebemos o seu pagamento de *${params.amountText}* referente a *${boxTitle}*. Obrigado!\nO recibo em PDF vem logo abaixo.`,
     };
   }
 
@@ -11509,8 +11554,8 @@ function clientBillingWhatsAppCard(params: {
       tone,
       titleLead,
       titleAccent,
-      boxTitle: params.description,
-      boxSubtitle: `${params.companyName} · pague por Pix`,
+      boxTitle,
+      boxSubtitle: params.serviceName ? "Serviço contratado · pague por Pix" : `${params.companyName} · pague por Pix`,
       boxIcon: "money",
       rows: [
         { label: "Valor", value: params.amountText, icon: "money" },
@@ -11526,7 +11571,7 @@ function clientBillingWhatsAppCard(params: {
         : undefined,
       link: params.publicUrl,
     },
-    caption: `${hello} ${intro}\n*${params.description}*: ${params.amountText}, vencimento ${params.dueDateText}.\nPague pelo link: ${params.publicUrl}`,
+    caption: `${hello} ${intro}\n${params.serviceName ? "Serviço" : "Cobrança"}: *${boxTitle}*\nValor: *${params.amountText}* · vencimento *${params.dueDateText}*\n\nPara pagar, leia o QR Code ou copie o código Pix da próxima mensagem. Página da cobrança: ${params.publicUrl}`,
   };
 }
 
@@ -11542,6 +11587,8 @@ async function sendClientBillingWhatsApp(params: {
   caption?: string;
   /** Mensagem extra depois do card (ex.: Pix copia e cola). */
   followUpText?: string | null;
+  /** Documento (PDF) enviado depois do card, ex.: recibo. */
+  document?: (() => Promise<{ buffer: Buffer; fileName: string; caption?: string }>) | null;
 }) {
   const testIds = financeAutomationTestClientIds();
 
@@ -11595,15 +11642,34 @@ async function sendClientBillingWhatsApp(params: {
     ? await sendWhatsAppImage(phone, png, params.caption || params.text, params.text)
     : await sendWhatsAppText(phone, params.text);
 
-  if (result.ok && png && params.followUpText) {
+  if (result.ok && params.followUpText) {
     await new Promise((resolve) => setTimeout(resolve, 1200));
     await sendWhatsAppText(phone, params.followUpText).catch(() => null);
+  }
+
+  let documentError: string | null = null;
+
+  if (result.ok && params.document) {
+    try {
+      const doc = await params.document();
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      const sentDoc = await sendWhatsAppDocument(phone, doc.buffer, doc.fileName, doc.caption || "");
+      if (!sentDoc.ok) documentError = sentDoc.error || "Falha ao enviar o PDF.";
+    } catch (error: any) {
+      documentError = error?.message || String(error);
+    }
+
+    if (documentError) console.error("Recibo por WhatsApp não enviado:", documentError);
   }
 
   if (result.ok) {
     await prisma.clientWhatsAppNotification.update({
       where: { id: reservation.id },
-      data: { status: "SENT", messageId: result.messageId || null },
+      data: {
+        status: "SENT",
+        messageId: result.messageId || null,
+        errorText: documentError ? `Card enviado; PDF falhou: ${documentError}`.slice(0, 500) : null,
+      },
     });
     return { status: "SENT" };
   }
@@ -11630,7 +11696,11 @@ async function sendClientBillingWhatsApp(params: {
 async function notifyClientBillingWhatsApp(
   transactionId: number,
   kind: ClientBillingWhatsAppKind,
-  extra: { dedupeSuffix?: string; daysUntilDue?: number | null } = {}
+  extra: {
+    dedupeSuffix?: string;
+    daysUntilDue?: number | null;
+    confirmationSource?: "BANCO_DO_BRASIL" | "MANUAL";
+  } = {}
 ) {
   try {
     const settings = await getFinanceAutoChargeSettings();
@@ -11639,7 +11709,13 @@ async function notifyClientBillingWhatsApp(
 
     const transaction = await prisma.financialTransaction.findUnique({
       where: { id: transactionId },
-      include: { client: true, billingCharge: { include: { client: true } } },
+      include: {
+        client: true,
+        billingCharge: { include: { client: true } },
+        catalogService: { select: { name: true } },
+        protocol: { select: { serviceType: { select: { name: true } } } },
+        proposal: { select: { title: true } },
+      },
     });
 
     const charge = transaction?.billingCharge;
@@ -11657,9 +11733,14 @@ async function notifyClientBillingWhatsApp(
       description: charge.description || transaction.description,
       amountText: formatCurrencyBRFromCents(cents),
       dueDateText: dueDate ? formatDueDateBR(dueDate) : "-",
-      publicUrl: getChargePublicUrl(charge),
+      publicUrl: getChargeShortUrl(charge),
       companyName: company.companyName || "Amazonika Engenharia",
       daysUntilDue: extra.daysUntilDue,
+      serviceName:
+        transaction.catalogService?.name ||
+        transaction.protocol?.serviceType?.name ||
+        transaction.proposal?.title ||
+        null,
     };
     const text = clientBillingWhatsAppText(fields);
 
@@ -11686,6 +11767,21 @@ async function notifyClientBillingWhatsApp(
       card,
       caption,
       followUpText: pixCode,
+      document:
+        kind === "PAYMENT_CONFIRMED"
+          ? async () => {
+              const receipt = await generateFinanceReceiptPdfOnce(
+                transaction,
+                charge,
+                extra.confirmationSource || (charge.txid ? "BANCO_DO_BRASIL" : "MANUAL")
+              );
+              return {
+                buffer: fs.readFileSync(receipt.filePath),
+                fileName: `Recibo ${receipt.fileName}`,
+                caption: `Recibo de pagamento - ${fields.serviceName || fields.description}`,
+              };
+            }
+          : null,
     });
   } catch (error: any) {
     console.error("Falha no WhatsApp de cobrança:", error?.message || error);
@@ -11714,7 +11810,16 @@ async function processFinanceClientWhatsAppNotices() {
       dueDate: { not: null },
       billingCharge: { is: { status: { in: ["EMITIDA", "ENVIADA", "VENCIDA"] }, txid: { not: null } } },
     },
-    select: { id: true, dueDate: true, lastNotificationAt: true, notificationCount: true, overdueNotificationCount: true },
+    select: {
+      id: true,
+      dueDate: true,
+      lastNotificationAt: true,
+      notificationCount: true,
+      overdueNotificationCount: true,
+      emailNotificationEnabled: true,
+      client: { select: { email: true } },
+      billingCharge: { select: { createdAt: true, initialEmailSentAt: true, client: { select: { email: true } } } },
+    },
   });
 
   let sent = 0;
@@ -11731,6 +11836,20 @@ async function processFinanceClientWhatsAppNotices() {
 
     if (!noticeType) continue;
 
+    // A cobrança nova saiu hoje: não repete como lembrete no mesmo dia.
+    if (financeChargeFirstSentToday(transaction.billingCharge, today)) continue;
+
+    // Mesmo caso pelo registro do WhatsApp: "Cobrança emitida" já saiu hoje.
+    const newChargeToday = await prisma.clientWhatsAppNotification.count({
+      where: {
+        transactionId: transaction.id,
+        kind: "NEW_CHARGE",
+        status: { in: ["SENT", "SENDING"] },
+        createdAt: { gte: startOfLocalDay(today) },
+      },
+    });
+    if (newChargeToday > 0) continue;
+
     const result = await notifyClientBillingWhatsApp(transaction.id, `NOTICE_${noticeType}`, {
       dedupeSuffix: formatDateOnly(today),
       daysUntilDue: dateDiffInDays(today, transaction.dueDate!),
@@ -11738,6 +11857,27 @@ async function processFinanceClientWhatsAppNotices() {
 
     if (result.status === "SENT") {
       sent += 1;
+
+      /*
+       * Quando o e-mail não vai sair (sem e-mail, e-mail desligado),
+       * o WhatsApp é quem registra o aviso. Sem isso o contador de
+       * atraso nunca anda e o aviso de atraso repete todo dia.
+       */
+      const hasEmail = Boolean(transaction.client?.email || transaction.billingCharge?.client?.email);
+      const emailWillSend = settings.sendEmail && transaction.emailNotificationEnabled !== false && hasEmail;
+
+      if (!emailWillSend) {
+        await prisma.financialTransaction.update({
+          where: { id: transaction.id },
+          data: {
+            lastNotificationAt: today,
+            notificationCount: { increment: 1 },
+            ...(noticeType === "AVISO_APOS_VENCIMENTO" || noticeType === "REPETICAO_AVISO_ATRASO"
+              ? { overdueNotificationCount: { increment: 1 } }
+              : {}),
+          },
+        }).catch(() => undefined);
+      }
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
     if (result.status === "FAILED") failed += 1;
@@ -11745,6 +11885,8 @@ async function processFinanceClientWhatsAppNotices() {
 
   return { executed: true, checked: transactions.length, sent, failed };
 }
+
+const FINANCE_INITIAL_EMAIL_LEASE_MS = 5 * 60 * 1000;
 
 async function sendFinanceInitialChargeEmail(
   transactionId: number
@@ -11953,6 +12095,43 @@ async function sendFinanceInitialChargeEmail(
 
       reason:
         message,
+    };
+  }
+
+  /*
+   * Reserva o envio inicial: só quem conseguir marcar a tentativa
+   * envia. Evita dois e-mails de "Nova cobrança" quando a emissão
+   * roda duas vezes ao mesmo tempo (cron + emissão manual).
+   */
+  const claim =
+    await prisma.billingCharge.updateMany({
+      where: {
+        id:
+          charge.id,
+        initialEmailSentAt:
+          null,
+        OR: [
+          { initialEmailLastAttemptAt: null },
+          {
+            initialEmailLastAttemptAt: {
+              lt: new Date(attemptedAt.getTime() - FINANCE_INITIAL_EMAIL_LEASE_MS),
+            },
+          },
+        ],
+      },
+      data: {
+        initialEmailLastAttemptAt:
+          attemptedAt,
+      },
+    });
+
+  if (claim.count === 0) {
+    return {
+      status:
+        "SKIPPED",
+
+      reason:
+        "Envio inicial já em andamento ou tentado há poucos minutos.",
     };
   }
 
@@ -12408,6 +12587,29 @@ function shortVerificationCode(hash: string) {
   return hash.slice(0, 16).toUpperCase().replace(/(.{4})(?!$)/g, "$1-");
 }
 
+/*
+ * O recibo é o mesmo arquivo (REC-FIN-<id>.pdf) para o e-mail e para o
+ * WhatsApp. Chamadas simultâneas do mesmo lançamento compartilham a
+ * mesma geração, para um não ler o arquivo enquanto o outro escreve.
+ */
+const financeReceiptPdfInFlight = new Map<number, ReturnType<typeof generateFinanceReceiptPdf>>();
+
+function generateFinanceReceiptPdfOnce(
+  transactionInput: any,
+  chargeInput: any,
+  confirmationSource: "BANCO_DO_BRASIL" | "MANUAL"
+) {
+  const key = Number(transactionInput.id);
+  const running = financeReceiptPdfInFlight.get(key);
+  if (running) return running;
+
+  const job = generateFinanceReceiptPdf(transactionInput, chargeInput, confirmationSource).finally(() => {
+    financeReceiptPdfInFlight.delete(key);
+  });
+  financeReceiptPdfInFlight.set(key, job);
+  return job;
+}
+
 async function generateFinanceReceiptPdf(
   transactionInput: any,
   chargeInput: any,
@@ -12844,9 +13046,11 @@ async function sendFinancePaymentConfirmationEmail(
     };
   }
 
-  if (!options.resend) {
-    void notifyClientBillingWhatsApp(transaction.id, "PAYMENT_CONFIRMED");
-  }
+  // WhatsApp com o recibo em PDF. No "Reenviar recibo" sai de novo (chave própria).
+  void notifyClientBillingWhatsApp(transaction.id, "PAYMENT_CONFIRMED", {
+    confirmationSource,
+    dedupeSuffix: options.resend ? `REENVIO-${Date.now()}` : undefined,
+  });
 
   const settings =
     await getFinanceAutoChargeSettings();
@@ -12961,7 +13165,7 @@ async function sendFinancePaymentConfirmationEmail(
         : "Confirmação administrativa";
 
     const receiptPdf =
-      await generateFinanceReceiptPdf(
+      await generateFinanceReceiptPdfOnce(
         transaction,
         charge,
         confirmationSource
@@ -13220,7 +13424,13 @@ function financeAutomationClientFilter() {
   return ids ? { clientId: { in: ids } } : {};
 }
 
-async function processFinanceAutoCharges(
+function processFinanceAutoCharges(
+  options?: Parameters<typeof processFinanceAutoChargesUnlocked>[0]
+) {
+  return runFinanceJobSerialized(() => processFinanceAutoChargesUnlocked(options));
+}
+
+async function processFinanceAutoChargesUnlocked(
   options?: {
     daysAhead?: number;
     transactionId?: number;
@@ -14865,6 +15075,26 @@ function isSameLocalDate(
   );
 }
 
+function startOfLocalDay(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+}
+
+/**
+ * A cobrança nova (e-mail/WhatsApp "Nova cobrança") saiu hoje:
+ * não manda também um lembrete no mesmo dia, senão o cliente
+ * recebe a mesma cobrança duas vezes.
+ */
+function financeChargeFirstSentToday(
+  charge: { createdAt?: Date | null; initialEmailSentAt?: Date | null } | null | undefined,
+  today: Date
+) {
+  if (!charge) return false;
+  return (
+    isSameLocalDate(charge.initialEmailSentAt, today) ||
+    isSameLocalDate(charge.createdAt, today)
+  );
+}
+
 function resolveFinanceNoticeType(params: {
   today: Date;
   dueDate: Date;
@@ -15012,7 +15242,11 @@ function getFinanceNoticeIntro(params: {
   )}", com vencimento previsto para ${dueDateText}.`;
 }
 
-async function processFinanceAutoChargeEmailNotices() {
+function processFinanceAutoChargeEmailNotices() {
+  return runFinanceJobSerialized(() => processFinanceAutoChargeEmailNoticesUnlocked());
+}
+
+async function processFinanceAutoChargeEmailNoticesUnlocked() {
   const settings =
     await getFinanceAutoChargeSettings();
 
@@ -15305,6 +15539,23 @@ async function processFinanceAutoChargeEmailNotices() {
         continue;
       }
 
+      if (financeChargeFirstSentToday(charge, today)) {
+        skipped += 1;
+        results.push({
+          transactionId:
+            transaction.id,
+          billingChargeId:
+            charge.id,
+          status:
+            "SKIPPED",
+          reason:
+            "Cobrança enviada ao cliente hoje; lembrete fica para outro dia.",
+          email:
+            client.email,
+        });
+        continue;
+      }
+
       const publicUrl =
         getChargePublicUrl(charge);
 
@@ -15381,15 +15632,64 @@ async function processFinanceAutoChargeEmailNotices() {
         </div>
       `;
 
-      const info =
-        await transporter.sendMail({
-          from:
-            smtpFrom,
-          to:
-            client.email,
-          subject,
-          html,
+      /*
+       * Reserva o aviso de hoje ANTES de enviar: só um ciclo
+       * consegue marcar lastNotificationAt. Se dois ciclos rodarem
+       * juntos (cron + botão "Enviar avisos"), o segundo desiste.
+       */
+      const claim =
+        await prisma.financialTransaction.updateMany({
+          where: {
+            id:
+              transaction.id,
+            OR: [
+              { lastNotificationAt: null },
+              { lastNotificationAt: { lt: startOfLocalDay(today) } },
+            ],
+          },
+          data: {
+            lastNotificationAt:
+              today,
+          },
         });
+
+      if (claim.count === 0) {
+        skipped += 1;
+        results.push({
+          transactionId:
+            transaction.id,
+          billingChargeId:
+            charge.id,
+          status:
+            "SKIPPED",
+          reason:
+            "Aviso de hoje já enviado por outro ciclo.",
+          email:
+            client.email,
+        });
+        continue;
+      }
+
+      let info: any;
+
+      try {
+        info =
+          await transporter.sendMail({
+            from:
+              smtpFrom,
+            to:
+              client.email,
+            subject,
+            html,
+          });
+      } catch (sendError) {
+        // Libera a reserva para a próxima tentativa.
+        await prisma.financialTransaction.update({
+          where: { id: transaction.id },
+          data: { lastNotificationAt: transaction.lastNotificationAt },
+        }).catch(() => undefined);
+        throw sendError;
+      }
 
       await prisma.financialTransaction.update({
         where: {
@@ -15815,21 +16115,27 @@ async function processFinanceSchedulerTick() {
         settings.lastChargeRunStatus,
     });
 
-  if (chargeDecision.shouldRun) {
-    await prisma.financeAutoChargeSettings.update({
-      where: {
-        id: 1,
-      },
+  // Reserva atômica: se outro ciclo já marcou o início, este desiste.
+  const chargeClaim =
+    chargeDecision.shouldRun
+      ? await prisma.financeAutoChargeSettings.updateMany({
+          where: {
+            id: 1,
+            lastChargeRunStartedAt:
+              settings.lastChargeRunStartedAt ?? null,
+          },
 
-      data: {
-        lastChargeRunStartedAt:
-          now,
+          data: {
+            lastChargeRunStartedAt:
+              now,
 
-        lastChargeRunStatus:
-          "RUNNING",
-      },
-    });
+            lastChargeRunStatus:
+              "RUNNING",
+          },
+        })
+      : { count: 0 };
 
+  if (chargeClaim.count > 0) {
     try {
       const chargeResult =
         await processFinanceAutoCharges();
@@ -15914,7 +16220,7 @@ async function processFinanceSchedulerTick() {
         false,
 
       reason:
-        chargeDecision.reason,
+        chargeDecision.shouldRun ? "Outro ciclo já iniciou esta rotina." : chargeDecision.reason,
     };
   }
 
@@ -15948,21 +16254,27 @@ async function processFinanceSchedulerTick() {
         refreshed.lastNoticeRunStatus,
     });
 
-  if (noticeDecision.shouldRun) {
-    await prisma.financeAutoChargeSettings.update({
-      where: {
-        id: 1,
-      },
+  // Reserva atômica: se outro ciclo já marcou o início, este desiste.
+  const noticeClaim =
+    noticeDecision.shouldRun
+      ? await prisma.financeAutoChargeSettings.updateMany({
+          where: {
+            id: 1,
+            lastNoticeRunStartedAt:
+              refreshed.lastNoticeRunStartedAt ?? null,
+          },
 
-      data: {
-        lastNoticeRunStartedAt:
-          now,
+          data: {
+            lastNoticeRunStartedAt:
+              now,
 
-        lastNoticeRunStatus:
-          "RUNNING",
-      },
-    });
+            lastNoticeRunStatus:
+              "RUNNING",
+          },
+        })
+      : { count: 0 };
 
+  if (noticeClaim.count > 0) {
     try {
       const noticeResult =
         await processFinanceAutoChargeEmailNotices();
@@ -16047,7 +16359,7 @@ async function processFinanceSchedulerTick() {
         false,
 
       reason:
-        noticeDecision.reason,
+        noticeDecision.shouldRun ? "Outro ciclo já iniciou esta rotina." : noticeDecision.reason,
     };
   }
 
@@ -26659,7 +26971,7 @@ const publicChargeLastBbCheck = new Map<number, number>();
 
 app.get("/public/billing-charges/:token/status", async (req, res) => {
   try {
-    const token = String(req.params.token || "").trim();
+    const token = await expandShortChargeToken(String(req.params.token || "").trim());
 
     if (!token || /^\d+$/.test(token)) {
       return res.status(400).json({ message: "Identificador inválido." });
@@ -26739,7 +27051,7 @@ app.get("/public/billing-charges/:token/status", async (req, res) => {
 
 app.get("/public/billing-charges/:identifier", async (req, res) => {
   try {
-    const identifier = String(req.params.identifier || "").trim();
+    const identifier = await expandShortChargeToken(String(req.params.identifier || "").trim());
 
     if (!identifier) {
       return res.status(400).json({
