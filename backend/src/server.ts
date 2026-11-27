@@ -11122,6 +11122,19 @@ function normalizeFinanceSchedulerTimeZone(
 }
 
 
+/**
+ * Fila única no processo: avisos e emissões nunca rodam em paralelo
+ * (cron a cada 5 min + botões manuais). Quem chega depois espera o
+ * anterior terminar e então vê o que já foi enviado.
+ */
+let financeJobQueue: Promise<unknown> = Promise.resolve();
+
+function runFinanceJobSerialized<T>(job: () => Promise<T>): Promise<T> {
+  const next = financeJobQueue.then(job, job);
+  financeJobQueue = next.catch(() => undefined);
+  return next;
+}
+
 async function getFinanceAutoChargeSettings() {
   return prisma.financeAutoChargeSettings.upsert({
     where: {
@@ -11714,7 +11727,16 @@ async function processFinanceClientWhatsAppNotices() {
       dueDate: { not: null },
       billingCharge: { is: { status: { in: ["EMITIDA", "ENVIADA", "VENCIDA"] }, txid: { not: null } } },
     },
-    select: { id: true, dueDate: true, lastNotificationAt: true, notificationCount: true, overdueNotificationCount: true },
+    select: {
+      id: true,
+      dueDate: true,
+      lastNotificationAt: true,
+      notificationCount: true,
+      overdueNotificationCount: true,
+      emailNotificationEnabled: true,
+      client: { select: { email: true } },
+      billingCharge: { select: { createdAt: true, initialEmailSentAt: true, client: { select: { email: true } } } },
+    },
   });
 
   let sent = 0;
@@ -11731,6 +11753,9 @@ async function processFinanceClientWhatsAppNotices() {
 
     if (!noticeType) continue;
 
+    // A cobrança nova saiu hoje: não repete como lembrete no mesmo dia.
+    if (financeChargeFirstSentToday(transaction.billingCharge, today)) continue;
+
     const result = await notifyClientBillingWhatsApp(transaction.id, `NOTICE_${noticeType}`, {
       dedupeSuffix: formatDateOnly(today),
       daysUntilDue: dateDiffInDays(today, transaction.dueDate!),
@@ -11738,6 +11763,27 @@ async function processFinanceClientWhatsAppNotices() {
 
     if (result.status === "SENT") {
       sent += 1;
+
+      /*
+       * Quando o e-mail não vai sair (sem e-mail, e-mail desligado),
+       * o WhatsApp é quem registra o aviso. Sem isso o contador de
+       * atraso nunca anda e o aviso de atraso repete todo dia.
+       */
+      const hasEmail = Boolean(transaction.client?.email || transaction.billingCharge?.client?.email);
+      const emailWillSend = settings.sendEmail && transaction.emailNotificationEnabled !== false && hasEmail;
+
+      if (!emailWillSend) {
+        await prisma.financialTransaction.update({
+          where: { id: transaction.id },
+          data: {
+            lastNotificationAt: today,
+            notificationCount: { increment: 1 },
+            ...(noticeType === "AVISO_APOS_VENCIMENTO" || noticeType === "REPETICAO_AVISO_ATRASO"
+              ? { overdueNotificationCount: { increment: 1 } }
+              : {}),
+          },
+        }).catch(() => undefined);
+      }
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
     if (result.status === "FAILED") failed += 1;
@@ -11745,6 +11791,8 @@ async function processFinanceClientWhatsAppNotices() {
 
   return { executed: true, checked: transactions.length, sent, failed };
 }
+
+const FINANCE_INITIAL_EMAIL_LEASE_MS = 5 * 60 * 1000;
 
 async function sendFinanceInitialChargeEmail(
   transactionId: number
@@ -11953,6 +12001,43 @@ async function sendFinanceInitialChargeEmail(
 
       reason:
         message,
+    };
+  }
+
+  /*
+   * Reserva o envio inicial: só quem conseguir marcar a tentativa
+   * envia. Evita dois e-mails de "Nova cobrança" quando a emissão
+   * roda duas vezes ao mesmo tempo (cron + emissão manual).
+   */
+  const claim =
+    await prisma.billingCharge.updateMany({
+      where: {
+        id:
+          charge.id,
+        initialEmailSentAt:
+          null,
+        OR: [
+          { initialEmailLastAttemptAt: null },
+          {
+            initialEmailLastAttemptAt: {
+              lt: new Date(attemptedAt.getTime() - FINANCE_INITIAL_EMAIL_LEASE_MS),
+            },
+          },
+        ],
+      },
+      data: {
+        initialEmailLastAttemptAt:
+          attemptedAt,
+      },
+    });
+
+  if (claim.count === 0) {
+    return {
+      status:
+        "SKIPPED",
+
+      reason:
+        "Envio inicial já em andamento ou tentado há poucos minutos.",
     };
   }
 
@@ -13220,7 +13305,13 @@ function financeAutomationClientFilter() {
   return ids ? { clientId: { in: ids } } : {};
 }
 
-async function processFinanceAutoCharges(
+function processFinanceAutoCharges(
+  options?: Parameters<typeof processFinanceAutoChargesUnlocked>[0]
+) {
+  return runFinanceJobSerialized(() => processFinanceAutoChargesUnlocked(options));
+}
+
+async function processFinanceAutoChargesUnlocked(
   options?: {
     daysAhead?: number;
     transactionId?: number;
@@ -14865,6 +14956,26 @@ function isSameLocalDate(
   );
 }
 
+function startOfLocalDay(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+}
+
+/**
+ * A cobrança nova (e-mail/WhatsApp "Nova cobrança") saiu hoje:
+ * não manda também um lembrete no mesmo dia, senão o cliente
+ * recebe a mesma cobrança duas vezes.
+ */
+function financeChargeFirstSentToday(
+  charge: { createdAt?: Date | null; initialEmailSentAt?: Date | null } | null | undefined,
+  today: Date
+) {
+  if (!charge) return false;
+  return (
+    isSameLocalDate(charge.initialEmailSentAt, today) ||
+    isSameLocalDate(charge.createdAt, today)
+  );
+}
+
 function resolveFinanceNoticeType(params: {
   today: Date;
   dueDate: Date;
@@ -15012,7 +15123,11 @@ function getFinanceNoticeIntro(params: {
   )}", com vencimento previsto para ${dueDateText}.`;
 }
 
-async function processFinanceAutoChargeEmailNotices() {
+function processFinanceAutoChargeEmailNotices() {
+  return runFinanceJobSerialized(() => processFinanceAutoChargeEmailNoticesUnlocked());
+}
+
+async function processFinanceAutoChargeEmailNoticesUnlocked() {
   const settings =
     await getFinanceAutoChargeSettings();
 
@@ -15305,6 +15420,23 @@ async function processFinanceAutoChargeEmailNotices() {
         continue;
       }
 
+      if (financeChargeFirstSentToday(charge, today)) {
+        skipped += 1;
+        results.push({
+          transactionId:
+            transaction.id,
+          billingChargeId:
+            charge.id,
+          status:
+            "SKIPPED",
+          reason:
+            "Cobrança enviada ao cliente hoje; lembrete fica para outro dia.",
+          email:
+            client.email,
+        });
+        continue;
+      }
+
       const publicUrl =
         getChargePublicUrl(charge);
 
@@ -15381,15 +15513,64 @@ async function processFinanceAutoChargeEmailNotices() {
         </div>
       `;
 
-      const info =
-        await transporter.sendMail({
-          from:
-            smtpFrom,
-          to:
-            client.email,
-          subject,
-          html,
+      /*
+       * Reserva o aviso de hoje ANTES de enviar: só um ciclo
+       * consegue marcar lastNotificationAt. Se dois ciclos rodarem
+       * juntos (cron + botão "Enviar avisos"), o segundo desiste.
+       */
+      const claim =
+        await prisma.financialTransaction.updateMany({
+          where: {
+            id:
+              transaction.id,
+            OR: [
+              { lastNotificationAt: null },
+              { lastNotificationAt: { lt: startOfLocalDay(today) } },
+            ],
+          },
+          data: {
+            lastNotificationAt:
+              today,
+          },
         });
+
+      if (claim.count === 0) {
+        skipped += 1;
+        results.push({
+          transactionId:
+            transaction.id,
+          billingChargeId:
+            charge.id,
+          status:
+            "SKIPPED",
+          reason:
+            "Aviso de hoje já enviado por outro ciclo.",
+          email:
+            client.email,
+        });
+        continue;
+      }
+
+      let info: any;
+
+      try {
+        info =
+          await transporter.sendMail({
+            from:
+              smtpFrom,
+            to:
+              client.email,
+            subject,
+            html,
+          });
+      } catch (sendError) {
+        // Libera a reserva para a próxima tentativa.
+        await prisma.financialTransaction.update({
+          where: { id: transaction.id },
+          data: { lastNotificationAt: transaction.lastNotificationAt },
+        }).catch(() => undefined);
+        throw sendError;
+      }
 
       await prisma.financialTransaction.update({
         where: {
@@ -15815,21 +15996,27 @@ async function processFinanceSchedulerTick() {
         settings.lastChargeRunStatus,
     });
 
-  if (chargeDecision.shouldRun) {
-    await prisma.financeAutoChargeSettings.update({
-      where: {
-        id: 1,
-      },
+  // Reserva atômica: se outro ciclo já marcou o início, este desiste.
+  const chargeClaim =
+    chargeDecision.shouldRun
+      ? await prisma.financeAutoChargeSettings.updateMany({
+          where: {
+            id: 1,
+            lastChargeRunStartedAt:
+              settings.lastChargeRunStartedAt ?? null,
+          },
 
-      data: {
-        lastChargeRunStartedAt:
-          now,
+          data: {
+            lastChargeRunStartedAt:
+              now,
 
-        lastChargeRunStatus:
-          "RUNNING",
-      },
-    });
+            lastChargeRunStatus:
+              "RUNNING",
+          },
+        })
+      : { count: 0 };
 
+  if (chargeClaim.count > 0) {
     try {
       const chargeResult =
         await processFinanceAutoCharges();
@@ -15914,7 +16101,7 @@ async function processFinanceSchedulerTick() {
         false,
 
       reason:
-        chargeDecision.reason,
+        chargeDecision.shouldRun ? "Outro ciclo já iniciou esta rotina." : chargeDecision.reason,
     };
   }
 
@@ -15948,21 +16135,27 @@ async function processFinanceSchedulerTick() {
         refreshed.lastNoticeRunStatus,
     });
 
-  if (noticeDecision.shouldRun) {
-    await prisma.financeAutoChargeSettings.update({
-      where: {
-        id: 1,
-      },
+  // Reserva atômica: se outro ciclo já marcou o início, este desiste.
+  const noticeClaim =
+    noticeDecision.shouldRun
+      ? await prisma.financeAutoChargeSettings.updateMany({
+          where: {
+            id: 1,
+            lastNoticeRunStartedAt:
+              refreshed.lastNoticeRunStartedAt ?? null,
+          },
 
-      data: {
-        lastNoticeRunStartedAt:
-          now,
+          data: {
+            lastNoticeRunStartedAt:
+              now,
 
-        lastNoticeRunStatus:
-          "RUNNING",
-      },
-    });
+            lastNoticeRunStatus:
+              "RUNNING",
+          },
+        })
+      : { count: 0 };
 
+  if (noticeClaim.count > 0) {
     try {
       const noticeResult =
         await processFinanceAutoChargeEmailNotices();
@@ -16047,7 +16240,7 @@ async function processFinanceSchedulerTick() {
         false,
 
       reason:
-        noticeDecision.reason,
+        noticeDecision.shouldRun ? "Outro ciclo já iniciou esta rotina." : noticeDecision.reason,
     };
   }
 
