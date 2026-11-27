@@ -60,7 +60,7 @@ import { registerStandaloneProposalRoutes } from "./modules/standalone-proposals
 import { blockStandaloneProposalStaticAccess } from "./modules/standalone-proposals/standalone-upload-guard";
 import { registerFieldScheduleRoutes } from "./modules/field-schedule/field-schedule.routes";
 import { processDemandAlerts, registerDemandRoutes } from "./modules/demands/demands.routes";
-import { normalizeWhatsAppPhone, sendWhatsAppImage, sendWhatsAppText } from "./services/whatsappService";
+import { normalizeWhatsAppPhone, sendWhatsAppDocument, sendWhatsAppImage, sendWhatsAppText } from "./services/whatsappService";
 import { CardSpec, tryRenderCardPng } from "./services/whatsappCard";
 import { restrictSecretaryAccess, secretaryMayUseRoute } from "./modules/secretary/secretary.routes";
 import { registerPartnerReferralRoutes } from "./modules/partners/partner-referrals.routes";
@@ -351,6 +351,34 @@ function getChargePublicUrl(
       : charge.publicToken || String(charge.id);
 
   return `${publicBaseUrl}/cobranca/${publicIdentifier}`;
+}
+
+/*
+ * Link curto da cobrança para WhatsApp: /p/<12 primeiros caracteres do token>.
+ * O token tem 64 caracteres aleatórios; 12 hex (48 bits) bastam para não
+ * ser adivinhado e cabem bem na mensagem.
+ */
+const SHORT_CHARGE_CODE_LENGTH = 12;
+
+function getChargeShortUrl(charge: { id: number; publicToken?: string | null }) {
+  const token = charge.publicToken || "";
+
+  if (token.length < 32) return getChargePublicUrl(charge);
+
+  return `${getBillingPublicBaseUrl()}/p/${token.slice(0, SHORT_CHARGE_CODE_LENGTH)}`;
+}
+
+/** Troca o código curto pelo token completo (só se for único). */
+async function expandShortChargeToken(identifier: string) {
+  if (!new RegExp(`^[0-9a-f]{${SHORT_CHARGE_CODE_LENGTH}}$`, "i").test(identifier)) return identifier;
+
+  const matches = await prisma.billingCharge.findMany({
+    where: { publicToken: { startsWith: identifier.toLowerCase() } },
+    select: { publicToken: true },
+    take: 2,
+  });
+
+  return matches.length === 1 && matches[0].publicToken ? matches[0].publicToken : identifier;
 }
 
 function safeJson(value: unknown) {
@@ -11423,15 +11451,17 @@ function clientBillingWhatsAppText(params: {
   publicUrl: string;
   companyName: string;
   daysUntilDue?: number | null;
+  serviceName?: string | null;
 }) {
   const hello = `Olá, ${firstNameOf(params.clientName)}!`;
   const footer = `\n\n${params.companyName}`;
+  const what = params.serviceName ? `*${params.serviceName}*` : `*${params.description}*`;
 
   if (params.kind === "PAYMENT_CONFIRMED") {
-    return `${hello} Recebemos o seu pagamento de *${params.amountText}* referente a ${params.description}. Obrigado!\n\nO recibo foi enviado para o seu e-mail e também está disponível em:\n${params.publicUrl}${footer}`;
+    return `${hello} Recebemos o seu pagamento de *${params.amountText}* referente a ${what}. Obrigado!\n\nO recibo em PDF segue nesta conversa e também está disponível em:\n${params.publicUrl}${footer}`;
   }
 
-  const details = `*${params.description}*\nValor: *${params.amountText}*\nVencimento: *${params.dueDateText}*\n\nPague por Pix (QR Code ou copia e cola) pelo link:\n${params.publicUrl}`;
+  const details = `${params.serviceName ? `Serviço: *${params.serviceName}*` : `*${params.description}*`}\nValor: *${params.amountText}*\nVencimento: *${params.dueDateText}*\n\nPague por Pix pelo QR Code, pelo código abaixo ou pelo link:\n${params.publicUrl}`;
 
   if (params.kind === "NEW_CHARGE") {
     return `${hello} Emitimos a sua cobrança:\n\n${details}${footer}`;
@@ -11461,8 +11491,10 @@ function clientBillingWhatsAppCard(params: {
   companyName: string;
   daysUntilDue?: number | null;
   qrDataUri?: string | null;
+  serviceName?: string | null;
 }): { card: CardSpec; caption: string } {
   const hello = `Olá, ${firstNameOf(params.clientName)}!`;
+  const boxTitle = params.serviceName || params.description;
 
   if (params.kind === "PAYMENT_CONFIRMED") {
     return {
@@ -11472,8 +11504,8 @@ function clientBillingWhatsAppCard(params: {
         tone: "green",
         titleLead: "Pagamento",
         titleAccent: "confirmado",
-        boxTitle: params.description,
-        boxSubtitle: "Obrigado! O recibo está disponível no link abaixo.",
+        boxTitle,
+        boxSubtitle: "Obrigado! O recibo em PDF segue nesta conversa.",
         boxIcon: "check",
         rows: [
           { label: "Valor pago", value: params.amountText, icon: "money" },
@@ -11482,7 +11514,7 @@ function clientBillingWhatsAppCard(params: {
         ].filter(Boolean) as CardSpec["rows"],
         link: params.publicUrl,
       },
-      caption: `${hello} Recebemos o seu pagamento de *${params.amountText}*. Obrigado!\nRecibo: ${params.publicUrl}`,
+      caption: `${hello} Recebemos o seu pagamento de *${params.amountText}* referente a *${boxTitle}*. Obrigado!\nO recibo em PDF vem logo abaixo.`,
     };
   }
 
@@ -11522,8 +11554,8 @@ function clientBillingWhatsAppCard(params: {
       tone,
       titleLead,
       titleAccent,
-      boxTitle: params.description,
-      boxSubtitle: `${params.companyName} · pague por Pix`,
+      boxTitle,
+      boxSubtitle: params.serviceName ? "Serviço contratado · pague por Pix" : `${params.companyName} · pague por Pix`,
       boxIcon: "money",
       rows: [
         { label: "Valor", value: params.amountText, icon: "money" },
@@ -11539,7 +11571,7 @@ function clientBillingWhatsAppCard(params: {
         : undefined,
       link: params.publicUrl,
     },
-    caption: `${hello} ${intro}\n*${params.description}*: ${params.amountText}, vencimento ${params.dueDateText}.\nPague pelo link: ${params.publicUrl}`,
+    caption: `${hello} ${intro}\n${params.serviceName ? "Serviço" : "Cobrança"}: *${boxTitle}*\nValor: *${params.amountText}* · vencimento *${params.dueDateText}*\n\nPara pagar, leia o QR Code ou copie o código Pix da próxima mensagem. Página da cobrança: ${params.publicUrl}`,
   };
 }
 
@@ -11555,6 +11587,8 @@ async function sendClientBillingWhatsApp(params: {
   caption?: string;
   /** Mensagem extra depois do card (ex.: Pix copia e cola). */
   followUpText?: string | null;
+  /** Documento (PDF) enviado depois do card, ex.: recibo. */
+  document?: (() => Promise<{ buffer: Buffer; fileName: string; caption?: string }>) | null;
 }) {
   const testIds = financeAutomationTestClientIds();
 
@@ -11608,15 +11642,34 @@ async function sendClientBillingWhatsApp(params: {
     ? await sendWhatsAppImage(phone, png, params.caption || params.text, params.text)
     : await sendWhatsAppText(phone, params.text);
 
-  if (result.ok && png && params.followUpText) {
+  if (result.ok && params.followUpText) {
     await new Promise((resolve) => setTimeout(resolve, 1200));
     await sendWhatsAppText(phone, params.followUpText).catch(() => null);
+  }
+
+  let documentError: string | null = null;
+
+  if (result.ok && params.document) {
+    try {
+      const doc = await params.document();
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      const sentDoc = await sendWhatsAppDocument(phone, doc.buffer, doc.fileName, doc.caption || "");
+      if (!sentDoc.ok) documentError = sentDoc.error || "Falha ao enviar o PDF.";
+    } catch (error: any) {
+      documentError = error?.message || String(error);
+    }
+
+    if (documentError) console.error("Recibo por WhatsApp não enviado:", documentError);
   }
 
   if (result.ok) {
     await prisma.clientWhatsAppNotification.update({
       where: { id: reservation.id },
-      data: { status: "SENT", messageId: result.messageId || null },
+      data: {
+        status: "SENT",
+        messageId: result.messageId || null,
+        errorText: documentError ? `Card enviado; PDF falhou: ${documentError}`.slice(0, 500) : null,
+      },
     });
     return { status: "SENT" };
   }
@@ -11643,7 +11696,11 @@ async function sendClientBillingWhatsApp(params: {
 async function notifyClientBillingWhatsApp(
   transactionId: number,
   kind: ClientBillingWhatsAppKind,
-  extra: { dedupeSuffix?: string; daysUntilDue?: number | null } = {}
+  extra: {
+    dedupeSuffix?: string;
+    daysUntilDue?: number | null;
+    confirmationSource?: "BANCO_DO_BRASIL" | "MANUAL";
+  } = {}
 ) {
   try {
     const settings = await getFinanceAutoChargeSettings();
@@ -11652,7 +11709,13 @@ async function notifyClientBillingWhatsApp(
 
     const transaction = await prisma.financialTransaction.findUnique({
       where: { id: transactionId },
-      include: { client: true, billingCharge: { include: { client: true } } },
+      include: {
+        client: true,
+        billingCharge: { include: { client: true } },
+        catalogService: { select: { name: true } },
+        protocol: { select: { serviceType: { select: { name: true } } } },
+        proposal: { select: { title: true } },
+      },
     });
 
     const charge = transaction?.billingCharge;
@@ -11670,9 +11733,14 @@ async function notifyClientBillingWhatsApp(
       description: charge.description || transaction.description,
       amountText: formatCurrencyBRFromCents(cents),
       dueDateText: dueDate ? formatDueDateBR(dueDate) : "-",
-      publicUrl: getChargePublicUrl(charge),
+      publicUrl: getChargeShortUrl(charge),
       companyName: company.companyName || "Amazonika Engenharia",
       daysUntilDue: extra.daysUntilDue,
+      serviceName:
+        transaction.catalogService?.name ||
+        transaction.protocol?.serviceType?.name ||
+        transaction.proposal?.title ||
+        null,
     };
     const text = clientBillingWhatsAppText(fields);
 
@@ -11699,6 +11767,21 @@ async function notifyClientBillingWhatsApp(
       card,
       caption,
       followUpText: pixCode,
+      document:
+        kind === "PAYMENT_CONFIRMED"
+          ? async () => {
+              const receipt = await generateFinanceReceiptPdfOnce(
+                transaction,
+                charge,
+                extra.confirmationSource || (charge.txid ? "BANCO_DO_BRASIL" : "MANUAL")
+              );
+              return {
+                buffer: fs.readFileSync(receipt.filePath),
+                fileName: `Recibo ${receipt.fileName}`,
+                caption: `Recibo de pagamento - ${fields.serviceName || fields.description}`,
+              };
+            }
+          : null,
     });
   } catch (error: any) {
     console.error("Falha no WhatsApp de cobrança:", error?.message || error);
@@ -12504,6 +12587,29 @@ function shortVerificationCode(hash: string) {
   return hash.slice(0, 16).toUpperCase().replace(/(.{4})(?!$)/g, "$1-");
 }
 
+/*
+ * O recibo é o mesmo arquivo (REC-FIN-<id>.pdf) para o e-mail e para o
+ * WhatsApp. Chamadas simultâneas do mesmo lançamento compartilham a
+ * mesma geração, para um não ler o arquivo enquanto o outro escreve.
+ */
+const financeReceiptPdfInFlight = new Map<number, ReturnType<typeof generateFinanceReceiptPdf>>();
+
+function generateFinanceReceiptPdfOnce(
+  transactionInput: any,
+  chargeInput: any,
+  confirmationSource: "BANCO_DO_BRASIL" | "MANUAL"
+) {
+  const key = Number(transactionInput.id);
+  const running = financeReceiptPdfInFlight.get(key);
+  if (running) return running;
+
+  const job = generateFinanceReceiptPdf(transactionInput, chargeInput, confirmationSource).finally(() => {
+    financeReceiptPdfInFlight.delete(key);
+  });
+  financeReceiptPdfInFlight.set(key, job);
+  return job;
+}
+
 async function generateFinanceReceiptPdf(
   transactionInput: any,
   chargeInput: any,
@@ -12940,9 +13046,11 @@ async function sendFinancePaymentConfirmationEmail(
     };
   }
 
-  if (!options.resend) {
-    void notifyClientBillingWhatsApp(transaction.id, "PAYMENT_CONFIRMED");
-  }
+  // WhatsApp com o recibo em PDF. No "Reenviar recibo" sai de novo (chave própria).
+  void notifyClientBillingWhatsApp(transaction.id, "PAYMENT_CONFIRMED", {
+    confirmationSource,
+    dedupeSuffix: options.resend ? `REENVIO-${Date.now()}` : undefined,
+  });
 
   const settings =
     await getFinanceAutoChargeSettings();
@@ -13057,7 +13165,7 @@ async function sendFinancePaymentConfirmationEmail(
         : "Confirmação administrativa";
 
     const receiptPdf =
-      await generateFinanceReceiptPdf(
+      await generateFinanceReceiptPdfOnce(
         transaction,
         charge,
         confirmationSource
@@ -26863,7 +26971,7 @@ const publicChargeLastBbCheck = new Map<number, number>();
 
 app.get("/public/billing-charges/:token/status", async (req, res) => {
   try {
-    const token = String(req.params.token || "").trim();
+    const token = await expandShortChargeToken(String(req.params.token || "").trim());
 
     if (!token || /^\d+$/.test(token)) {
       return res.status(400).json({ message: "Identificador inválido." });
@@ -26943,7 +27051,7 @@ app.get("/public/billing-charges/:token/status", async (req, res) => {
 
 app.get("/public/billing-charges/:identifier", async (req, res) => {
   try {
-    const identifier = String(req.params.identifier || "").trim();
+    const identifier = await expandShortChargeToken(String(req.params.identifier || "").trim());
 
     if (!identifier) {
       return res.status(400).json({

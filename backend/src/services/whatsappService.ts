@@ -107,9 +107,26 @@ export async function sendWhatsAppImage(
     : fallback;
 }
 
+/** Envia um arquivo (ex.: recibo em PDF) como documento. */
+export async function sendWhatsAppDocument(
+  phone: string,
+  buffer: Buffer,
+  fileName: string,
+  caption: string = "",
+  mimetype: string = "application/pdf"
+): Promise<WhatsAppSendResult> {
+  return postMessage(phone, "send-document", (chatId) => ({
+    chatId,
+    base64: `data:${mimetype};base64,${buffer.toString("base64")}`,
+    mimetype,
+    filename: fileName.slice(0, 255),
+    caption: caption.slice(0, 1024),
+  }));
+}
+
 async function postMessage(
   phone: string,
-  endpoint: "send-text" | "send-image",
+  endpoint: "send-text" | "send-image" | "send-document",
   body: (chatId: string) => Record<string, unknown>
 ): Promise<WhatsAppSendResult> {
   const config = whatsappConfig();
@@ -139,7 +156,7 @@ async function postMessage(
         body(whatsappChatId(normalized)),
         {
           headers: { "X-API-Key": config.apiKey },
-          timeout: endpoint === "send-image" ? 45000 : 20000,
+          timeout: endpoint === "send-text" ? 20000 : 45000,
           maxBodyLength: 20 * 1024 * 1024,
         }
       );
