@@ -11756,6 +11756,17 @@ async function processFinanceClientWhatsAppNotices() {
     // A cobrança nova saiu hoje: não repete como lembrete no mesmo dia.
     if (financeChargeFirstSentToday(transaction.billingCharge, today)) continue;
 
+    // Mesmo caso pelo registro do WhatsApp: "Cobrança emitida" já saiu hoje.
+    const newChargeToday = await prisma.clientWhatsAppNotification.count({
+      where: {
+        transactionId: transaction.id,
+        kind: "NEW_CHARGE",
+        status: { in: ["SENT", "SENDING"] },
+        createdAt: { gte: startOfLocalDay(today) },
+      },
+    });
+    if (newChargeToday > 0) continue;
+
     const result = await notifyClientBillingWhatsApp(transaction.id, `NOTICE_${noticeType}`, {
       dedupeSuffix: formatDateOnly(today),
       daysUntilDue: dateDiffInDays(today, transaction.dueDate!),
