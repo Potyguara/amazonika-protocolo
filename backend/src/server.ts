@@ -51,11 +51,18 @@ import path from "path";
 import fs from "fs";
 import nodemailer from "nodemailer";
 import PDFDocument from "pdfkit";
+import QRCode from "qrcode";
+import { pdfSignerInfo, signPdfBuffer } from "./services/pdfSign";
 import crypto from "crypto";
 import { registerPartnerRoutes } from "./modules/partners/partners.routes";
 import { registerCatalogRoutes } from "./modules/catalog/catalog.routes";
 import { registerStandaloneProposalRoutes } from "./modules/standalone-proposals/standalone-proposals.routes";
+import { blockStandaloneProposalStaticAccess } from "./modules/standalone-proposals/standalone-upload-guard";
 import { registerFieldScheduleRoutes } from "./modules/field-schedule/field-schedule.routes";
+import { processDemandAlerts, registerDemandRoutes } from "./modules/demands/demands.routes";
+import { normalizeWhatsAppPhone, sendWhatsAppDocument, sendWhatsAppImage, sendWhatsAppText } from "./services/whatsappService";
+import { CardSpec, tryRenderCardPng } from "./services/whatsappCard";
+import { restrictSecretaryAccess, secretaryMayUseRoute } from "./modules/secretary/secretary.routes";
 import { registerPartnerReferralRoutes } from "./modules/partners/partner-referrals.routes";
 import { registerPartnerCommissionRoutes } from "./modules/partners/partner-commissions.routes";
 import { releasePartnerCommissionForEntryPayment } from "./modules/partners/partner-commission.service";
@@ -71,9 +78,11 @@ import {
   getBbPixCharge,
   getBbPixDueCharge,
   updateBbPixDueChargeDueDate,
+  removeBbPixDueCharge,
+  checkBbPixConnection,
 } from "./services/bbPixService";
 
-type UserRole = "CLIENTE" | "ATENDENTE" | "GERENTE" | "PROGRAMADOR";
+type UserRole = "CLIENTE" | "ATENDENTE" | "GERENTE" | "PROGRAMADOR" | "SECRETARIA";
 
 const prisma = new PrismaClient();
 
@@ -127,6 +136,10 @@ app.use(
     return next(error);
   }
 );
+// Perfil Secretária: o token só alcança as rotas de lançamento.
+// JWT_SECRET é lido na hora da requisição (declarado mais abaixo).
+app.use(restrictSecretaryAccess(() => JWT_SECRET));
+
 app.use("/email", express.static(path.join(process.cwd(), "public", "email")));
 
 const uploadsDir = path.resolve(process.cwd(), "uploads", "documents");
@@ -135,6 +148,7 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+blockStandaloneProposalStaticAccess(app);
 app.use("/uploads", express.static(path.resolve(process.cwd(), "uploads")));
 
 const storage = multer.diskStorage({
@@ -154,6 +168,140 @@ const upload = multer({
     fileSize: 25 * 1024 * 1024,
   },
 });
+
+
+// ======================================================
+// COMPROVANTES PRIVADOS — CUSTOS DOS SÓCIOS/GERENTES
+// ======================================================
+//
+// Diferentemente de /uploads, este diretório NÃO é
+// publicado por express.static. O acesso ao comprovante
+// deve ocorrer exclusivamente por rota autenticada.
+//
+const managerExpenseReceiptsDir = path.resolve(
+  process.cwd(),
+  "private-storage",
+  "manager-expenses"
+);
+
+if (!fs.existsSync(managerExpenseReceiptsDir)) {
+  fs.mkdirSync(managerExpenseReceiptsDir, {
+    recursive: true,
+    mode: 0o750,
+  });
+}
+
+const managerExpenseStorage = multer.diskStorage({
+  destination: (_req, _file, callback) => {
+    callback(null, managerExpenseReceiptsDir);
+  },
+
+  filename: (_req, file, callback) => {
+    const extensionByMime: Record<string, string> = {
+      "application/pdf": ".pdf",
+      "image/jpeg": ".jpg",
+      "image/png": ".png",
+    };
+
+    const extension =
+      extensionByMime[file.mimetype] || "";
+
+    const storedName =
+      `${Date.now()}-${crypto.randomBytes(16).toString("hex")}${extension}`;
+
+    callback(null, storedName);
+  },
+});
+
+const managerExpenseUpload = multer({
+  storage: managerExpenseStorage,
+
+  limits: {
+    // Comprovante financeiro: limite deliberadamente
+    // inferior ao upload documental geral do sistema.
+    fileSize: 10 * 1024 * 1024,
+    files: 1,
+  },
+
+  fileFilter: (_req, file, callback) => {
+    const allowedMimeTypes = new Set([
+      "application/pdf",
+      "image/jpeg",
+      "image/png",
+    ]);
+
+    if (!allowedMimeTypes.has(file.mimetype)) {
+      return callback(
+        new Error(
+          "Formato de comprovante inválido. Envie PDF, JPG ou PNG."
+        )
+      );
+    }
+
+    callback(null, true);
+  },
+});
+
+
+function managerExpenseReceiptUpload(
+  req: Request,
+  res: Response,
+  next: any
+) {
+  managerExpenseUpload.single("file")(
+    req,
+    res,
+    (error: any) => {
+      if (!error) {
+        return next();
+      }
+
+      if (error instanceof multer.MulterError) {
+        if (error.code === "LIMIT_FILE_SIZE") {
+          return res.status(413).json({
+            message:
+              "O comprovante excede o limite máximo de 10 MB.",
+          });
+        }
+
+        if (
+          error.code === "LIMIT_FILE_COUNT" ||
+          error.code === "LIMIT_UNEXPECTED_FILE"
+        ) {
+          return res.status(400).json({
+            message:
+              "Envie apenas um comprovante no campo file.",
+          });
+        }
+
+        return res.status(400).json({
+          message:
+            `Erro no upload do comprovante: ${error.message}`,
+        });
+      }
+
+      if (
+        error instanceof Error &&
+        error.message ===
+          "Formato de comprovante inválido. Envie PDF, JPG ou PNG."
+      ) {
+        return res.status(400).json({
+          message: error.message,
+        });
+      }
+
+      console.error(
+        "Erro no upload de comprovante de custo de gerente:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Erro ao processar o comprovante.",
+      });
+    }
+  );
+}
 
 const PORT = Number(process.env.PORT || 3333);
 const JWT_SECRET = process.env.JWT_SECRET || "amazonika-local-dev-secret";
@@ -205,6 +353,34 @@ function getChargePublicUrl(
   return `${publicBaseUrl}/cobranca/${publicIdentifier}`;
 }
 
+/*
+ * Link curto da cobrança para WhatsApp: /p/<12 primeiros caracteres do token>.
+ * O token tem 64 caracteres aleatórios; 12 hex (48 bits) bastam para não
+ * ser adivinhado e cabem bem na mensagem.
+ */
+const SHORT_CHARGE_CODE_LENGTH = 12;
+
+function getChargeShortUrl(charge: { id: number; publicToken?: string | null }) {
+  const token = charge.publicToken || "";
+
+  if (token.length < 32) return getChargePublicUrl(charge);
+
+  return `${getBillingPublicBaseUrl()}/p/${token.slice(0, SHORT_CHARGE_CODE_LENGTH)}`;
+}
+
+/** Troca o código curto pelo token completo (só se for único). */
+async function expandShortChargeToken(identifier: string) {
+  if (!new RegExp(`^[0-9a-f]{${SHORT_CHARGE_CODE_LENGTH}}$`, "i").test(identifier)) return identifier;
+
+  const matches = await prisma.billingCharge.findMany({
+    where: { publicToken: { startsWith: identifier.toLowerCase() } },
+    select: { publicToken: true },
+    take: 2,
+  });
+
+  return matches.length === 1 && matches[0].publicToken ? matches[0].publicToken : identifier;
+}
+
 function safeJson(value: unknown) {
   try {
     return JSON.stringify(value);
@@ -217,6 +393,22 @@ function addDays(date: Date, days: number) {
   const result = new Date(date);
   result.setDate(result.getDate() + days);
   return result;
+}
+
+/*
+ * Vencimentos são datas sem hora, gravadas à meia-noite UTC.
+ * Formatar em America/Belem mostraria o dia anterior.
+ */
+function formatDueDateBR(value?: string | Date | null) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "UTC",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date);
 }
 
 function formatDateOnly(date: Date) {
@@ -1436,7 +1628,13 @@ function requireRoles(roles: UserRole[]) {
       return res.status(401).json({ message: "Usuário não autenticado." });
     }
 
-    if (!roles.includes(req.user.role)) {
+    const allowed =
+      roles.includes(req.user.role) ||
+      // Secretária usa o que o atendente usa (a lista fina fica em
+      // restrictSecretaryAccess) e as rotas que a citam.
+      (req.user.role === "SECRETARIA" && secretaryMayUseRoute(roles));
+
+    if (!allowed) {
       return res.status(403).json({ message: "Acesso não autorizado." });
     }
 
@@ -1501,6 +1699,13 @@ type CompanySettings = {
   companyState: string;
   companyZipCode: string;
   companyFooterText: string;
+  bankName: string;
+  bankAgency: string;
+  bankAccount: string;
+  bankAccountType: string;
+  bankHolder: string;
+  bankHolderDocument: string;
+  pixKey: string;
 };
 
 
@@ -1531,6 +1736,13 @@ async function getCompanySettings(): Promise<CompanySettings> {
       "COMPANY_FOOTER_TEXT",
       "Compromisso com soluções sustentáveis e responsabilidade ambiental."
     ),
+    bankName: await getSetting("PROPOSAL_BANK_NAME"),
+    bankAgency: await getSetting("PROPOSAL_BANK_AGENCY"),
+    bankAccount: await getSetting("PROPOSAL_BANK_ACCOUNT"),
+    bankAccountType: await getSetting("PROPOSAL_BANK_ACCOUNT_TYPE"),
+    bankHolder: await getSetting("PROPOSAL_BANK_HOLDER"),
+    bankHolderDocument: await getSetting("PROPOSAL_BANK_HOLDER_DOCUMENT"),
+    pixKey: await getSetting("PROPOSAL_PIX_KEY"),
   };
 }
 
@@ -1548,10 +1760,18 @@ async function saveCompanySettings(data: Partial<CompanySettings>) {
     ["COMPANY_STATE", data.companyState],
     ["COMPANY_ZIP_CODE", data.companyZipCode],
     ["COMPANY_FOOTER_TEXT", data.companyFooterText],
+    ["PROPOSAL_BANK_NAME", data.bankName],
+    ["PROPOSAL_BANK_AGENCY", data.bankAgency],
+    ["PROPOSAL_BANK_ACCOUNT", data.bankAccount],
+    ["PROPOSAL_BANK_ACCOUNT_TYPE", data.bankAccountType],
+    ["PROPOSAL_BANK_HOLDER", data.bankHolder],
+    ["PROPOSAL_BANK_HOLDER_DOCUMENT", data.bankHolderDocument],
+    ["PROPOSAL_PIX_KEY", data.pixKey],
   ];
 
   for (const [key, value] of entries) {
-    await setSetting(key, value || "", "COMPANY");
+    if (value === undefined) continue;
+    await setSetting(key, typeof value === "string" ? value.trim() : "", "COMPANY");
   }
 
   return getCompanySettings();
@@ -10930,6 +11150,19 @@ function normalizeFinanceSchedulerTimeZone(
 }
 
 
+/**
+ * Fila única no processo: avisos e emissões nunca rodam em paralelo
+ * (cron a cada 5 min + botões manuais). Quem chega depois espera o
+ * anterior terminar e então vê o que já foi enviado.
+ */
+let financeJobQueue: Promise<unknown> = Promise.resolve();
+
+function runFinanceJobSerialized<T>(job: () => Promise<T>): Promise<T> {
+  const next = financeJobQueue.then(job, job);
+  financeJobQueue = next.catch(() => undefined);
+  return next;
+}
+
 async function getFinanceAutoChargeSettings() {
   return prisma.financeAutoChargeSettings.upsert({
     where: {
@@ -11071,26 +11304,46 @@ function isValidFinancePixDocument(
  * rastreabilidade e idempotência.
  */
 function generateFinanceBbPixTxid(
-  transactionId: number
+  transactionId: number,
+  revision = 0
 ) {
   /*
-   * TXID determinístico:
+   * TXID determinístico por lançamento + revisão:
    *
-   * AMAZONIKAFIN = 12 caracteres
-   * ID preenchido = 14 caracteres
-   * Total mínimo = 26 caracteres
+   * Revisão 0 preserva EXATAMENTE o formato legado:
+   * AMAZONIKAFIN + ID com 14 caracteres.
    *
-   * A mesma FinancialTransaction sempre produzirá
-   * exatamente o mesmo TXID.
+   * Revisões posteriores são usadas somente quando uma
+   * CobV anterior foi formalmente removida/cancelada:
    *
-   * Isso evita uma segunda cobrança caso o BB responda
-   * com sucesso e ocorra falha local antes da persistência.
+   * R01, R02, R03...
+   *
+   * Isso mantém idempotência dentro da mesma emissão e,
+   * ao mesmo tempo, permite reemitir uma nova CobV após
+   * cancelamento administrativo da cobrança anterior.
    */
-  const txid =
+  if (
+    !Number.isInteger(revision) ||
+    revision < 0 ||
+    revision > 99
+  ) {
+    throw new Error(
+      "Revisão do TXID financeiro inválida."
+    );
+  }
+
+  const baseTxid =
     `AMAZONIKAFIN${String(transactionId).padStart(14, "0")}`
       .replace(/[^A-Z0-9]/gi, "")
-      .toUpperCase()
-      .slice(0, 35);
+      .toUpperCase();
+
+  const revisionSuffix =
+    revision === 0
+      ? ""
+      : `R${String(revision).padStart(2, "0")}`;
+
+  const txid =
+    `${baseTxid}${revisionSuffix}`;
 
   if (
     txid.length < 26 ||
@@ -11170,6 +11423,471 @@ function financeDaysBetween(
   );
 }
 
+/*
+ * ======================================================
+ * COBRANÇA AO CLIENTE POR WHATSAPP (OpenWA)
+ * ======================================================
+ *
+ * Liga com "Enviar avisos por WhatsApp" nas configurações da
+ * automação financeira. Respeita FINANCE_AUTOMATION_TEST_CLIENT_IDS:
+ * com a trava ativa, só os clientes de teste recebem.
+ * Cada aviso tem uma chave única, então nunca sai repetido.
+ */
+type ClientBillingWhatsAppKind =
+  | "NEW_CHARGE"
+  | "PAYMENT_CONFIRMED"
+  | `NOTICE_${string}`;
+
+function firstNameOf(name?: string | null) {
+  return String(name || "").trim().split(/\s+/)[0] || "cliente";
+}
+
+function clientBillingWhatsAppText(params: {
+  kind: ClientBillingWhatsAppKind;
+  clientName: string;
+  description: string;
+  amountText: string;
+  dueDateText: string;
+  publicUrl: string;
+  companyName: string;
+  daysUntilDue?: number | null;
+  serviceName?: string | null;
+}) {
+  const hello = `Olá, ${firstNameOf(params.clientName)}!`;
+  const footer = `\n\n${params.companyName}`;
+  const what = params.serviceName ? `*${params.serviceName}*` : `*${params.description}*`;
+
+  if (params.kind === "PAYMENT_CONFIRMED") {
+    return `${hello} Recebemos o seu pagamento de *${params.amountText}* referente a ${what}. Obrigado!\n\nO recibo em PDF segue nesta conversa e também está disponível em:\n${params.publicUrl}${footer}`;
+  }
+
+  const details = `${params.serviceName ? `Serviço: *${params.serviceName}*` : `*${params.description}*`}\nValor: *${params.amountText}*\nVencimento: *${params.dueDateText}*\n\nPague por Pix pelo QR Code, pelo código abaixo ou pelo link:\n${params.publicUrl}`;
+
+  if (params.kind === "NEW_CHARGE") {
+    return `${hello} Emitimos a sua cobrança:\n\n${details}${footer}`;
+  }
+
+  const days = params.daysUntilDue ?? null;
+  let intro = "Lembrete da sua cobrança:";
+
+  if (params.kind.includes("NO_DIA")) intro = "Sua cobrança vence *hoje*:";
+  else if (params.kind.includes("ANTES") && days !== null && days > 0)
+    intro = `Lembrete: sua cobrança vence em ${days} dia${days > 1 ? "s" : ""}:`;
+  else if (days !== null && days < 0)
+    intro = "Consta em aberto a cobrança abaixo. Se já pagou, desconsidere esta mensagem:";
+
+  return `${hello} ${intro}\n\n${details}${footer}`;
+}
+
+/** Card em imagem da cobrança, com o mesmo conteúdo do texto. */
+function clientBillingWhatsAppCard(params: {
+  kind: ClientBillingWhatsAppKind;
+  clientName: string;
+  description: string;
+  amountText: string;
+  dueDateText: string;
+  paidAtText?: string | null;
+  publicUrl: string;
+  companyName: string;
+  daysUntilDue?: number | null;
+  qrDataUri?: string | null;
+  serviceName?: string | null;
+}): { card: CardSpec; caption: string } {
+  const hello = `Olá, ${firstNameOf(params.clientName)}!`;
+  const boxTitle = params.serviceName || params.description;
+
+  if (params.kind === "PAYMENT_CONFIRMED") {
+    return {
+      card: {
+        pill: "Pago",
+        pillIcon: "check",
+        tone: "green",
+        titleLead: "Pagamento",
+        titleAccent: "confirmado",
+        boxTitle,
+        boxSubtitle: "Obrigado! O recibo em PDF segue nesta conversa.",
+        boxIcon: "check",
+        rows: [
+          { label: "Valor pago", value: params.amountText, icon: "money" },
+          params.paidAtText ? { label: "Pago em", value: params.paidAtText, icon: "calendar" } : null,
+          { label: "Recebido por", value: params.companyName, icon: "user" },
+        ].filter(Boolean) as CardSpec["rows"],
+        link: params.publicUrl,
+      },
+      caption: `${hello} Recebemos o seu pagamento de *${params.amountText}* referente a *${boxTitle}*. Obrigado!\nO recibo em PDF vem logo abaixo.`,
+    };
+  }
+
+  const days = params.daysUntilDue ?? null;
+  let tone: CardSpec["tone"] = "green";
+  let pill = "Cobrança";
+  let titleLead = "Cobrança";
+  let titleAccent = "emitida";
+  let intro = "Emitimos a sua cobrança.";
+
+  if (params.kind !== "NEW_CHARGE") {
+    if (params.kind.includes("NO_DIA")) {
+      tone = "amber";
+      pill = "Vence hoje";
+      titleLead = "Sua cobrança";
+      titleAccent = "vence hoje";
+      intro = "Sua cobrança vence *hoje*.";
+    } else if (days !== null && days < 0) {
+      tone = "red";
+      pill = "Em aberto";
+      titleLead = "Cobrança";
+      titleAccent = "em aberto";
+      intro = "Consta em aberto a cobrança abaixo. Se já pagou, desconsidere.";
+    } else {
+      tone = "amber";
+      pill = "Lembrete";
+      titleLead = "Vence em";
+      titleAccent = days !== null && days > 0 ? `${days} dia${days > 1 ? "s" : ""}` : "breve";
+      intro = "Lembrete da sua cobrança.";
+    }
+  }
+
+  return {
+    card: {
+      pill,
+      pillIcon: params.kind === "NEW_CHARGE" ? "money" : tone === "red" ? "alert" : "clock",
+      tone,
+      titleLead,
+      titleAccent,
+      boxTitle,
+      boxSubtitle: params.serviceName ? "Serviço contratado · pague por Pix" : `${params.companyName} · pague por Pix`,
+      boxIcon: "money",
+      rows: [
+        { label: "Valor", value: params.amountText, icon: "money" },
+        {
+          label: "Vencimento",
+          value: params.dueDateText,
+          icon: "calendar",
+          tone: tone === "green" ? undefined : tone,
+        },
+      ],
+      qr: params.qrDataUri
+        ? { dataUri: params.qrDataUri, label: "Pix: leia o QR Code ou use o código copia e cola" }
+        : undefined,
+      link: params.publicUrl,
+    },
+    caption: `${hello} ${intro}\n${params.serviceName ? "Serviço" : "Cobrança"}: *${boxTitle}*\nValor: *${params.amountText}* · vencimento *${params.dueDateText}*\n\nPara pagar, leia o QR Code ou copie o código Pix da próxima mensagem. Página da cobrança: ${params.publicUrl}`,
+  };
+}
+
+async function sendClientBillingWhatsApp(params: {
+  kind: ClientBillingWhatsAppKind;
+  dedupeKey: string;
+  clientId: number | null;
+  transactionId: number | null;
+  billingChargeId: number | null;
+  phoneRaw: string | null | undefined;
+  text: string;
+  card?: CardSpec | null;
+  caption?: string;
+  /** Mensagem extra depois do card (ex.: Pix copia e cola). */
+  followUpText?: string | null;
+  /** Documento (PDF) enviado depois do card, ex.: recibo. */
+  document?: (() => Promise<{ buffer: Buffer; fileName: string; caption?: string }>) | null;
+}) {
+  const testIds = financeAutomationTestClientIds();
+
+  if (testIds && (!params.clientId || !testIds.includes(params.clientId))) {
+    return { status: "SKIPPED", reason: "Cliente fora da lista de teste." };
+  }
+
+  const existing = await prisma.clientWhatsAppNotification.findUnique({
+    where: { dedupeKey: params.dedupeKey },
+  });
+
+  if (existing) return { status: "SKIPPED", reason: "Aviso já enviado." };
+
+  const failures = await prisma.clientWhatsAppNotification.count({
+    where: { dedupeKey: { startsWith: `${params.dedupeKey}#FAIL` } },
+  });
+
+  if (failures >= 3) return { status: "SKIPPED", reason: "Desistiu após 3 falhas." };
+
+  const phone = normalizeWhatsAppPhone(params.phoneRaw);
+
+  const base = {
+    clientId: params.clientId,
+    transactionId: params.transactionId,
+    billingChargeId: params.billingChargeId,
+    kind: params.kind,
+    phone: phone || "",
+  };
+
+  if (!phone) {
+    await prisma.clientWhatsAppNotification.create({
+      data: { ...base, dedupeKey: params.dedupeKey, status: "SKIPPED", errorText: "Cliente sem WhatsApp/telefone válido." },
+    });
+    return { status: "SKIPPED", reason: "Cliente sem WhatsApp." };
+  }
+
+  // Reserva a chave antes de enviar, para dois ciclos simultâneos
+  // não mandarem a mesma mensagem duas vezes.
+  let reservation: { id: number };
+  try {
+    reservation = await prisma.clientWhatsAppNotification.create({
+      data: { ...base, dedupeKey: params.dedupeKey, status: "SENDING" },
+    });
+  } catch (error: any) {
+    if (error?.code === "P2002") return { status: "SKIPPED", reason: "Aviso já enviado." };
+    throw error;
+  }
+
+  const png = params.card ? tryRenderCardPng(params.card) : null;
+  const result = png
+    ? await sendWhatsAppImage(phone, png, params.caption || params.text, params.text)
+    : await sendWhatsAppText(phone, params.text);
+
+  if (result.ok && params.followUpText) {
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await sendWhatsAppText(phone, params.followUpText).catch(() => null);
+  }
+
+  let documentError: string | null = null;
+
+  if (result.ok && params.document) {
+    try {
+      const doc = await params.document();
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      const sentDoc = await sendWhatsAppDocument(phone, doc.buffer, doc.fileName, doc.caption || "");
+      if (!sentDoc.ok) documentError = sentDoc.error || "Falha ao enviar o PDF.";
+    } catch (error: any) {
+      documentError = error?.message || String(error);
+    }
+
+    if (documentError) console.error("Recibo por WhatsApp não enviado:", documentError);
+  }
+
+  if (result.ok) {
+    await prisma.clientWhatsAppNotification.update({
+      where: { id: reservation.id },
+      data: {
+        status: "SENT",
+        messageId: result.messageId || null,
+        errorText: documentError ? `Card enviado; PDF falhou: ${documentError}`.slice(0, 500) : null,
+      },
+    });
+    return { status: "SENT" };
+  }
+
+  if (result.skipped) {
+    // WhatsApp desligado: libera a chave para enviar quando religar.
+    await prisma.clientWhatsAppNotification.delete({ where: { id: reservation.id } });
+    return { status: "SKIPPED", reason: result.error };
+  }
+
+  await prisma.clientWhatsAppNotification.update({
+    where: { id: reservation.id },
+    data: {
+      dedupeKey: `${params.dedupeKey}#FAIL${failures + 1}`,
+      status: "FAILED",
+      errorText: result.error || null,
+    },
+  });
+
+  return { status: "FAILED", reason: result.error };
+}
+
+/** Monta e envia o WhatsApp de uma cobrança (nova, aviso ou pagamento). */
+async function notifyClientBillingWhatsApp(
+  transactionId: number,
+  kind: ClientBillingWhatsAppKind,
+  extra: {
+    dedupeSuffix?: string;
+    daysUntilDue?: number | null;
+    confirmationSource?: "BANCO_DO_BRASIL" | "MANUAL";
+  } = {}
+) {
+  try {
+    const settings = await getFinanceAutoChargeSettings();
+
+    if (!settings.sendWhatsapp) return { status: "SKIPPED", reason: "WhatsApp desligado na automação." };
+
+    const transaction = await prisma.financialTransaction.findUnique({
+      where: { id: transactionId },
+      include: {
+        client: true,
+        billingCharge: { include: { client: true } },
+        catalogService: { select: { name: true } },
+        protocol: { select: { serviceType: { select: { name: true } } } },
+        proposal: { select: { title: true } },
+      },
+    });
+
+    const charge = transaction?.billingCharge;
+    const client = transaction?.client || charge?.client || null;
+
+    if (!transaction || !charge || !client) return { status: "SKIPPED", reason: "Sem cobrança ou cliente." };
+
+    const company = await getCompanySettings();
+    const cents = charge.paidAmountCents ?? charge.amountCents ?? transaction.amountCents ?? 0;
+    const dueDate = transaction.dueDate || charge.dueDate || null;
+
+    const fields = {
+      kind,
+      clientName: client.name,
+      description: charge.description || transaction.description,
+      amountText: formatCurrencyBRFromCents(cents),
+      dueDateText: dueDate ? formatDueDateBR(dueDate) : "-",
+      publicUrl: getChargeShortUrl(charge),
+      companyName: company.companyName || "Amazonika Engenharia",
+      daysUntilDue: extra.daysUntilDue,
+      serviceName:
+        transaction.catalogService?.name ||
+        transaction.protocol?.serviceType?.name ||
+        transaction.proposal?.title ||
+        null,
+    };
+    const text = clientBillingWhatsAppText(fields);
+
+    const pixCode = kind === "PAYMENT_CONFIRMED" ? null : charge.pixCopyPaste || null;
+    const qrDataUri = pixCode
+      ? await QRCode.toDataURL(pixCode, { margin: 1, width: 680, errorCorrectionLevel: "M" }).catch(() => null)
+      : null;
+    const { card, caption } = clientBillingWhatsAppCard({
+      ...fields,
+      paidAtText: charge.paidAt
+        ? new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Belem", dateStyle: "short", timeStyle: "short" }).format(charge.paidAt)
+        : null,
+      qrDataUri,
+    });
+
+    return await sendClientBillingWhatsApp({
+      kind,
+      dedupeKey: `${kind}:${charge.id}:${charge.txid || "sem-txid"}${extra.dedupeSuffix ? `:${extra.dedupeSuffix}` : ""}`,
+      clientId: client.id,
+      transactionId: transaction.id,
+      billingChargeId: charge.id,
+      phoneRaw: client.whatsapp || client.phone,
+      text,
+      card,
+      caption,
+      followUpText: pixCode,
+      document:
+        kind === "PAYMENT_CONFIRMED"
+          ? async () => {
+              const receipt = await generateFinanceReceiptPdfOnce(
+                transaction,
+                charge,
+                extra.confirmationSource || (charge.txid ? "BANCO_DO_BRASIL" : "MANUAL")
+              );
+              return {
+                buffer: fs.readFileSync(receipt.filePath),
+                fileName: `Recibo ${receipt.fileName}`,
+                caption: `Recibo de pagamento - ${fields.serviceName || fields.description}`,
+              };
+            }
+          : null,
+    });
+  } catch (error: any) {
+    console.error("Falha no WhatsApp de cobrança:", error?.message || error);
+    return { status: "FAILED", reason: error?.message || String(error) };
+  }
+}
+
+/**
+ * Avisos de vencimento por WhatsApp. Roda antes dos avisos por e-mail
+ * (que atualizam lastNotificationAt) para enxergar a mesma janela.
+ */
+async function processFinanceClientWhatsAppNotices() {
+  const settings = await getFinanceAutoChargeSettings();
+
+  if (!settings.enabled || !settings.sendWhatsapp) {
+    return { executed: false, reason: "WhatsApp de cobrança desligado." };
+  }
+
+  const today = new Date();
+  const transactions = await prisma.financialTransaction.findMany({
+    where: {
+      type: { in: ["ENTRADA", "PARCELA"] },
+      status: "PENDENTE",
+      autoChargeEnabled: true,
+      ...financeAutomationClientFilter(),
+      dueDate: { not: null },
+      billingCharge: { is: { status: { in: ["EMITIDA", "ENVIADA", "VENCIDA"] }, txid: { not: null } } },
+    },
+    select: {
+      id: true,
+      dueDate: true,
+      lastNotificationAt: true,
+      notificationCount: true,
+      overdueNotificationCount: true,
+      emailNotificationEnabled: true,
+      client: { select: { email: true } },
+      billingCharge: { select: { createdAt: true, initialEmailSentAt: true, client: { select: { email: true } } } },
+    },
+  });
+
+  let sent = 0;
+  let failed = 0;
+
+  for (const transaction of transactions) {
+    const noticeType = resolveFinanceNoticeType({
+      today,
+      dueDate: transaction.dueDate!,
+      lastNotificationAt: transaction.lastNotificationAt,
+      notificationCount: transaction.overdueNotificationCount || 0,
+      settings,
+    });
+
+    if (!noticeType) continue;
+
+    // A cobrança nova saiu hoje: não repete como lembrete no mesmo dia.
+    if (financeChargeFirstSentToday(transaction.billingCharge, today)) continue;
+
+    // Mesmo caso pelo registro do WhatsApp: "Cobrança emitida" já saiu hoje.
+    const newChargeToday = await prisma.clientWhatsAppNotification.count({
+      where: {
+        transactionId: transaction.id,
+        kind: "NEW_CHARGE",
+        status: { in: ["SENT", "SENDING"] },
+        createdAt: { gte: startOfLocalDay(today) },
+      },
+    });
+    if (newChargeToday > 0) continue;
+
+    const result = await notifyClientBillingWhatsApp(transaction.id, `NOTICE_${noticeType}`, {
+      dedupeSuffix: formatDateOnly(today),
+      daysUntilDue: dateDiffInDays(today, transaction.dueDate!),
+    });
+
+    if (result.status === "SENT") {
+      sent += 1;
+
+      /*
+       * Quando o e-mail não vai sair (sem e-mail, e-mail desligado),
+       * o WhatsApp é quem registra o aviso. Sem isso o contador de
+       * atraso nunca anda e o aviso de atraso repete todo dia.
+       */
+      const hasEmail = Boolean(transaction.client?.email || transaction.billingCharge?.client?.email);
+      const emailWillSend = settings.sendEmail && transaction.emailNotificationEnabled !== false && hasEmail;
+
+      if (!emailWillSend) {
+        await prisma.financialTransaction.update({
+          where: { id: transaction.id },
+          data: {
+            lastNotificationAt: today,
+            notificationCount: { increment: 1 },
+            ...(noticeType === "AVISO_APOS_VENCIMENTO" || noticeType === "REPETICAO_AVISO_ATRASO"
+              ? { overdueNotificationCount: { increment: 1 } }
+              : {}),
+          },
+        }).catch(() => undefined);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    if (result.status === "FAILED") failed += 1;
+  }
+
+  return { executed: true, checked: transactions.length, sent, failed };
+}
+
+const FINANCE_INITIAL_EMAIL_LEASE_MS = 5 * 60 * 1000;
+
 async function sendFinanceInitialChargeEmail(
   transactionId: number
 ): Promise<FinanceInitialChargeEmailResult> {
@@ -11215,6 +11933,9 @@ async function sendFinanceInitialChargeEmail(
         "Cobrança bancária ainda não vinculada ao lançamento.",
     };
   }
+
+  // WhatsApp da nova cobrança (independe do e-mail; tem chave própria).
+  void notifyClientBillingWhatsApp(transaction.id, "NEW_CHARGE");
 
   /*
    * Idempotência:
@@ -11377,6 +12098,43 @@ async function sendFinanceInitialChargeEmail(
     };
   }
 
+  /*
+   * Reserva o envio inicial: só quem conseguir marcar a tentativa
+   * envia. Evita dois e-mails de "Nova cobrança" quando a emissão
+   * roda duas vezes ao mesmo tempo (cron + emissão manual).
+   */
+  const claim =
+    await prisma.billingCharge.updateMany({
+      where: {
+        id:
+          charge.id,
+        initialEmailSentAt:
+          null,
+        OR: [
+          { initialEmailLastAttemptAt: null },
+          {
+            initialEmailLastAttemptAt: {
+              lt: new Date(attemptedAt.getTime() - FINANCE_INITIAL_EMAIL_LEASE_MS),
+            },
+          },
+        ],
+      },
+      data: {
+        initialEmailLastAttemptAt:
+          attemptedAt,
+      },
+    });
+
+  if (claim.count === 0) {
+    return {
+      status:
+        "SKIPPED",
+
+      reason:
+        "Envio inicial já em andamento ou tentado há poucos minutos.",
+    };
+  }
+
   try {
     const transporter =
       await createTransporterFromSettings();
@@ -11418,13 +12176,7 @@ async function sendFinanceInitialChargeEmail(
       );
 
     const dueDate =
-      new Intl.DateTimeFormat(
-        "pt-BR",
-        {
-          timeZone:
-            "America/Belem",
-        }
-      ).format(
+      formatDueDateBR(
         charge.dueDate
       );
 
@@ -11507,6 +12259,9 @@ async function sendFinanceInitialChargeEmail(
         subject,
 
         html,
+
+      attachments:
+        getEmailImageAttachments(),
       });
 
     const accepted =
@@ -11692,7 +12447,990 @@ async function sendFinanceInitialChargeEmail(
 }
 
 
-async function processFinanceAutoCharges(
+
+
+/*
+ * ======================================================
+ * RECIBO DE PAGAMENTO (Financeiro V2)
+ * ======================================================
+ *
+ * Recibo completo e rastreável: logomarca, pagador, recebedor,
+ * referência (serviço, proposta, protocolo, parcela), dados do Pix
+ * (TXID e identificador E2E do Banco Central), valor por extenso,
+ * QR Code para conferência pública e assinatura digital ICP-Brasil
+ * com o e-CNPJ da empresa (quando configurado no servidor).
+ */
+
+function brlAmountInWords(cents: number): string {
+  const units = ["", "um", "dois", "três", "quatro", "cinco", "seis", "sete", "oito", "nove"];
+  const teens = ["dez", "onze", "doze", "treze", "quatorze", "quinze", "dezesseis", "dezessete", "dezoito", "dezenove"];
+  const tens = ["", "", "vinte", "trinta", "quarenta", "cinquenta", "sessenta", "setenta", "oitenta", "noventa"];
+  const hundreds = ["", "cento", "duzentos", "trezentos", "quatrocentos", "quinhentos", "seiscentos", "setecentos", "oitocentos", "novecentos"];
+
+  const upTo999 = (n: number): string => {
+    if (n === 0) return "";
+    if (n === 100) return "cem";
+    const parts: string[] = [];
+    const h = Math.floor(n / 100);
+    const rest = n % 100;
+    if (h) parts.push(hundreds[h]);
+    if (rest >= 10 && rest < 20) parts.push(teens[rest - 10]);
+    else {
+      const t = Math.floor(rest / 10);
+      const u = rest % 10;
+      if (t) parts.push(tens[t]);
+      if (u) parts.push(units[u]);
+    }
+    return parts.join(" e ");
+  };
+
+  const integerWords = (n: number): string => {
+    if (n === 0) return "zero";
+    const groups: { value: number; singular: string; plural: string }[] = [
+      { value: Math.floor(n / 1_000_000_000) % 1000, singular: "bilhão", plural: "bilhões" },
+      { value: Math.floor(n / 1_000_000) % 1000, singular: "milhão", plural: "milhões" },
+      { value: Math.floor(n / 1000) % 1000, singular: "mil", plural: "mil" },
+      { value: n % 1000, singular: "", plural: "" },
+    ];
+    const pieces: string[] = [];
+    groups.forEach((group) => {
+      if (!group.value) return;
+      if (group.singular === "mil") {
+        pieces.push(group.value === 1 ? "mil" : `${upTo999(group.value)} mil`);
+      } else if (group.singular) {
+        pieces.push(`${upTo999(group.value)} ${group.value === 1 ? group.singular : group.plural}`);
+      } else {
+        pieces.push(upTo999(group.value));
+      }
+    });
+    const last = n % 1000;
+    if (pieces.length > 1 && last > 0 && (last < 100 || last % 100 === 0)) {
+      const tail = pieces.pop();
+      return `${pieces.join(" ")} e ${tail}`;
+    }
+    return pieces.join(" ");
+  };
+
+  const reais = Math.floor(cents / 100);
+  const centavos = cents % 100;
+  const parts: string[] = [];
+
+  if (reais > 0) {
+    const big = reais % 1_000_000 === 0 && reais >= 1_000_000;
+    parts.push(`${integerWords(reais)}${big ? " de" : ""} ${reais === 1 ? "real" : "reais"}`);
+  }
+  if (centavos > 0) {
+    parts.push(`${integerWords(centavos)} ${centavos === 1 ? "centavo" : "centavos"}`);
+  }
+  if (!parts.length) return "zero real";
+  return parts.join(" e ");
+}
+
+function maskCpfCnpj(value?: string | null) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (digits.length === 11) return `***.${digits.slice(3, 6)}.${digits.slice(6, 9)}-**`;
+  if (digits.length === 14) {
+    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
+  }
+  return value ? String(value) : "-";
+}
+
+function formatCpfCnpj(value?: string | null) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (digits.length === 11) {
+    return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+  }
+  if (digits.length === 14) {
+    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
+  }
+  return value ? String(value) : "-";
+}
+
+function bbEndToEndIdFromRaw(raw?: string | null) {
+  if (!raw) return null;
+  try {
+    const data = JSON.parse(raw);
+    const pix = Array.isArray(data?.pix) ? data.pix[0] : null;
+    return pix?.endToEndId ? String(pix.endToEndId) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Código público de conferência do recibo (hash da cobrança). */
+async function ensureBillingChargeVerificationHash(charge: any): Promise<string | null> {
+  if (charge?.verificationHash) return String(charge.verificationHash);
+  if (!charge?.id) return null;
+
+  const fields = charge.publicToken
+    ? {
+        publicToken: charge.publicToken,
+        verificationHash: generateBillingChargeVerificationHash(charge.publicToken),
+      }
+    : createBillingChargePublicFields();
+
+  await prisma.billingCharge.update({
+    where: { id: charge.id },
+    data: fields,
+  });
+
+  charge.publicToken = fields.publicToken;
+  charge.verificationHash = fields.verificationHash;
+  return fields.verificationHash;
+}
+
+function receiptVerificationUrl(hash: string) {
+  return `${getBillingPublicBaseUrl().replace(/\/$/, "")}/recibo/${hash}`;
+}
+
+function shortVerificationCode(hash: string) {
+  return hash.slice(0, 16).toUpperCase().replace(/(.{4})(?!$)/g, "$1-");
+}
+
+/*
+ * O recibo é o mesmo arquivo (REC-FIN-<id>.pdf) para o e-mail e para o
+ * WhatsApp. Chamadas simultâneas do mesmo lançamento compartilham a
+ * mesma geração, para um não ler o arquivo enquanto o outro escreve.
+ */
+const financeReceiptPdfInFlight = new Map<number, ReturnType<typeof generateFinanceReceiptPdf>>();
+
+function generateFinanceReceiptPdfOnce(
+  transactionInput: any,
+  chargeInput: any,
+  confirmationSource: "BANCO_DO_BRASIL" | "MANUAL"
+) {
+  const key = Number(transactionInput.id);
+  const running = financeReceiptPdfInFlight.get(key);
+  if (running) return running;
+
+  const job = generateFinanceReceiptPdf(transactionInput, chargeInput, confirmationSource).finally(() => {
+    financeReceiptPdfInFlight.delete(key);
+  });
+  financeReceiptPdfInFlight.set(key, job);
+  return job;
+}
+
+async function generateFinanceReceiptPdf(
+  transactionInput: any,
+  chargeInput: any,
+  confirmationSource: "BANCO_DO_BRASIL" | "MANUAL"
+): Promise<{
+  fileName: string;
+  filePath: string;
+  publicPath: string;
+  signed?: boolean;
+}> {
+  const company = await getCompanySettings();
+
+  // Releitura com todas as referências do lançamento.
+  const transaction: any =
+    (await prisma.financialTransaction.findUnique({
+      where: { id: transactionInput.id },
+      include: {
+        client: true,
+        protocol: true,
+        catalogService: true,
+        proposal: { select: { id: true, proposalNumber: true } },
+        billingCharge: { include: { client: true } },
+      },
+    })) || transactionInput;
+
+  const charge: any = transaction.billingCharge || chargeInput;
+  const client = transaction.client || charge?.client || null;
+
+  const amountCents = requireCanonicalCents(
+    charge?.paidAmountCents ?? transaction.amountCents ?? charge?.amountCents,
+    "Valor do recibo financeiro"
+  );
+
+  const paidAt = new Date(charge?.paidAt || transaction.paidAt || new Date());
+  const issuedAt = new Date();
+  const verificationHash = await ensureBillingChargeVerificationHash(charge);
+  const verificationUrl = verificationHash ? receiptVerificationUrl(verificationHash) : null;
+  const endToEndId = bbEndToEndIdFromRaw(charge?.rawResponse);
+  const signer = pdfSignerInfo();
+
+  const receiptNumber = `REC-FIN-${String(transaction.id).padStart(6, "0")}`;
+  const outputDir = path.join(process.cwd(), "uploads", "documents");
+  fs.mkdirSync(outputDir, { recursive: true });
+  const fileName = `${receiptNumber}.pdf`;
+  const filePath = path.join(outputDir, fileName);
+  const publicPath = `/uploads/documents/${fileName}`;
+
+  const tz = "America/Belem";
+  const dateTime = (value: Date) =>
+    new Intl.DateTimeFormat("pt-BR", {
+      timeZone: tz,
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).format(value);
+  const dateOnly = (value: Date) =>
+    new Intl.DateTimeFormat("pt-BR", {
+      timeZone: tz,
+      day: "2-digit",
+      month: "long",
+      year: "numeric",
+    }).format(value);
+
+  const companyName =
+    company.companyLegalName || company.companyName || "AMAZONIKA Engenharia & Meio Ambiente";
+  const companyAddress = [
+    company.companyAddress,
+    company.companyCity && company.companyState
+      ? `${company.companyCity}/${company.companyState}`
+      : company.companyCity || company.companyState,
+    company.companyZipCode ? `CEP ${company.companyZipCode}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const companyContact = [company.companyPhone || company.companyWhatsapp, company.companyEmail, company.companyWebsite]
+    .filter(Boolean)
+    .join(" · ");
+
+  const green = "#123c32";
+  const accent = "#2f8f5b";
+  const muted = "#5b6b63";
+  const line = "#dfe7e2";
+
+  const doc = new PDFDocument({
+    size: "A4",
+    margins: { top: 40, bottom: 40, left: 48, right: 48 },
+    info: {
+      Title: `Recibo ${receiptNumber}`,
+      Author: companyName,
+      Subject: "Recibo de pagamento",
+      Creator: "SIS Amazonika",
+    },
+  });
+
+  const chunks: Buffer[] = [];
+  doc.on("data", (chunk: Buffer) => chunks.push(chunk));
+  const finished = new Promise<Buffer>((resolve, reject) => {
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+  });
+
+  const pageWidth = doc.page.width;
+  const left = doc.page.margins.left;
+  const right = pageWidth - doc.page.margins.right;
+  const contentWidth = right - left;
+
+  /* ---------- Cabeçalho ---------- */
+  doc.rect(0, 0, pageWidth, 8).fill(green);
+
+  const logoPath = [
+    path.join(process.cwd(), "assets", "logo_header.png"),
+    path.resolve(process.cwd(), "..", "backend", "assets", "logo_header.png"),
+  ].find((candidate) => fs.existsSync(candidate));
+
+  let brandX = left;
+  if (logoPath) {
+    try {
+      doc.image(logoPath, left, 28, { fit: [58, 58] });
+      brandX = left + 66;
+    } catch {
+      brandX = left;
+    }
+  }
+
+  doc.font("Helvetica-Bold").fontSize(20).fillColor(green).text("AMAZONIKA", brandX, 36, {
+    width: 220,
+    characterSpacing: 0.5,
+  });
+  doc
+    .font("Helvetica")
+    .fontSize(8.5)
+    .fillColor(accent)
+    .text("ENGENHARIA & MEIO AMBIENTE", brandX, doc.y + 1, { width: 220, characterSpacing: 0.8 });
+
+  const headerTextX = left + 290;
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(10)
+    .fillColor(green)
+    .text(companyName, headerTextX, 32, { width: right - headerTextX, align: "right" });
+  doc
+    .font("Helvetica")
+    .fontSize(8.5)
+    .fillColor(muted)
+    .text(`CNPJ ${formatCpfCnpj(company.companyCnpj)}`, headerTextX, doc.y + 2, {
+      width: right - headerTextX,
+      align: "right",
+    });
+  if (companyAddress) {
+    doc.text(companyAddress, headerTextX, doc.y + 1, { width: right - headerTextX, align: "right" });
+  }
+  if (companyContact) {
+    doc.text(companyContact, headerTextX, doc.y + 1, { width: right - headerTextX, align: "right" });
+  }
+
+  let y = Math.max(doc.y, 92) + 14;
+  doc.moveTo(left, y).lineTo(right, y).lineWidth(0.8).strokeColor(line).stroke();
+
+  /* ---------- Título ---------- */
+  y += 16;
+  doc.font("Helvetica-Bold").fontSize(20).fillColor(green).text("RECIBO DE PAGAMENTO", left, y, {
+    width: contentWidth * 0.6,
+  });
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(10)
+    .fillColor(green)
+    .text(`Nº ${receiptNumber}`, left + contentWidth * 0.6, y + 2, {
+      width: contentWidth * 0.4,
+      align: "right",
+    });
+  doc
+    .font("Helvetica")
+    .fontSize(8.5)
+    .fillColor(muted)
+    .text(`Emitido em ${dateTime(issuedAt)}`, left + contentWidth * 0.6, doc.y + 2, {
+      width: contentWidth * 0.4,
+      align: "right",
+    });
+
+  /* ---------- Valor em destaque ---------- */
+  y += 40;
+  doc.roundedRect(left, y, contentWidth, 58, 10).fillAndStroke("#f1f8f4", "#cfe6d8");
+  doc
+    .font("Helvetica")
+    .fontSize(9)
+    .fillColor(muted)
+    .text("VALOR RECEBIDO", left + 16, y + 10);
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(20)
+    .fillColor(green)
+    .text(formatCurrencyBRFromCents(amountCents, "Valor do recibo"), left + 16, y + 22);
+  doc
+    .font("Helvetica-Oblique")
+    .fontSize(9)
+    .fillColor(muted)
+    .text(`(${brlAmountInWords(amountCents)})`, left + 200, y + 28, {
+      width: contentWidth - 216,
+      align: "right",
+    });
+
+  /* ---------- Declaração ---------- */
+  y += 74;
+  const description =
+    transaction.description || charge?.description || `lançamento financeiro nº ${transaction.id}`;
+  doc
+    .font("Helvetica")
+    .fontSize(10.5)
+    .fillColor("#111827")
+    .text(
+      `Recebemos de ${client?.name || "-"}, inscrito(a) no CPF/CNPJ ${formatCpfCnpj(
+        client?.cpfCnpj
+      )}, a importância de ${formatCurrencyBRFromCents(amountCents, "Valor do recibo")} (${brlAmountInWords(
+        amountCents
+      )}), referente a ${description}, dando plena e geral quitação do valor recebido.`,
+      left,
+      y,
+      { width: contentWidth, align: "justify", lineGap: 3 }
+    );
+
+  /* ---------- Quadros de dados ---------- */
+  const section = (title: string, rows: [string, string | null | undefined][]) => {
+    const visible = rows.filter(([, value]) => value != null && String(value).trim() !== "");
+    let top = doc.y + 14;
+    doc.font("Helvetica-Bold").fontSize(9).fillColor(accent).text(title.toUpperCase(), left, top, {
+      characterSpacing: 0.6,
+    });
+    top = doc.y + 4;
+    doc.moveTo(left, top).lineTo(right, top).lineWidth(0.6).strokeColor(line).stroke();
+    top += 6;
+    visible.forEach(([label, value]) => {
+      doc.font("Helvetica").fontSize(9).fillColor(muted).text(label, left, top, { width: 150 });
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(9.5)
+        .fillColor("#111827")
+        .text(String(value), left + 155, top, { width: contentWidth - 155 });
+      top = Math.max(doc.y, top + 12) + 4;
+    });
+    doc.y = top;
+  };
+
+  doc.y = doc.y + 2;
+
+  section("Pagador", [
+    ["Nome / Razão social", client?.name],
+    ["CPF / CNPJ", formatCpfCnpj(client?.cpfCnpj)],
+    ["E-mail", client?.email],
+  ]);
+
+  const installmentLabel =
+    charge?.installmentNumber || transaction.installmentNumber
+      ? `${charge?.installmentNumber || transaction.installmentNumber}${
+          charge?.totalInstallments || transaction.totalInstallments
+            ? ` de ${charge?.totalInstallments || transaction.totalInstallments}`
+            : ""
+        }`
+      : transaction.type === "ENTRADA"
+      ? "Entrada / pagamento único"
+      : null;
+
+  section("Referente a", [
+    ["Descrição", description],
+    ["Serviço", transaction.catalogService?.name],
+    ["Proposta", transaction.proposal?.proposalNumber],
+    ["Protocolo", transaction.protocol?.protocolNumber],
+    ["Parcela", installmentLabel],
+    ["Vencimento", transaction.dueDate ? formatDueDateBR(transaction.dueDate) : null],
+    ["Lançamento", `#${transaction.id}`],
+  ]);
+
+  section("Pagamento", [
+    [
+      "Forma",
+      confirmationSource === "BANCO_DO_BRASIL"
+        ? "Pix — Banco do Brasil (confirmação automática)"
+        : "Confirmação administrativa",
+    ],
+    ["Data e hora", `${dateTime(paidAt)} (horário de Brasília/Belém)`],
+    ["TXID", charge?.txid],
+    ["Identificador E2E (Bacen)", endToEndId],
+    ["Recebedor", `${companyName} — CNPJ ${formatCpfCnpj(company.companyCnpj)}`],
+  ]);
+
+  /* ---------- Autenticação: QR Code + assinatura ---------- */
+  let blockTop = doc.y + 18;
+  const blockHeight = 118;
+  if (blockTop + blockHeight + 40 > doc.page.height - doc.page.margins.bottom) {
+    doc.addPage();
+    blockTop = doc.page.margins.top;
+  }
+
+  doc.roundedRect(left, blockTop, contentWidth, blockHeight, 10).lineWidth(0.8).strokeColor(line).stroke();
+
+  if (verificationUrl) {
+    const qrBuffer = await QRCode.toBuffer(verificationUrl, {
+      errorCorrectionLevel: "M",
+      margin: 1,
+      width: 300,
+      color: { dark: green, light: "#ffffff" },
+    });
+    doc.image(qrBuffer, left + 12, blockTop + 10, { width: 98, height: 98 });
+  }
+
+  const textX = left + 124;
+  const textWidth = contentWidth - 136;
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(10)
+    .fillColor(green)
+    .text("Autenticidade do documento", textX, blockTop + 12, { width: textWidth });
+  doc
+    .font("Helvetica")
+    .fontSize(8.5)
+    .fillColor("#374151")
+    .text(
+      verificationUrl
+        ? "Leia o QR Code ou acesse o endereço abaixo para conferir este recibo na base do SIS Amazonika."
+        : "Recibo emitido eletronicamente pelo SIS Amazonika.",
+      textX,
+      doc.y + 3,
+      { width: textWidth }
+    );
+  if (verificationUrl && verificationHash) {
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(9)
+      .fillColor("#111827")
+      .text(`Código de verificação: ${shortVerificationCode(verificationHash)}`, textX, doc.y + 4, {
+        width: textWidth,
+      });
+    doc
+      .font("Helvetica")
+      .fontSize(7)
+      .fillColor(muted)
+      .text(verificationUrl, textX, doc.y + 2, { width: textWidth, link: verificationUrl });
+  }
+  doc
+    .font("Helvetica")
+    .fontSize(8)
+    .fillColor(signer ? accent : muted)
+    .text(
+      signer
+        ? `Assinado digitalmente por ${signer.subjectName} com certificado ICP-Brasil (e-CNPJ). Valide em validar.iti.gov.br.`
+        : "Documento sem assinatura digital.",
+      textX,
+      doc.y + 5,
+      { width: textWidth }
+    );
+
+  /* ---------- Local, data e rodapé ---------- */
+  doc
+    .font("Helvetica")
+    .fontSize(10)
+    .fillColor("#111827")
+    .text(
+      `${company.companyCity || "Macapá"}/${company.companyState || "AP"}, ${dateOnly(issuedAt)}.`,
+      left,
+      blockTop + blockHeight + 16,
+      { width: contentWidth, align: "right" }
+    );
+
+  const footerY = doc.page.height - doc.page.margins.bottom - 14;
+  doc
+    .font("Helvetica")
+    .fontSize(7.5)
+    .fillColor(muted)
+    .text(
+      company.companyFooterText ||
+        "Recibo gerado eletronicamente pelo SIS Amazonika após a confirmação do pagamento.",
+      left,
+      footerY,
+      { width: contentWidth, align: "center", lineBreak: false }
+    );
+  doc.rect(0, doc.page.height - 6, pageWidth, 6).fill(green);
+
+  doc.end();
+  const pdfBuffer = await finished;
+
+  const signedResult = await signPdfBuffer(pdfBuffer, {
+    reason: `Recibo de pagamento ${receiptNumber}`,
+    location: `${company.companyCity || "Macapá"}/${company.companyState || "AP"}`,
+    contactInfo: company.companyEmail || "",
+  });
+
+  fs.writeFileSync(filePath, signedResult.buffer);
+
+  return {
+    fileName,
+    filePath,
+    publicPath,
+    signed: signedResult.signed,
+  };
+}
+
+async function sendFinancePaymentConfirmationEmail(
+  transactionId: number,
+  confirmationSource: "BANCO_DO_BRASIL" | "MANUAL",
+  options: { resend?: boolean; requestedBy?: AuthRequest["user"] } = {}
+) {
+  const transaction =
+    await prisma.financialTransaction.findUnique({
+      where: {
+        id: transactionId,
+      },
+      include: {
+        client: true,
+        billingCharge: {
+          include: {
+            client: true,
+          },
+        },
+      },
+    });
+
+  if (!transaction) {
+    return {
+      status: "SKIPPED",
+      reason: "Lançamento financeiro não encontrado.",
+    };
+  }
+
+  const charge =
+    transaction.billingCharge;
+
+  if (!charge) {
+    return {
+      status: "SKIPPED",
+      reason: "Cobrança não vinculada ao lançamento financeiro.",
+    };
+  }
+
+  // WhatsApp com o recibo em PDF. No "Reenviar recibo" sai de novo (chave própria).
+  void notifyClientBillingWhatsApp(transaction.id, "PAYMENT_CONFIRMED", {
+    confirmationSource,
+    dedupeSuffix: options.resend ? `REENVIO-${Date.now()}` : undefined,
+  });
+
+  const settings =
+    await getFinanceAutoChargeSettings();
+
+  if (!settings.sendEmail && !options.resend) {
+    return {
+      status: "SKIPPED",
+      reason: "Envio automático de e-mail está desativado.",
+    };
+  }
+
+  if (
+    transaction.emailNotificationEnabled === false &&
+    !options.resend
+  ) {
+    return {
+      status: "SKIPPED",
+      reason: "E-mail está desativado para este lançamento.",
+    };
+  }
+
+  const client =
+    transaction.client ||
+    charge.client ||
+    null;
+
+  if (!client?.email) {
+    return {
+      status: "SKIPPED",
+      reason: "Cliente sem e-mail cadastrado.",
+    };
+  }
+
+  const previousSuccess =
+    await prisma.auditLog.findFirst({
+      where: {
+        action:
+          "FINANCE_PAYMENT_CONFIRMATION_EMAIL_SENT",
+        entity:
+          "FinancialTransaction",
+        entityId:
+          String(transaction.id),
+      },
+      orderBy: {
+        id: "desc",
+      },
+    });
+
+  if (previousSuccess && !options.resend) {
+    return {
+      status: "SKIPPED",
+      reason:
+        "Aviso de pagamento já enviado anteriormente.",
+    };
+  }
+
+  try {
+    const transporter =
+      await createTransporterFromSettings();
+
+    if (!transporter) {
+      throw new Error(
+        "SMTP não configurado para envio do aviso de pagamento."
+      );
+    }
+
+    const company =
+      await getCompanySettings();
+
+    const smtp =
+      await getSmtpSettings();
+
+    const publicUrl =
+      getChargePublicUrl(charge);
+
+    const amountCents =
+      requireCanonicalCents(
+        transaction.amountCents ??
+          charge.amountCents,
+        "Valor do pagamento confirmado"
+      );
+
+    const amount =
+      formatCurrencyBRFromCents(
+        amountCents
+      );
+
+    const paidAt =
+      transaction.paidAt ||
+      charge.paidAt ||
+      new Date();
+
+    const paidDate =
+      new Intl.DateTimeFormat(
+        "pt-BR",
+        {
+          timeZone:
+            "America/Belem",
+          dateStyle:
+            "short",
+          timeStyle:
+            "short",
+        }
+      ).format(
+        new Date(paidAt)
+      );
+
+    const sourceLabel =
+      confirmationSource ===
+      "BANCO_DO_BRASIL"
+        ? "Banco do Brasil"
+        : "Confirmação administrativa";
+
+    const receiptPdf =
+      await generateFinanceReceiptPdfOnce(
+        transaction,
+        charge,
+        confirmationSource
+      );
+
+    const html =
+      buildEmailLayout(
+        `
+          <p>
+            Prezado(a)
+            <strong>${escapeHtml(client.name)}</strong>,
+          </p>
+
+          <p>
+            Confirmamos o recebimento do seu pagamento.
+          </p>
+
+          <div style="
+            background:#f8fbf9;
+            border:1px solid #dfe7e2;
+            border-radius:16px;
+            padding:18px;
+            margin:18px 0;
+          ">
+            <p>
+              <strong>Cobrança:</strong>
+              ${escapeHtml(
+                transaction.description ||
+                charge.description ||
+                `Cobrança #${charge.id}`
+              )}
+            </p>
+
+            <p>
+              <strong>Valor:</strong>
+              ${escapeHtml(amount)}
+            </p>
+
+            <p>
+              <strong>Data do pagamento:</strong>
+              ${escapeHtml(paidDate)}
+            </p>
+
+            <p>
+              <strong>Confirmação:</strong>
+              ${escapeHtml(sourceLabel)}
+            </p>
+
+            ${
+              charge.txid
+                ? `
+                  <p>
+                    <strong>TXID:</strong>
+                    ${escapeHtml(charge.txid)}
+                  </p>
+                `
+                : ""
+            }
+          </div>
+
+          <p>
+            A situação financeira desta cobrança foi
+            atualizada para <strong>PAGO</strong>.
+          </p>
+
+          <p style="text-align:center;margin:28px 0;">
+            <a
+              href="${escapeHtml(publicUrl)}"
+              style="
+                display:inline-block;
+                background:#0f4f3a;
+                color:#ffffff;
+                text-decoration:none;
+                padding:14px 24px;
+                border-radius:999px;
+                font-weight:bold;
+              "
+            >
+              Ver cobrança
+            </a>
+          </p>
+        `,
+        {
+          eyebrow:
+            "Financeiro",
+          title:
+            "Pagamento confirmado",
+          subtitle:
+            company.companyName ||
+            "Amazonika Engenharia",
+        }
+      );
+
+    const info =
+      await transporter.sendMail({
+        from:
+          smtp.smtpFrom,
+
+        to:
+          client.email,
+
+        subject:
+          `Pagamento confirmado - ${
+            company.companyName ||
+            "Amazonika Engenharia"
+          }`,
+
+        html,
+
+        attachments: [
+          ...getEmailImageAttachments(),
+          {
+            filename:
+              receiptPdf.fileName,
+            path:
+              receiptPdf.filePath,
+          },
+        ],
+      });
+
+    const accepted =
+      Array.isArray(info.accepted)
+        ? info.accepted
+        : [];
+
+    const rejected =
+      Array.isArray(info.rejected)
+        ? info.rejected
+        : [];
+
+    if (accepted.length === 0) {
+      throw new Error(
+        "Servidor SMTP não aceitou o destinatário."
+      );
+    }
+
+    const requester =
+      options.requestedBy;
+
+    await prisma.auditLog.create({
+      data: {
+        userId: requester?.id ?? null,
+        userName:
+          requester?.name || "SIS Amazonika",
+        userEmail: requester?.email ?? null,
+        userRole:
+          requester?.role || "SYSTEM",
+        action:
+          options.resend
+            ? "FINANCE_PAYMENT_RECEIPT_RESENT"
+            : "FINANCE_PAYMENT_CONFIRMATION_EMAIL_SENT",
+        entity:
+          "FinancialTransaction",
+        entityId:
+          String(transaction.id),
+        description:
+          options.resend
+            ? `Recibo de pagamento reenviado para ${client.email}.`
+            : `Aviso de pagamento confirmado enviado para ${client.email}.`,
+        metadata:
+          JSON.stringify({
+            transactionId:
+              transaction.id,
+            billingChargeId:
+              charge.id,
+            confirmationSource,
+            messageId:
+              info.messageId,
+            receiptFileName:
+              receiptPdf.fileName,
+            receiptPath:
+              receiptPdf.publicPath,
+            accepted,
+            rejected,
+          }),
+      },
+    });
+
+    return {
+      status: "SENT",
+      messageId:
+        info.messageId,
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : String(error);
+
+    console.error(
+      "Pagamento confirmado, mas erro ao enviar aviso Financeiro V2:",
+      {
+        transactionId,
+        confirmationSource,
+        message,
+      }
+    );
+
+    await prisma.auditLog.create({
+      data: {
+        userId: null,
+        userName:
+          "SIS Amazonika",
+        userEmail: null,
+        userRole:
+          "SYSTEM",
+        action:
+          "FINANCE_PAYMENT_CONFIRMATION_EMAIL_ERROR",
+        entity:
+          "FinancialTransaction",
+        entityId:
+          String(transaction.id),
+        description:
+          "Pagamento confirmado, mas ocorreu erro no envio do aviso ao cliente.",
+        metadata:
+          JSON.stringify({
+            transactionId:
+              transaction.id,
+            billingChargeId:
+              charge.id,
+            confirmationSource,
+            error:
+              message,
+          }),
+      },
+    }).catch(
+      () => undefined
+    );
+
+    return {
+      status: "ERROR",
+      reason:
+        message,
+    };
+  }
+}
+
+/*
+ * Modo de ensaio da automação financeira.
+ * Com FINANCE_AUTOMATION_TEST_CLIENT_IDS=12,34 no .env, a emissão
+ * automática de Pix e os avisos por e-mail só atendem esses clientes,
+ * mesmo que outros lançamentos estejam marcados para cobrança automática.
+ * Vazio ou ausente = todos os lançamentos marcados.
+ */
+function financeAutomationTestClientIds(): number[] | null {
+  const raw = String(process.env.FINANCE_AUTOMATION_TEST_CLIENT_IDS || "").trim();
+  if (!raw) return null;
+  return raw
+    .split(/[,;\s]+/)
+    .map((v) => Number(v))
+    .filter((v) => Number.isInteger(v) && v > 0);
+}
+
+function financeAutomationClientFilter() {
+  const ids = financeAutomationTestClientIds();
+  return ids ? { clientId: { in: ids } } : {};
+}
+
+function processFinanceAutoCharges(
+  options?: Parameters<typeof processFinanceAutoChargesUnlocked>[0]
+) {
+  return runFinanceJobSerialized(() => processFinanceAutoChargesUnlocked(options));
+}
+
+async function processFinanceAutoChargesUnlocked(
   options?: {
     daysAhead?: number;
     transactionId?: number;
@@ -11808,6 +13546,7 @@ async function processFinanceAutoCharges(
             ? {
                 autoChargeEnabled:
                   true,
+                ...financeAutomationClientFilter(),
               }
             : {}),
 
@@ -12070,8 +13809,9 @@ async function processFinanceAutoCharges(
 
       const txid =
         generateFinanceBbPixTxid(
-          transaction.id
-        );
+            transaction.id,
+            transaction.billingCharge?.pixRevision ?? 0
+          );
 
       /*
        * Financeiro V2:
@@ -12324,15 +14064,26 @@ async function processFinanceAutoCharges(
       }
 
       /*
-       * Mesmo TXID em toda nova tentativa.
-       * Nunca geramos TXID aleatório para o mesmo lançamento.
-       */
-      const effectiveTxid =
-        billingCharge.txid ||
-        txid;
+         * Idempotência por ciclo de cobrança:
+         *
+         * - cobrança normal existente:
+         *   reutiliza o TXID já persistido;
+         *
+         * - cobrança CANCELADA:
+         *   inicia uma nova revisão e utiliza o TXID calculado
+         *   a partir de transaction.id + pixRevision.
+         */
+        const isCancelledChargeReissue =
+          billingChargeAlreadyExisted &&
+          billingCharge.status === "CANCELADA";
 
-      let bbResult: any = null;
-      let recoveredFromBb = false;
+        const effectiveTxid =
+          isCancelledChargeReissue
+            ? txid
+            : billingCharge.txid || txid;
+
+        let bbResult: any = null;
+        let recoveredFromBb = false;
 
       /*
        * ------------------------------------------------
@@ -12477,6 +14228,45 @@ async function processFinanceAutoCharges(
 
             errorMessage:
               null,
+
+            /*
+             * Reemissão Pix:
+             * inicia novo ciclo de comunicação somente quando
+             * a cobrança anterior estava CANCELADA.
+             *
+             * A evidência histórica do ciclo anterior permanece
+             * preservada no AuditLog.
+             */
+            ...(isCancelledChargeReissue
+              ? {
+                  initialEmailSentAt:
+                    null,
+
+                  initialEmailLastAttemptAt:
+                    null,
+
+                  initialEmailAttemptCount:
+                    0,
+
+                  initialEmailMessageId:
+                    null,
+
+                  initialEmailAcceptedJson:
+                    null,
+
+                  initialEmailRejectedJson:
+                    null,
+
+                  initialEmailError:
+                    null,
+
+                  sentToClientAt:
+                    null,
+
+                  paymentConfirmationEmailSentAt:
+                    null,
+                }
+              : {}),
           },
         });
 
@@ -12525,9 +14315,11 @@ async function processFinanceAutoCharges(
             "SYSTEM",
 
           action:
-            recoveredFromBb
-              ? "FINANCE_AUTO_BB_PIX_RECOVERED"
-              : "FINANCE_AUTO_BB_PIX_CREATED",
+            isCancelledChargeReissue
+              ? "FINANCE_AUTO_BB_PIX_REISSUED"
+              : recoveredFromBb
+                ? "FINANCE_AUTO_BB_PIX_RECOVERED"
+                : "FINANCE_AUTO_BB_PIX_CREATED",
 
           entity:
             "BillingCharge",
@@ -12538,9 +14330,11 @@ async function processFinanceAutoCharges(
             ),
 
           description:
-            recoveredFromBb
-              ? `Cobrança Pix BB recuperada pelo TXID para o lançamento financeiro ${transaction.id}.`
-              : `Cobrança Pix BB criada automaticamente para o lançamento financeiro ${transaction.id}.`,
+            isCancelledChargeReissue
+              ? `Cobrança Pix BB reemitida para o lançamento financeiro ${transaction.id}, revisão ${billingCharge.pixRevision}.`
+              : recoveredFromBb
+                ? `Cobrança Pix BB recuperada pelo TXID para o lançamento financeiro ${transaction.id}.`
+                : `Cobrança Pix BB criada automaticamente para o lançamento financeiro ${transaction.id}.`,
 
           metadata:
             JSON.stringify({
@@ -13281,6 +15075,26 @@ function isSameLocalDate(
   );
 }
 
+function startOfLocalDay(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+}
+
+/**
+ * A cobrança nova (e-mail/WhatsApp "Nova cobrança") saiu hoje:
+ * não manda também um lembrete no mesmo dia, senão o cliente
+ * recebe a mesma cobrança duas vezes.
+ */
+function financeChargeFirstSentToday(
+  charge: { createdAt?: Date | null; initialEmailSentAt?: Date | null } | null | undefined,
+  today: Date
+) {
+  if (!charge) return false;
+  return (
+    isSameLocalDate(charge.initialEmailSentAt, today) ||
+    isSameLocalDate(charge.createdAt, today)
+  );
+}
+
 function resolveFinanceNoticeType(params: {
   today: Date;
   dueDate: Date;
@@ -13401,7 +15215,7 @@ function getFinanceNoticeIntro(params: {
   dueDate: Date;
 }) {
   const dueDateText =
-    params.dueDate.toLocaleDateString("pt-BR");
+    formatDueDateBR(params.dueDate);
 
   if (
     params.noticeType ===
@@ -13428,9 +15242,22 @@ function getFinanceNoticeIntro(params: {
   )}", com vencimento previsto para ${dueDateText}.`;
 }
 
-async function processFinanceAutoChargeEmailNotices() {
+function processFinanceAutoChargeEmailNotices() {
+  return runFinanceJobSerialized(() => processFinanceAutoChargeEmailNoticesUnlocked());
+}
+
+async function processFinanceAutoChargeEmailNoticesUnlocked() {
   const settings =
     await getFinanceAutoChargeSettings();
+
+  // WhatsApp primeiro: os avisos por e-mail atualizam lastNotificationAt.
+  let whatsapp: any = null;
+
+  try {
+    whatsapp = await processFinanceClientWhatsAppNotices();
+  } catch (error: any) {
+    whatsapp = { executed: false, error: error?.message || String(error) };
+  }
 
   const today =
     new Date();
@@ -13554,6 +15381,7 @@ async function processFinanceAutoChargeEmailNotices() {
           "PENDENTE",
         autoChargeEnabled:
           true,
+        ...financeAutomationClientFilter(),
         dueDate: {
           not:
             null,
@@ -13688,8 +15516,9 @@ async function processFinanceAutoChargeEmailNotices() {
             transaction.dueDate,
           lastNotificationAt:
             transaction.lastNotificationAt,
+          // O limite vale só para avisos de atraso.
           notificationCount:
-            transaction.notificationCount || 0,
+            transaction.overdueNotificationCount || 0,
           settings,
         });
 
@@ -13710,6 +15539,23 @@ async function processFinanceAutoChargeEmailNotices() {
         continue;
       }
 
+      if (financeChargeFirstSentToday(charge, today)) {
+        skipped += 1;
+        results.push({
+          transactionId:
+            transaction.id,
+          billingChargeId:
+            charge.id,
+          status:
+            "SKIPPED",
+          reason:
+            "Cobrança enviada ao cliente hoje; lembrete fica para outro dia.",
+          email:
+            client.email,
+        });
+        continue;
+      }
+
       const publicUrl =
         getChargePublicUrl(charge);
 
@@ -13722,8 +15568,8 @@ async function processFinanceAutoChargeEmailNotices() {
         );
 
       const dueDateText =
-        transaction.dueDate.toLocaleDateString(
-          "pt-BR"
+        formatDueDateBR(
+          transaction.dueDate
         );
 
       const subject =
@@ -13786,15 +15632,64 @@ async function processFinanceAutoChargeEmailNotices() {
         </div>
       `;
 
-      const info =
-        await transporter.sendMail({
-          from:
-            smtpFrom,
-          to:
-            client.email,
-          subject,
-          html,
+      /*
+       * Reserva o aviso de hoje ANTES de enviar: só um ciclo
+       * consegue marcar lastNotificationAt. Se dois ciclos rodarem
+       * juntos (cron + botão "Enviar avisos"), o segundo desiste.
+       */
+      const claim =
+        await prisma.financialTransaction.updateMany({
+          where: {
+            id:
+              transaction.id,
+            OR: [
+              { lastNotificationAt: null },
+              { lastNotificationAt: { lt: startOfLocalDay(today) } },
+            ],
+          },
+          data: {
+            lastNotificationAt:
+              today,
+          },
         });
+
+      if (claim.count === 0) {
+        skipped += 1;
+        results.push({
+          transactionId:
+            transaction.id,
+          billingChargeId:
+            charge.id,
+          status:
+            "SKIPPED",
+          reason:
+            "Aviso de hoje já enviado por outro ciclo.",
+          email:
+            client.email,
+        });
+        continue;
+      }
+
+      let info: any;
+
+      try {
+        info =
+          await transporter.sendMail({
+            from:
+              smtpFrom,
+            to:
+              client.email,
+            subject,
+            html,
+          });
+      } catch (sendError) {
+        // Libera a reserva para a próxima tentativa.
+        await prisma.financialTransaction.update({
+          where: { id: transaction.id },
+          data: { lastNotificationAt: transaction.lastNotificationAt },
+        }).catch(() => undefined);
+        throw sendError;
+      }
 
       await prisma.financialTransaction.update({
         where: {
@@ -13808,6 +15703,10 @@ async function processFinanceAutoChargeEmailNotices() {
             increment:
               1,
           },
+          ...(noticeType === "AVISO_APOS_VENCIMENTO" ||
+          noticeType === "REPETICAO_AVISO_ATRASO"
+            ? { overdueNotificationCount: { increment: 1 } }
+            : {}),
         },
       });
 
@@ -13910,6 +15809,7 @@ async function processFinanceAutoChargeEmailNotices() {
     skipped,
     errors,
     results,
+    whatsapp,
   };
 }
 
@@ -14147,6 +16047,27 @@ async function processFinanceSchedulerTick() {
       null,
   };
 
+  try {
+    result.reconciliation =
+      await processFinanceBbReconciliation();
+  } catch (error: any) {
+    result.reconciliation = {
+      executed: false,
+      error: error?.message || String(error),
+    };
+  }
+
+  // Demandas: alertas e resumo diário por WhatsApp.
+  try {
+    result.demands =
+      await processDemandAlerts(prisma, now);
+  } catch (error: any) {
+    result.demands = {
+      executed: false,
+      error: error?.message || String(error),
+    };
+  }
+
   if (!settings.enabled) {
     result.charge = {
       executed:
@@ -14194,21 +16115,27 @@ async function processFinanceSchedulerTick() {
         settings.lastChargeRunStatus,
     });
 
-  if (chargeDecision.shouldRun) {
-    await prisma.financeAutoChargeSettings.update({
-      where: {
-        id: 1,
-      },
+  // Reserva atômica: se outro ciclo já marcou o início, este desiste.
+  const chargeClaim =
+    chargeDecision.shouldRun
+      ? await prisma.financeAutoChargeSettings.updateMany({
+          where: {
+            id: 1,
+            lastChargeRunStartedAt:
+              settings.lastChargeRunStartedAt ?? null,
+          },
 
-      data: {
-        lastChargeRunStartedAt:
-          now,
+          data: {
+            lastChargeRunStartedAt:
+              now,
 
-        lastChargeRunStatus:
-          "RUNNING",
-      },
-    });
+            lastChargeRunStatus:
+              "RUNNING",
+          },
+        })
+      : { count: 0 };
 
+  if (chargeClaim.count > 0) {
     try {
       const chargeResult =
         await processFinanceAutoCharges();
@@ -14293,7 +16220,7 @@ async function processFinanceSchedulerTick() {
         false,
 
       reason:
-        chargeDecision.reason,
+        chargeDecision.shouldRun ? "Outro ciclo já iniciou esta rotina." : chargeDecision.reason,
     };
   }
 
@@ -14327,21 +16254,27 @@ async function processFinanceSchedulerTick() {
         refreshed.lastNoticeRunStatus,
     });
 
-  if (noticeDecision.shouldRun) {
-    await prisma.financeAutoChargeSettings.update({
-      where: {
-        id: 1,
-      },
+  // Reserva atômica: se outro ciclo já marcou o início, este desiste.
+  const noticeClaim =
+    noticeDecision.shouldRun
+      ? await prisma.financeAutoChargeSettings.updateMany({
+          where: {
+            id: 1,
+            lastNoticeRunStartedAt:
+              refreshed.lastNoticeRunStartedAt ?? null,
+          },
 
-      data: {
-        lastNoticeRunStartedAt:
-          now,
+          data: {
+            lastNoticeRunStartedAt:
+              now,
 
-        lastNoticeRunStatus:
-          "RUNNING",
-      },
-    });
+            lastNoticeRunStatus:
+              "RUNNING",
+          },
+        })
+      : { count: 0 };
 
+  if (noticeClaim.count > 0) {
     try {
       const noticeResult =
         await processFinanceAutoChargeEmailNotices();
@@ -14426,7 +16359,7 @@ async function processFinanceSchedulerTick() {
         false,
 
       reason:
-        noticeDecision.reason,
+        noticeDecision.shouldRun ? "Outro ciclo já iniciou esta rotina." : noticeDecision.reason,
     };
   }
 
@@ -14769,9 +16702,17 @@ app.get(
         );
       }
 
+      const hasReusableCancelledCharge =
+        transaction.billingCharge?.status ===
+          "CANCELADA" &&
+        !transaction.providerTxId;
+
       if (
-        transaction.billingCharge ||
-        transaction.providerTxId
+        transaction.providerTxId ||
+        (
+          transaction.billingCharge &&
+          !hasReusableCancelledCharge
+        )
       ) {
         blockers.push(
           "A obrigação já possui evidência de cobrança bancária."
@@ -15054,7 +16995,7 @@ app.post(
 app.get(
   "/finance/categories",
   authMiddleware,
-  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  requireRoles(["GERENTE", "PROGRAMADOR", "SECRETARIA"]),
   async (_req, res) => {
     const categories = await prisma.financialCategory.findMany({
       orderBy: [{ type: "asc" }, { name: "asc" }],
@@ -15267,9 +17208,15 @@ app.get(
 app.get(
   "/finance/transactions",
   authMiddleware,
-  requireRoles(["GERENTE", "PROGRAMADOR"]),
-  async (req, res) => {
-    const where = buildFinancialWhere(req);
+  requireRoles(["GERENTE", "PROGRAMADOR", "SECRETARIA"]),
+  async (req: any, res) => {
+    const baseWhere = buildFinancialWhere(req);
+
+    // Secretária não vê lançamentos de salário.
+    const where =
+      req.user?.role === "SECRETARIA"
+        ? { AND: [baseWhere, { source: { not: "SALARIO" as const } }] }
+        : baseWhere;
 
     const transactions = await prisma.financialTransaction.findMany({
       where,
@@ -15317,7 +17264,7 @@ app.get(
 app.post(
   "/finance/transactions",
   authMiddleware,
-  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  requireRoles(["GERENTE", "PROGRAMADOR", "SECRETARIA"]),
   async (req: any, res) => {
     try {
       const {
@@ -15358,6 +17305,16 @@ app.post(
         autoChargeEnabled,
         emailNotificationEnabled,
       } = req.body;
+
+      if (
+        req.user?.role === "SECRETARIA" &&
+        source === "SALARIO"
+      ) {
+        return res.status(403).json({
+          message:
+            "Lançamentos de salário são feitos pelos gestores.",
+        });
+      }
 
       if (
         !type ||
@@ -17202,7 +19159,7 @@ app.post(
 app.get(
   "/finance/transactions/:id/payment-plan",
   authMiddleware,
-  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  requireRoles(["GERENTE", "PROGRAMADOR", "SECRETARIA"]),
   async (req: any, res) => {
     try {
       const id = Number(req.params.id);
@@ -17453,8 +19410,19 @@ function financeMutationHandler(operation: "UPDATE" | "PAY" | "CANCEL" | "DELETE
          * pela conciliação/webhook correspondente, preservando a
          * origem bancária do pagamento.
          */
+        /*
+         * Exceção: Pix cancelado e removido no BB (cliente pagou por
+         * fora). Sem cobrança viva, a baixa administrativa é permitida.
+         */
+        const bankChargeRemoved =
+          current.billingCharge?.status === "CANCELADA" &&
+          !current.billingCharge?.paidAt &&
+          String(current.chargeStatus || "").toUpperCase() ===
+            "REMOVIDA_PELO_USUARIO_RECEBEDOR";
+
         if (
           operation === "PAY" &&
+          !bankChargeRemoved &&
           (
             current.billingCharge ||
             hasFinanceBankEvidence(current)
@@ -17481,7 +19449,8 @@ function financeMutationHandler(operation: "UPDATE" | "PAY" | "CANCEL" | "DELETE
           return conflict("FINANCIAL_PAYMENT_PLAN_LOCKED",
             "Este lançamento pertence a um plano. Alterações da composição deverão ocorrer pelo fluxo de reprogramação financeira, que será disponibilizado posteriormente.");
         }
-        if (current.billingCharge && (operation !== "UPDATE" || !notesOnly)) {
+        if (current.billingCharge && (operation !== "UPDATE" || !notesOnly) &&
+            !(operation === "PAY" && bankChargeRemoved)) {
           return conflict("BILLING_TRANSACTION_LOCKED",
             "Este lançamento possui cobrança vinculada. Utilize o fluxo de Cobranças para preservar a conciliação financeira.");
         }
@@ -17498,7 +19467,8 @@ function financeMutationHandler(operation: "UPDATE" | "PAY" | "CANCEL" | "DELETE
           // Repetir a baixa não altera datas nem gera outro evento de auditoria.
           return { status: 200, body: current };
         }
-        if (hasFinanceBankEvidence(current) && (operation !== "UPDATE" || !notesOnly)) {
+        if (hasFinanceBankEvidence(current) && (operation !== "UPDATE" || !notesOnly) &&
+            !(operation === "PAY" && bankChargeRemoved)) {
           return conflict("FINANCIAL_TRANSACTION_BANK_LOCKED",
             "Existem dados de cobrança bancária. Concilie a cobrança antes de alterar este lançamento.");
         }
@@ -17609,7 +19579,7 @@ function financeMutationHandler(operation: "UPDATE" | "PAY" | "CANCEL" | "DELETE
 app.patch(
   "/finance/transactions/:id/reprogram-due-date",
   authMiddleware,
-  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  requireRoles(["GERENTE", "PROGRAMADOR", "SECRETARIA"]),
   async (req: any, res: any) => {
     const id =
       Number(req.params.id);
@@ -17728,6 +19698,16 @@ app.patch(
     }
 
     if (
+      req.user?.role === "SECRETARIA" &&
+      current.source === "SALARIO"
+    ) {
+      return res.status(403).json({
+        message:
+          "Lançamentos de salário são feitos pelos gestores.",
+      });
+    }
+
+    if (
       current.status !==
       "PENDENTE"
     ) {
@@ -17785,20 +19765,34 @@ app.patch(
       current.billingCharge ||
       null;
 
-    const hasBankEmission =
-      Boolean(
-        charge &&
+      /*
+       * BillingCharge CANCELADA mantém TXID/externalId
+       * somente como evidência histórica.
+       *
+       * Não existe mais CobV ativa no BB para sincronizar.
+       * A reprogramação será somente local e a próxima
+       * revisão R01/R02 nascerá com o novo vencimento.
+       */
+      const isCancelledBillingCharge =
+        charge?.status === "CANCELADA";
+
+      const hasBankEmission =
+        !isCancelledBillingCharge &&
         (
-          charge.status === "EMITIDA" ||
-          charge.status === "ENVIADA" ||
-          charge.status === "VENCIDA" ||
-          charge.txid ||
-          charge.externalId
-        )
-      ) ||
-      hasFinanceBankEvidence(
-        current
-      );
+          Boolean(
+            charge &&
+            (
+              charge.status === "EMITIDA" ||
+              charge.status === "ENVIADA" ||
+              charge.status === "VENCIDA" ||
+              charge.txid ||
+              charge.externalId
+            )
+          ) ||
+          hasFinanceBankEvidence(
+            current
+          )
+        );
 
     if (
       hasBankEmission &&
@@ -18003,6 +19997,13 @@ app.patch(
                     financeCompetenceFromDate(
                       newDueDate
                     ),
+
+                  // Novo vencimento recomeça o ciclo de avisos.
+                  lastNotificationAt:
+                    null,
+
+                  overdueNotificationCount:
+                    0,
                 },
 
                 include: {
@@ -18173,6 +20174,72 @@ app.patch(
 );
 
 
+app.post(
+  "/finance/transactions/:id/resend-receipt",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  async (req: AuthRequest, res: any) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        message: "ID do lançamento inválido.",
+      });
+    }
+
+    const transaction =
+      await prisma.financialTransaction.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          status: true,
+          paymentProvider: true,
+          billingCharge: {
+            select: { status: true },
+          },
+        },
+      });
+
+    if (!transaction) {
+      return res.status(404).json({
+        message: "Lançamento não encontrado.",
+      });
+    }
+
+    if (
+      transaction.status !== "PAGO" ||
+      transaction.billingCharge?.status !== "PAGA"
+    ) {
+      return res.status(400).json({
+        message:
+          "Só é possível reenviar o recibo de cobranças pagas.",
+      });
+    }
+
+    const result =
+      await sendFinancePaymentConfirmationEmail(
+        id,
+        transaction.paymentProvider === "BANCO_DO_BRASIL"
+          ? "BANCO_DO_BRASIL"
+          : "MANUAL",
+        { resend: true, requestedBy: req.user }
+      );
+
+    if (result.status === "SENT") {
+      return res.json({
+        message: "Recibo reenviado para o e-mail do cliente.",
+      });
+    }
+
+    return res.status(400).json({
+      message:
+        (result as any).reason ||
+        (result as any).message ||
+        "Não foi possível reenviar o recibo.",
+    });
+  }
+);
+
 app.patch(
   "/finance/transactions/:id/notification-preferences",
   authMiddleware,
@@ -18342,7 +20409,7 @@ app.put(
 app.patch(
   "/finance/transactions/:id/pay",
   authMiddleware,
-  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  requireRoles(["GERENTE", "PROGRAMADOR", "SECRETARIA"]),
   financeMutationHandler("PAY")
 );
 
@@ -18358,7 +20425,585 @@ app.delete(
   "/finance/transactions/:id",
   authMiddleware,
   requireRoles(["GERENTE", "PROGRAMADOR"]),
-  financeMutationHandler("DELETE")
+  async (req: any, res: any) => {
+    const id =
+      Number(req.params.id);
+
+    if (
+      !Number.isInteger(id) ||
+      id <= 0
+    ) {
+      return res.status(400).json({
+        code:
+          "INVALID_FINANCIAL_TRANSACTION_ID",
+        message:
+          "ID do lançamento financeiro inválido.",
+      });
+    }
+
+    const reason =
+      typeof req.body?.reason === "string"
+        ? req.body.reason.trim()
+        : "";
+
+    try {
+      const current =
+        await prisma.financialTransaction.findUnique({
+          where: {
+            id,
+          },
+
+          include: {
+            billingCharge:
+              true,
+
+            partnerCommission:
+              true,
+          },
+        });
+
+      if (!current) {
+        return res.status(404).json({
+          code:
+            "FINANCIAL_TRANSACTION_NOT_FOUND",
+          message:
+            "Lançamento financeiro não encontrado.",
+        });
+      }
+
+      /*
+       * Exclusão definitiva somente para obrigação simples
+       * e ainda pendente.
+       */
+      if (
+        current.status !==
+        "PENDENTE"
+      ) {
+        return res.status(409).json({
+          code:
+            "FINANCIAL_TRANSACTION_DELETE_STATUS_BLOCKED",
+          message:
+            "Somente lançamentos pendentes podem ser excluídos definitivamente.",
+        });
+      }
+
+      if (
+        isFinancialTransactionConsolidated(
+          current
+        )
+      ) {
+        return res.status(409).json({
+          code:
+            "FINANCIAL_TRANSACTION_CONSOLIDATED",
+          message:
+            "Este lançamento possui pagamento consolidado e não pode ser excluído.",
+        });
+      }
+
+      if (
+        current.installmentGroupId
+      ) {
+        return res.status(409).json({
+          code:
+            "FINANCIAL_PAYMENT_PLAN_LOCKED",
+          message:
+            "Este lançamento pertence a um plano financeiro. Utilize o fluxo próprio do plano.",
+        });
+      }
+
+      if (
+        current.partnerCommission ||
+        current.source ===
+          "CONTRATO" ||
+        current.source ===
+          "COMISSAO_PARCEIRO"
+      ) {
+        return res.status(409).json({
+          code:
+            "FINANCIAL_TRANSACTION_ORIGIN_LOCKED",
+          message:
+            "Este lançamento é protegido pelo fluxo de origem e não pode ser excluído por esta ação.",
+        });
+      }
+
+      const charge =
+        current.billingCharge;
+
+      let bbStatus: string | null =
+        null;
+
+      let bbResponse: any =
+        null;
+
+      /*
+       * Se existe BillingCharge, a justificativa passa
+       * a ser obrigatória porque há histórico bancário.
+       */
+      if (
+        charge &&
+        !reason
+      ) {
+        return res.status(400).json({
+          code:
+            "FINANCIAL_DELETE_REASON_REQUIRED",
+          message:
+            "Informe a justificativa para excluir um lançamento que possui histórico de cobrança bancária.",
+        });
+      }
+
+      if (charge) {
+        if (
+          charge.provider !==
+          "BANCO_DO_BRASIL"
+        ) {
+          return res.status(409).json({
+            code:
+              "FINANCIAL_DELETE_PROVIDER_UNSUPPORTED",
+            message:
+              "A cobrança vinculada pertence a um provedor que não possui exclusão bancária segura implementada.",
+          });
+        }
+
+        /*
+         * BillingCharge já CANCELADA:
+         * somente aceitamos exclusão quando o estado local
+         * comprova que a CobV foi removida pelo recebedor.
+         */
+        if (
+          charge.status ===
+          "CANCELADA"
+        ) {
+          bbStatus =
+            String(
+              current.chargeStatus ||
+              ""
+            ).toUpperCase();
+
+          if (
+            bbStatus !==
+            "REMOVIDA_PELO_USUARIO_RECEBEDOR"
+          ) {
+            return res.status(409).json({
+              code:
+                "FINANCIAL_DELETE_CANCELLED_CHARGE_STATE_INVALID",
+              bbStatus:
+                bbStatus ||
+                null,
+              message:
+                "A cobrança está cancelada localmente, mas não existe confirmação de remoção no Banco do Brasil. A exclusão foi bloqueada.",
+            });
+          }
+        } else {
+          if (!charge.txid) {
+            return res.status(409).json({
+              code:
+                "BB_TXID_REQUIRED_FOR_DELETE",
+              message:
+                "A cobrança possui histórico bancário, mas não possui TXID. A exclusão foi bloqueada.",
+            });
+          }
+
+          /*
+           * Consulta o BB antes de qualquer exclusão local.
+           */
+          try {
+            bbResponse =
+              await getBbPixDueCharge(
+                charge.txid
+              );
+
+            bbStatus =
+              String(
+                bbResponse?.status ||
+                ""
+              ).toUpperCase();
+          } catch (error: any) {
+            console.error(
+              "Erro ao consultar CobV BB antes da exclusão financeira:",
+              {
+                financialTransactionId:
+                  current.id,
+
+                billingChargeId:
+                  charge.id,
+
+                txid:
+                  charge.txid,
+
+                status:
+                  error?.response?.status,
+
+                data:
+                  error?.response?.data,
+              }
+            );
+
+            return res.status(502).json({
+              code:
+                "BB_FINANCIAL_DELETE_PRECHECK_FAILED",
+              message:
+                "Não foi possível consultar a cobrança no Banco do Brasil. Nenhuma exclusão local foi realizada.",
+            });
+          }
+
+          /*
+           * Cobrança paga jamais pode ser excluída.
+           */
+          if (
+            bbStatus ===
+            "CONCLUIDA"
+          ) {
+            return res.status(409).json({
+              code:
+                "BB_CHARGE_ALREADY_PAID",
+              bbStatus,
+              message:
+                "O Banco do Brasil informa esta cobrança como CONCLUIDA. Concilie o pagamento antes de qualquer outra operação.",
+            });
+          }
+
+          /*
+           * CobV ativa: remove primeiro no BB.
+           */
+          if (
+            bbStatus ===
+            "ATIVA"
+          ) {
+            try {
+              bbResponse =
+                await removeBbPixDueCharge(
+                  charge.txid
+                );
+
+              bbStatus =
+                String(
+                  bbResponse?.status ||
+                  ""
+                ).toUpperCase();
+            } catch (error: any) {
+              console.error(
+                "Erro ao remover CobV BB antes da exclusão financeira:",
+                {
+                  financialTransactionId:
+                    current.id,
+
+                  billingChargeId:
+                    charge.id,
+
+                  txid:
+                    charge.txid,
+
+                  status:
+                    error?.response?.status,
+
+                  data:
+                    error?.response?.data,
+                }
+              );
+
+              return res.status(502).json({
+                code:
+                  "BB_FINANCIAL_DELETE_REMOVAL_FAILED",
+                message:
+                  "O Banco do Brasil não confirmou a remoção da cobrança. Nenhuma exclusão local foi realizada.",
+              });
+            }
+          }
+
+          /*
+           * Só prosseguimos quando o BB confirma que
+           * não existe mais CobV ativa.
+           */
+          if (
+            bbStatus !==
+            "REMOVIDA_PELO_USUARIO_RECEBEDOR"
+          ) {
+            return res.status(409).json({
+              code:
+                "BB_FINANCIAL_DELETE_STATUS_BLOCKED",
+              bbStatus:
+                bbStatus ||
+                null,
+              message:
+                bbStatus
+                  ? `A cobrança está com status ${bbStatus} no Banco do Brasil e não pode ser excluída.`
+                  : "O Banco do Brasil não retornou um status válido para a cobrança.",
+            });
+          }
+        }
+      }
+
+      const result =
+        await prisma.$transaction(
+          async (tx) => {
+            /*
+             * Releitura dentro da transação para reduzir
+             * risco de corrida entre o BB e o banco local.
+             */
+            const fresh =
+              await tx.financialTransaction.findUnique({
+                where: {
+                  id,
+                },
+
+                include: {
+                  billingCharge:
+                    true,
+
+                  partnerCommission:
+                    true,
+                },
+              });
+
+            if (!fresh) {
+              return {
+                status:
+                  404,
+
+                body: {
+                  code:
+                    "FINANCIAL_TRANSACTION_NOT_FOUND",
+
+                  message:
+                    "O lançamento financeiro não está mais disponível.",
+                },
+              };
+            }
+
+            if (
+              fresh.status !==
+                "PENDENTE" ||
+              isFinancialTransactionConsolidated(
+                fresh
+              )
+            ) {
+              return {
+                status:
+                  409,
+
+                body: {
+                  code:
+                    "FINANCIAL_DELETE_STATE_CHANGED",
+
+                  message:
+                    "O estado do lançamento mudou durante a exclusão. Atualize os dados antes de tentar novamente.",
+                },
+              };
+            }
+
+            if (
+              fresh.installmentGroupId ||
+              fresh.partnerCommission ||
+              fresh.source ===
+                "CONTRATO" ||
+              fresh.source ===
+                "COMISSAO_PARCEIRO"
+            ) {
+              return {
+                status:
+                  409,
+
+                body: {
+                  code:
+                    "FINANCIAL_DELETE_PROTECTION_CHANGED",
+
+                  message:
+                    "O lançamento passou a possuir vínculo protegido e não pode mais ser excluído.",
+                },
+              };
+            }
+
+            /*
+             * A cobrança não pode ter sido trocada enquanto
+             * ocorria a consulta/remoção no Banco do Brasil.
+             */
+            if (
+              Boolean(charge) !==
+              Boolean(
+                fresh.billingCharge
+              )
+            ) {
+              return {
+                status:
+                  409,
+
+                body: {
+                  code:
+                    "FINANCIAL_DELETE_BILLING_STATE_CHANGED",
+
+                  message:
+                    "O vínculo da cobrança mudou durante a exclusão. Atualize os dados antes de tentar novamente.",
+                },
+              };
+            }
+
+            if (
+              charge &&
+              fresh.billingCharge &&
+              (
+                fresh.billingCharge.id !==
+                  charge.id ||
+                fresh.billingCharge.txid !==
+                  charge.txid
+              )
+            ) {
+              return {
+                status:
+                  409,
+
+                body: {
+                  code:
+                    "FINANCIAL_DELETE_BILLING_STATE_CHANGED",
+
+                  message:
+                    "A cobrança vinculada foi alterada durante a exclusão. Atualize os dados antes de tentar novamente.",
+                },
+              };
+            }
+
+            const transactionSnapshot =
+              fresh;
+
+            const billingChargeSnapshot =
+              fresh.billingCharge;
+
+            /*
+             * FiscalDocument e PaymentDueDateExtension
+             * possuem FK ON DELETE SET NULL para BillingCharge.
+             * Seus históricos permanecem preservados.
+             */
+            if (
+              fresh.billingCharge
+            ) {
+              await tx.billingCharge.delete({
+                where: {
+                  id:
+                    fresh.billingCharge.id,
+                },
+              });
+            }
+
+            await tx.financialTransaction.delete({
+              where: {
+                id:
+                  fresh.id,
+              },
+            });
+
+            await tx.auditLog.create({
+              data: {
+                userId:
+                  req.user?.id ||
+                  null,
+
+                userName:
+                  req.user?.name ||
+                  null,
+
+                userEmail:
+                  req.user?.email ||
+                  null,
+
+                userRole:
+                  req.user?.role ||
+                  null,
+
+                ipAddress:
+                  req.ip,
+
+                action:
+                  "DELETE_FINANCIAL_TRANSACTION",
+
+                entity:
+                  "FinancialTransaction",
+
+                entityId:
+                  String(
+                    fresh.id
+                  ),
+
+                description:
+                  `Lançamento financeiro ${fresh.id} excluído definitivamente${billingChargeSnapshot ? " após tratamento da cobrança bancária vinculada" : ""}.`,
+
+                metadata:
+                  JSON.stringify({
+                    reason:
+                      reason ||
+                      null,
+
+                    bbStatus,
+
+                    billingChargeId:
+                      billingChargeSnapshot?.id ||
+                      null,
+
+                    txid:
+                      billingChargeSnapshot?.txid ||
+                      null,
+
+                    pixRevision:
+                      billingChargeSnapshot?.pixRevision ??
+                      null,
+
+                    transaction:
+                      transactionSnapshot,
+
+                    billingCharge:
+                      billingChargeSnapshot,
+                  }),
+              },
+            });
+
+            return {
+              status:
+                200,
+
+              body: {
+                deleted:
+                  true,
+
+                financialTransactionId:
+                  fresh.id,
+
+                billingChargeId:
+                  billingChargeSnapshot?.id ||
+                  null,
+
+                bbStatus,
+              },
+            };
+          }
+        );
+
+      return res
+        .status(result.status)
+        .json(result.body);
+    } catch (error: any) {
+      console.error(
+        "Erro ao excluir lançamento financeiro com segurança bancária:",
+        {
+          financialTransactionId:
+            id,
+
+          message:
+            error?.message,
+
+          status:
+            error?.response?.status,
+
+          data:
+            error?.response?.data,
+        }
+      );
+
+      return res.status(500).json({
+        code:
+          "FINANCIAL_TRANSACTION_DELETE_FAILED",
+        message:
+          "Não foi possível excluir o lançamento financeiro com segurança.",
+      });
+    }
+  }
 );
 
 
@@ -19149,6 +21794,2024 @@ app.delete(
       return res.status(500).json({
         message:
           "Erro ao excluir definitivamente a categoria financeira.",
+      });
+    }
+  }
+);
+
+// ======================================================
+// CUSTOS ASSUMIDOS PELOS SÓCIOS / GERENTES
+// ======================================================
+
+function isValidManagerExpenseCompetence(value: unknown) {
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(
+    String(value || "").trim()
+  );
+}
+
+function parseManagerExpenseDate(
+  value: unknown,
+  competenceMonth: string
+) {
+  const raw = String(value || "").trim();
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    throw new Error(
+      "Data da despesa inválida. Utilize o formato YYYY-MM-DD."
+    );
+  }
+
+  if (!raw.startsWith(`${competenceMonth}-`)) {
+    throw new Error(
+      "A data da despesa deve pertencer à competência informada."
+    );
+  }
+
+  // Meio-dia UTC evita deslocamento de calendário por timezone.
+  const parsed = new Date(`${raw}T12:00:00.000Z`);
+
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error("Data da despesa inválida.");
+  }
+
+  const normalized = parsed.toISOString().slice(0, 10);
+
+  if (normalized !== raw) {
+    throw new Error("Data da despesa inválida.");
+  }
+
+  return parsed;
+}
+
+function removeManagerExpenseFile(
+  filePath?: string | null
+) {
+  if (!filePath) return;
+
+  try {
+    const resolved = path.resolve(filePath);
+    const privateRoot =
+      path.resolve(managerExpenseReceiptsDir) + path.sep;
+
+    if (!resolved.startsWith(privateRoot)) {
+      console.error(
+        "Recusa ao remover comprovante fora do diretório privado:",
+        resolved
+      );
+      return;
+    }
+
+    if (fs.existsSync(resolved)) {
+      fs.unlinkSync(resolved);
+    }
+  } catch (error) {
+    console.error(
+      "Erro ao remover comprovante de custo de gerente:",
+      error
+    );
+  }
+}
+
+function serializeManagerExpense(item: any) {
+  return {
+    id: item.id,
+    managerUserId: item.managerUserId,
+    competenceMonth: item.competenceMonth,
+    expenseDate: item.expenseDate,
+    description: item.description,
+    amountCents: item.amountCents,
+    notes: item.notes,
+    status: item.status,
+    reimbursedAt: item.reimbursedAt,
+    reimbursementNotes: item.reimbursementNotes,
+
+    hasReceipt: Boolean(
+      item.receiptStoredName &&
+      item.receiptPath
+    ),
+
+    receiptOriginalName:
+      item.receiptOriginalName || null,
+
+    receiptMimeType:
+      item.receiptMimeType || null,
+
+    receiptSize:
+      item.receiptSize || null,
+
+    manager: item.manager
+      ? {
+          id: item.manager.id,
+          name: item.manager.name,
+          email: item.manager.email,
+        }
+      : null,
+
+    createdBy: item.createdBy
+      ? {
+          id: item.createdBy.id,
+          name: item.createdBy.name,
+          email: item.createdBy.email,
+        }
+      : null,
+
+    updatedBy: item.updatedBy
+      ? {
+          id: item.updatedBy.id,
+          name: item.updatedBy.name,
+          email: item.updatedBy.email,
+        }
+      : null,
+
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+  };
+}
+
+app.get(
+  "/finance/manager-expenses/managers",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  async (_req, res) => {
+    try {
+      const managers = await prisma.user.findMany({
+        where: {
+          role: "GERENTE",
+          active: true,
+        },
+        orderBy: {
+          name: "asc",
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+        },
+      });
+
+      return res.json(managers);
+    } catch (error) {
+      console.error(
+        "Erro ao listar gerentes para custos:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Erro ao listar gerentes disponíveis.",
+      });
+    }
+  }
+);
+
+app.get(
+  "/finance/manager-expenses",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  async (req, res) => {
+    try {
+      const competenceMonth =
+        String(
+          req.query.competenceMonth || ""
+        ).trim();
+
+      if (
+        !isValidManagerExpenseCompetence(
+          competenceMonth
+        )
+      ) {
+        return res.status(400).json({
+          message:
+            "Competência inválida. Utilize YYYY-MM.",
+        });
+      }
+
+      const [expenses, month, managers] =
+        await Promise.all([
+          prisma.managerExpense.findMany({
+            where: {
+              competenceMonth,
+            },
+            orderBy: [
+              {
+                expenseDate: "desc",
+              },
+              {
+                id: "desc",
+              },
+            ],
+            include: {
+              manager: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                },
+              },
+              createdBy: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                },
+              },
+              updatedBy: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                },
+              },
+            },
+          }),
+
+          prisma.managerExpenseMonth.findUnique({
+            where: {
+              competenceMonth,
+            },
+            include: {
+              closedBy: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                },
+              },
+              reopenedBy: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                },
+              },
+            },
+          }),
+
+          prisma.user.findMany({
+            where: {
+              role: "GERENTE",
+              active: true,
+            },
+            orderBy: {
+              name: "asc",
+            },
+            select: {
+              id: true,
+              name: true,
+              email: true,
+            },
+          }),
+        ]);
+
+      const byManager = managers.map(
+        (manager) => {
+          const items = expenses.filter(
+            (expense) =>
+              expense.managerUserId ===
+              manager.id
+          );
+
+          const amountCents =
+            items
+              .filter(
+                (item) =>
+                  item.status !== "CANCELADO"
+              )
+              .reduce(
+                (sum, item) =>
+                  sum + item.amountCents,
+                0
+              );
+
+          const reimbursedCents =
+            items
+              .filter(
+                (item) =>
+                  item.status === "RESTITUIDO"
+              )
+              .reduce(
+                (sum, item) =>
+                  sum + item.amountCents,
+                0
+              );
+
+          const pendingCents =
+            items
+              .filter(
+                (item) =>
+                  item.status ===
+                  "PENDENTE_RESTITUICAO"
+              )
+              .reduce(
+                (sum, item) =>
+                  sum + item.amountCents,
+                0
+              );
+
+          const cancelledCents =
+            items
+              .filter(
+                (item) =>
+                  item.status === "CANCELADO"
+              )
+              .reduce(
+                (sum, item) =>
+                  sum + item.amountCents,
+                0
+              );
+
+          return {
+            managerUserId: manager.id,
+            managerName: manager.name,
+            managerEmail: manager.email,
+            amountCents,
+            reimbursedCents,
+            pendingCents,
+            cancelledCents,
+          };
+        }
+      );
+
+      const totals = byManager.reduce(
+        (acc, item) => ({
+          amountCents:
+            acc.amountCents +
+            item.amountCents,
+
+          reimbursedCents:
+            acc.reimbursedCents +
+            item.reimbursedCents,
+
+          pendingCents:
+            acc.pendingCents +
+            item.pendingCents,
+
+          cancelledCents:
+            acc.cancelledCents +
+            item.cancelledCents,
+        }),
+        {
+          amountCents: 0,
+          reimbursedCents: 0,
+          pendingCents: 0,
+          cancelledCents: 0,
+        }
+      );
+
+      return res.json({
+        competenceMonth,
+
+        month: month
+          ? {
+              id: month.id,
+              status: month.status,
+              closedAt: month.closedAt,
+              closedBy: month.closedBy,
+              reopenedAt: month.reopenedAt,
+              reopenedBy: month.reopenedBy,
+              notes: month.notes,
+            }
+          : {
+              id: null,
+              status: "ABERTO",
+              closedAt: null,
+              closedBy: null,
+              reopenedAt: null,
+              reopenedBy: null,
+              notes: null,
+            },
+
+        totals,
+        byManager,
+
+        expenses:
+          expenses.map(
+            serializeManagerExpense
+          ),
+      });
+    } catch (error) {
+      console.error(
+        "Erro ao listar custos dos gerentes:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Erro ao carregar custos dos gerentes.",
+      });
+    }
+  }
+);
+
+app.post(
+  "/finance/manager-expenses",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  managerExpenseReceiptUpload,
+  async (req: AuthRequest, res) => {
+    const uploadedPath =
+      req.file?.path || null;
+
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          message:
+            "O comprovante de pagamento é obrigatório.",
+        });
+      }
+
+      const managerUserId =
+        Number(req.body?.managerUserId);
+
+      const competenceMonth =
+        String(
+          req.body?.competenceMonth || ""
+        ).trim();
+
+      const description =
+        String(
+          req.body?.description || ""
+        ).trim();
+
+      const notes =
+        String(req.body?.notes || "").trim() ||
+        null;
+
+      if (
+        !Number.isInteger(managerUserId) ||
+        managerUserId <= 0
+      ) {
+        removeManagerExpenseFile(
+          uploadedPath
+        );
+
+        return res.status(400).json({
+          message:
+            "Gerente pagador inválido.",
+        });
+      }
+
+      if (
+        !isValidManagerExpenseCompetence(
+          competenceMonth
+        )
+      ) {
+        removeManagerExpenseFile(
+          uploadedPath
+        );
+
+        return res.status(400).json({
+          message:
+            "Competência inválida. Utilize YYYY-MM.",
+        });
+      }
+
+      if (!description) {
+        removeManagerExpenseFile(
+          uploadedPath
+        );
+
+        return res.status(400).json({
+          message:
+            "A descrição do custo é obrigatória.",
+        });
+      }
+
+      let expenseDate: Date;
+
+      try {
+        expenseDate =
+          parseManagerExpenseDate(
+            req.body?.expenseDate,
+            competenceMonth
+          );
+      } catch (error) {
+        removeManagerExpenseFile(
+          uploadedPath
+        );
+
+        return res.status(400).json({
+          message:
+            error instanceof Error
+              ? error.message
+              : "Data da despesa inválida.",
+        });
+      }
+
+      let amountCents: number;
+
+      try {
+        amountCents =
+          reaisInputToCents(
+            req.body?.amount,
+            "Valor do custo"
+          );
+      } catch (error) {
+        removeManagerExpenseFile(
+          uploadedPath
+        );
+
+        return res.status(400).json({
+          message:
+            error instanceof Error
+              ? error.message
+              : "Valor do custo inválido.",
+        });
+      }
+
+      if (
+        !Number.isInteger(amountCents) ||
+        amountCents <= 0
+      ) {
+        removeManagerExpenseFile(
+          uploadedPath
+        );
+
+        return res.status(400).json({
+          message:
+            "O valor do custo deve ser maior que zero.",
+        });
+      }
+
+      const [manager, month] =
+        await Promise.all([
+          prisma.user.findFirst({
+            where: {
+              id: managerUserId,
+              role: "GERENTE",
+              active: true,
+            },
+            select: {
+              id: true,
+              name: true,
+              email: true,
+            },
+          }),
+
+          prisma.managerExpenseMonth.findUnique({
+            where: {
+              competenceMonth,
+            },
+          }),
+        ]);
+
+      if (!manager) {
+        removeManagerExpenseFile(
+          uploadedPath
+        );
+
+        return res.status(400).json({
+          message:
+            "O usuário informado não é um gerente ativo.",
+        });
+      }
+
+      if (month?.status === "FECHADO") {
+        removeManagerExpenseFile(
+          uploadedPath
+        );
+
+        return res.status(409).json({
+          message:
+            "A competência está fechada e não aceita novos custos.",
+        });
+      }
+
+      const created =
+        await prisma.$transaction(
+          async (tx) => {
+            const expense =
+              await tx.managerExpense.create({
+                data: {
+                  managerUserId,
+                  competenceMonth,
+                  expenseDate,
+                  description,
+                  amountCents,
+                  notes,
+
+                  receiptOriginalName:
+                    req.file!.originalname,
+
+                  receiptStoredName:
+                    req.file!.filename,
+
+                  receiptMimeType:
+                    req.file!.mimetype,
+
+                  receiptSize:
+                    req.file!.size,
+
+                  receiptPath:
+                    path.resolve(
+                      req.file!.path
+                    ),
+
+                  createdById:
+                    req.user?.id || null,
+
+                  updatedById:
+                    req.user?.id || null,
+                },
+
+                include: {
+                  manager: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+
+                  createdBy: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+
+                  updatedBy: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+                },
+              });
+
+            await tx.auditLog.create({
+              data: {
+                userId:
+                  req.user?.id || null,
+
+                userName:
+                  req.user?.name || null,
+
+                userEmail:
+                  req.user?.email || null,
+
+                userRole:
+                  req.user?.role || null,
+
+                action:
+                  "CREATE_MANAGER_EXPENSE",
+
+                entity:
+                  "ManagerExpense",
+
+                entityId:
+                  String(expense.id),
+
+                description:
+                  `Custo de ${manager.name} cadastrado: ${description}.`,
+
+                ipAddress:
+                  req.ip,
+
+                metadata:
+                  JSON.stringify({
+                    managerUserId,
+                    managerName:
+                      manager.name,
+                    competenceMonth,
+                    expenseDate:
+                      expenseDate.toISOString(),
+                    description,
+                    amountCents,
+                    receiptOriginalName:
+                      req.file!.originalname,
+                    receiptMimeType:
+                      req.file!.mimetype,
+                    receiptSize:
+                      req.file!.size,
+                  }),
+              },
+            });
+
+            return expense;
+          }
+        );
+
+      return res
+        .status(201)
+        .json(
+          serializeManagerExpense(
+            created
+          )
+        );
+    } catch (error) {
+      removeManagerExpenseFile(
+        uploadedPath
+      );
+
+      console.error(
+        "Erro ao cadastrar custo de gerente:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Erro ao cadastrar custo do gerente.",
+      });
+    }
+  }
+);
+
+app.get(
+  "/finance/manager-expenses/:id/receipt",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+
+      if (
+        !Number.isInteger(id) ||
+        id <= 0
+      ) {
+        return res.status(400).json({
+          message:
+            "ID do custo inválido.",
+        });
+      }
+
+      const expense =
+        await prisma.managerExpense.findUnique({
+          where: {
+            id,
+          },
+
+          select: {
+            id: true,
+            receiptOriginalName: true,
+            receiptMimeType: true,
+            receiptPath: true,
+          },
+        });
+
+      if (!expense) {
+        return res.status(404).json({
+          message:
+            "Custo não encontrado.",
+        });
+      }
+
+      if (!expense.receiptPath) {
+        return res.status(404).json({
+          message:
+            "Este custo não possui comprovante.",
+        });
+      }
+
+      const resolvedPath =
+        path.resolve(
+          expense.receiptPath
+        );
+
+      const privateRoot =
+        path.resolve(
+          managerExpenseReceiptsDir
+        ) + path.sep;
+
+      if (
+        !resolvedPath.startsWith(
+          privateRoot
+        )
+      ) {
+        console.error(
+          `Caminho inválido de comprovante no custo ${id}:`,
+          resolvedPath
+        );
+
+        return res.status(500).json({
+          message:
+            "Caminho do comprovante inválido.",
+        });
+      }
+
+      if (
+        !fs.existsSync(
+          resolvedPath
+        )
+      ) {
+        return res.status(404).json({
+          message:
+            "Arquivo do comprovante não encontrado.",
+        });
+      }
+
+      if (
+        expense.receiptMimeType
+      ) {
+        res.type(
+          expense.receiptMimeType
+        );
+      }
+
+      const downloadName =
+        expense.receiptOriginalName ||
+        `comprovante-${id}`;
+
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename*=UTF-8''${encodeURIComponent(
+          downloadName
+        )}`
+      );
+
+      return res.sendFile(
+        resolvedPath
+      );
+    } catch (error) {
+      console.error(
+        "Erro ao consultar comprovante de custo:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Erro ao consultar comprovante.",
+      });
+    }
+  }
+);
+
+
+// ======================================================
+// CUSTOS DOS GERENTES — EDIÇÃO / RESTITUIÇÃO / FECHAMENTO
+// ======================================================
+
+app.put(
+  "/finance/manager-expenses/:id",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  async (req: AuthRequest, res) => {
+    try {
+      const id = Number(req.params.id);
+
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({
+          message: "ID do custo inválido.",
+        });
+      }
+
+      const current =
+        await prisma.managerExpense.findUnique({
+          where: { id },
+          include: {
+            manager: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+              },
+            },
+          },
+        });
+
+      if (!current) {
+        return res.status(404).json({
+          message: "Custo não encontrado.",
+        });
+      }
+
+      if (current.status !== "PENDENTE_RESTITUICAO") {
+        return res.status(409).json({
+          message:
+            "Somente custos pendentes de restituição podem ser editados.",
+        });
+      }
+
+      const currentMonth =
+        await prisma.managerExpenseMonth.findUnique({
+          where: {
+            competenceMonth:
+              current.competenceMonth,
+          },
+        });
+
+      if (currentMonth?.status === "FECHADO") {
+        return res.status(409).json({
+          message:
+            "A competência está fechada e não permite alterações.",
+        });
+      }
+
+      const competenceMonth =
+        req.body?.competenceMonth !== undefined
+          ? String(
+              req.body.competenceMonth
+            ).trim()
+          : current.competenceMonth;
+
+      if (
+        !isValidManagerExpenseCompetence(
+          competenceMonth
+        )
+      ) {
+        return res.status(400).json({
+          message:
+            "Competência inválida. Utilize YYYY-MM.",
+        });
+      }
+
+      if (
+        competenceMonth !==
+        current.competenceMonth
+      ) {
+        const destinationMonth =
+          await prisma.managerExpenseMonth.findUnique({
+            where: {
+              competenceMonth,
+            },
+          });
+
+        if (
+          destinationMonth?.status ===
+          "FECHADO"
+        ) {
+          return res.status(409).json({
+            message:
+              "A competência de destino está fechada.",
+          });
+        }
+      }
+
+      const description =
+        req.body?.description !== undefined
+          ? String(
+              req.body.description
+            ).trim()
+          : current.description;
+
+      if (!description) {
+        return res.status(400).json({
+          message:
+            "A descrição do custo é obrigatória.",
+        });
+      }
+
+      let expenseDate =
+        current.expenseDate;
+
+      if (
+        req.body?.expenseDate !==
+          undefined ||
+        competenceMonth !==
+          current.competenceMonth
+      ) {
+        const dateInput =
+          req.body?.expenseDate !== undefined
+            ? req.body.expenseDate
+            : current.expenseDate
+                .toISOString()
+                .slice(0, 10);
+
+        try {
+          expenseDate =
+            parseManagerExpenseDate(
+              dateInput,
+              competenceMonth
+            );
+        } catch (error) {
+          return res.status(400).json({
+            message:
+              error instanceof Error
+                ? error.message
+                : "Data da despesa inválida.",
+          });
+        }
+      }
+
+      let managerUserId =
+        current.managerUserId;
+
+      if (
+        req.body?.managerUserId !== undefined
+      ) {
+        managerUserId =
+          Number(
+            req.body.managerUserId
+          );
+
+        if (
+          !Number.isInteger(
+            managerUserId
+          ) ||
+          managerUserId <= 0
+        ) {
+          return res.status(400).json({
+            message:
+              "Gerente pagador inválido.",
+          });
+        }
+
+        const manager =
+          await prisma.user.findFirst({
+            where: {
+              id: managerUserId,
+              role: "GERENTE",
+              active: true,
+            },
+            select: {
+              id: true,
+            },
+          });
+
+        if (!manager) {
+          return res.status(400).json({
+            message:
+              "O usuário informado não é um gerente ativo.",
+          });
+        }
+      }
+
+      let amountCents =
+        current.amountCents;
+
+      if (
+        req.body?.amount !== undefined
+      ) {
+        try {
+          amountCents =
+            reaisInputToCents(
+              req.body.amount,
+              "Valor do custo"
+            );
+        } catch (error) {
+          return res.status(400).json({
+            message:
+              error instanceof Error
+                ? error.message
+                : "Valor do custo inválido.",
+          });
+        }
+
+        if (
+          !Number.isInteger(
+            amountCents
+          ) ||
+          amountCents <= 0
+        ) {
+          return res.status(400).json({
+            message:
+              "O valor do custo deve ser maior que zero.",
+          });
+        }
+      }
+
+      const notes =
+        req.body?.notes !== undefined
+          ? (
+              String(
+                req.body.notes || ""
+              ).trim() || null
+            )
+          : current.notes;
+
+      const updated =
+        await prisma.$transaction(
+          async (tx) => {
+            const expense =
+              await tx.managerExpense.update({
+                where: { id },
+
+                data: {
+                  managerUserId,
+                  competenceMonth,
+                  expenseDate,
+                  description,
+                  amountCents,
+                  notes,
+                  updatedById:
+                    req.user?.id || null,
+                },
+
+                include: {
+                  manager: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+
+                  createdBy: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+
+                  updatedBy: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+                },
+              });
+
+            await tx.auditLog.create({
+              data: {
+                userId:
+                  req.user?.id || null,
+                userName:
+                  req.user?.name || null,
+                userEmail:
+                  req.user?.email || null,
+                userRole:
+                  req.user?.role || null,
+
+                action:
+                  "UPDATE_MANAGER_EXPENSE",
+
+                entity:
+                  "ManagerExpense",
+
+                entityId:
+                  String(id),
+
+                description:
+                  `Custo de gerente alterado: ${expense.description}.`,
+
+                ipAddress:
+                  req.ip,
+
+                metadata:
+                  JSON.stringify({
+                    before: {
+                      managerUserId:
+                        current.managerUserId,
+                      competenceMonth:
+                        current.competenceMonth,
+                      expenseDate:
+                        current.expenseDate,
+                      description:
+                        current.description,
+                      amountCents:
+                        current.amountCents,
+                      notes:
+                        current.notes,
+                    },
+
+                    after: {
+                      managerUserId:
+                        expense.managerUserId,
+                      competenceMonth:
+                        expense.competenceMonth,
+                      expenseDate:
+                        expense.expenseDate,
+                      description:
+                        expense.description,
+                      amountCents:
+                        expense.amountCents,
+                      notes:
+                        expense.notes,
+                    },
+                  }),
+              },
+            });
+
+            return expense;
+          }
+        );
+
+      return res.json(
+        serializeManagerExpense(
+          updated
+        )
+      );
+    } catch (error) {
+      console.error(
+        "Erro ao editar custo de gerente:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Erro ao editar custo do gerente.",
+      });
+    }
+  }
+);
+
+app.delete(
+  "/finance/manager-expenses/:id",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  async (req: AuthRequest, res) => {
+    try {
+      const id = Number(req.params.id);
+
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({
+          message: "ID do custo inválido.",
+        });
+      }
+
+      const current =
+        await prisma.managerExpense.findUnique({
+          where: { id },
+          include: {
+            manager: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
+          },
+        });
+
+      if (!current) {
+        return res.status(404).json({
+          message: "Custo não encontrado.",
+        });
+      }
+
+      if (
+        current.status !==
+        "PENDENTE_RESTITUICAO"
+      ) {
+        return res.status(409).json({
+          message:
+            "Somente custos pendentes podem ser excluídos.",
+        });
+      }
+
+      const month =
+        await prisma.managerExpenseMonth.findUnique({
+          where: {
+            competenceMonth:
+              current.competenceMonth,
+          },
+        });
+
+      if (
+        month?.status === "FECHADO"
+      ) {
+        return res.status(409).json({
+          message:
+            "A competência está fechada e não permite exclusão.",
+        });
+      }
+
+      await prisma.$transaction(
+        async (tx) => {
+          await tx.auditLog.create({
+            data: {
+              userId:
+                req.user?.id || null,
+              userName:
+                req.user?.name || null,
+              userEmail:
+                req.user?.email || null,
+              userRole:
+                req.user?.role || null,
+
+              action:
+                "DELETE_MANAGER_EXPENSE",
+
+              entity:
+                "ManagerExpense",
+
+              entityId:
+                String(id),
+
+              description:
+                `Custo de ${current.manager.name} excluído: ${current.description}.`,
+
+              ipAddress:
+                req.ip,
+
+              metadata:
+                JSON.stringify({
+                  id:
+                    current.id,
+                  managerUserId:
+                    current.managerUserId,
+                  managerName:
+                    current.manager.name,
+                  competenceMonth:
+                    current.competenceMonth,
+                  expenseDate:
+                    current.expenseDate,
+                  description:
+                    current.description,
+                  amountCents:
+                    current.amountCents,
+                  notes:
+                    current.notes,
+                  receiptOriginalName:
+                    current.receiptOriginalName,
+                  receiptMimeType:
+                    current.receiptMimeType,
+                  receiptSize:
+                    current.receiptSize,
+                }),
+            },
+          });
+
+          await tx.managerExpense.delete({
+            where: { id },
+          });
+        }
+      );
+
+      removeManagerExpenseFile(
+        current.receiptPath
+      );
+
+      return res.status(200).json({
+        deleted: true,
+        id,
+      });
+    } catch (error) {
+      console.error(
+        "Erro ao excluir custo de gerente:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Erro ao excluir custo do gerente.",
+      });
+    }
+  }
+);
+
+app.post(
+  "/finance/manager-expenses/:id/cancel",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  async (req: AuthRequest, res) => {
+    try {
+      const id = Number(req.params.id);
+
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({
+          message: "ID do custo inválido.",
+        });
+      }
+
+      const reason =
+        String(
+          req.body?.reason || ""
+        ).trim();
+
+      if (reason.length < 5) {
+        return res.status(400).json({
+          message:
+            "Informe uma justificativa para o cancelamento.",
+        });
+      }
+
+      const current =
+        await prisma.managerExpense.findUnique({
+          where: { id },
+          include: {
+            manager: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+              },
+            },
+          },
+        });
+
+      if (!current) {
+        return res.status(404).json({
+          message: "Custo não encontrado.",
+        });
+      }
+
+      if (
+        current.status !==
+        "PENDENTE_RESTITUICAO"
+      ) {
+        return res.status(409).json({
+          message:
+            "Somente custos pendentes podem ser cancelados.",
+        });
+      }
+
+      const month =
+        await prisma.managerExpenseMonth.findUnique({
+          where: {
+            competenceMonth:
+              current.competenceMonth,
+          },
+        });
+
+      if (
+        month?.status === "FECHADO"
+      ) {
+        return res.status(409).json({
+          message:
+            "A competência está fechada e não permite cancelamento.",
+        });
+      }
+
+      const updated =
+        await prisma.$transaction(
+          async (tx) => {
+            const expense =
+              await tx.managerExpense.update({
+                where: { id },
+
+                data: {
+                  status: "CANCELADO",
+                  reimbursementNotes:
+                    reason,
+                  updatedById:
+                    req.user?.id || null,
+                },
+
+                include: {
+                  manager: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+
+                  createdBy: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+
+                  updatedBy: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+                },
+              });
+
+            await tx.auditLog.create({
+              data: {
+                userId:
+                  req.user?.id || null,
+                userName:
+                  req.user?.name || null,
+                userEmail:
+                  req.user?.email || null,
+                userRole:
+                  req.user?.role || null,
+
+                action:
+                  "CANCEL_MANAGER_EXPENSE",
+
+                entity:
+                  "ManagerExpense",
+
+                entityId:
+                  String(id),
+
+                description:
+                  `Custo cancelado: ${current.description}.`,
+
+                ipAddress:
+                  req.ip,
+
+                metadata:
+                  JSON.stringify({
+                    reason,
+                    managerUserId:
+                      current.managerUserId,
+                    competenceMonth:
+                      current.competenceMonth,
+                    amountCents:
+                      current.amountCents,
+                  }),
+              },
+            });
+
+            return expense;
+          }
+        );
+
+      return res.json(
+        serializeManagerExpense(
+          updated
+        )
+      );
+    } catch (error) {
+      console.error(
+        "Erro ao cancelar custo de gerente:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Erro ao cancelar custo do gerente.",
+      });
+    }
+  }
+);
+
+app.post(
+  "/finance/manager-expenses/:id/reimburse",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  async (req: AuthRequest, res) => {
+    try {
+      const id = Number(req.params.id);
+
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({
+          message: "ID do custo inválido.",
+        });
+      }
+
+      const current =
+        await prisma.managerExpense.findUnique({
+          where: { id },
+          include: {
+            manager: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+              },
+            },
+          },
+        });
+
+      if (!current) {
+        return res.status(404).json({
+          message: "Custo não encontrado.",
+        });
+      }
+
+      if (
+        current.status !==
+        "PENDENTE_RESTITUICAO"
+      ) {
+        return res.status(409).json({
+          message:
+            "Somente custos pendentes podem ser restituídos.",
+        });
+      }
+
+      const month =
+        await prisma.managerExpenseMonth.findUnique({
+          where: {
+            competenceMonth:
+              current.competenceMonth,
+          },
+        });
+
+      if (
+        month?.status === "FECHADO"
+      ) {
+        return res.status(409).json({
+          message:
+            "A competência está fechada. Reabra o mês antes de alterar restituições.",
+        });
+      }
+
+      const reimbursementNotes =
+        String(
+          req.body?.notes || ""
+        ).trim() || null;
+
+      const reimbursedAtInput =
+        String(
+          req.body?.reimbursedAt || ""
+        ).trim();
+
+      let reimbursedAt =
+        new Date();
+
+      if (reimbursedAtInput) {
+        const parsed =
+          new Date(
+            reimbursedAtInput.length === 10
+              ? `${reimbursedAtInput}T12:00:00.000Z`
+              : reimbursedAtInput
+          );
+
+        if (
+          Number.isNaN(
+            parsed.getTime()
+          )
+        ) {
+          return res.status(400).json({
+            message:
+              "Data da restituição inválida.",
+          });
+        }
+
+        reimbursedAt = parsed;
+      }
+
+      const updated =
+        await prisma.$transaction(
+          async (tx) => {
+            const expense =
+              await tx.managerExpense.update({
+                where: { id },
+
+                data: {
+                  status: "RESTITUIDO",
+                  reimbursedAt,
+                  reimbursementNotes,
+                  updatedById:
+                    req.user?.id || null,
+                },
+
+                include: {
+                  manager: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+
+                  createdBy: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+
+                  updatedBy: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+                },
+              });
+
+            await tx.auditLog.create({
+              data: {
+                userId:
+                  req.user?.id || null,
+                userName:
+                  req.user?.name || null,
+                userEmail:
+                  req.user?.email || null,
+                userRole:
+                  req.user?.role || null,
+
+                action:
+                  "REIMBURSE_MANAGER_EXPENSE",
+
+                entity:
+                  "ManagerExpense",
+
+                entityId:
+                  String(id),
+
+                description:
+                  `Custo restituído a ${current.manager.name}: ${current.description}.`,
+
+                ipAddress:
+                  req.ip,
+
+                metadata:
+                  JSON.stringify({
+                    managerUserId:
+                      current.managerUserId,
+                    managerName:
+                      current.manager.name,
+                    competenceMonth:
+                      current.competenceMonth,
+                    amountCents:
+                      current.amountCents,
+                    reimbursedAt,
+                    notes:
+                      reimbursementNotes,
+                  }),
+              },
+            });
+
+            return expense;
+          }
+        );
+
+      return res.json(
+        serializeManagerExpense(
+          updated
+        )
+      );
+    } catch (error) {
+      console.error(
+        "Erro ao registrar restituição de custo:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Erro ao registrar restituição.",
+      });
+    }
+  }
+);
+
+app.post(
+  "/finance/manager-expense-months/:competence/close",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  async (req: AuthRequest, res) => {
+    try {
+      const competenceMonth =
+        String(
+          req.params.competence || ""
+        ).trim();
+
+      if (
+        !isValidManagerExpenseCompetence(
+          competenceMonth
+        )
+      ) {
+        return res.status(400).json({
+          message:
+            "Competência inválida. Utilize YYYY-MM.",
+        });
+      }
+
+      const existing =
+        await prisma.managerExpenseMonth.findUnique({
+          where: {
+            competenceMonth,
+          },
+        });
+
+      if (
+        existing?.status === "FECHADO"
+      ) {
+        return res.status(409).json({
+          message:
+            "Esta competência já está fechada.",
+        });
+      }
+
+      const notes =
+        String(
+          req.body?.notes || ""
+        ).trim() || null;
+
+      const closed =
+        await prisma.$transaction(
+          async (tx) => {
+            const month =
+              await tx.managerExpenseMonth.upsert({
+                where: {
+                  competenceMonth,
+                },
+
+                create: {
+                  competenceMonth,
+                  status: "FECHADO",
+                  closedAt:
+                    new Date(),
+                  closedById:
+                    req.user?.id || null,
+                  notes,
+                },
+
+                update: {
+                  status: "FECHADO",
+                  closedAt:
+                    new Date(),
+                  closedById:
+                    req.user?.id || null,
+                  notes,
+                },
+
+                include: {
+                  closedBy: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+
+                  reopenedBy: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+                },
+              });
+
+            await tx.auditLog.create({
+              data: {
+                userId:
+                  req.user?.id || null,
+                userName:
+                  req.user?.name || null,
+                userEmail:
+                  req.user?.email || null,
+                userRole:
+                  req.user?.role || null,
+
+                action:
+                  "CLOSE_MANAGER_EXPENSE_MONTH",
+
+                entity:
+                  "ManagerExpenseMonth",
+
+                entityId:
+                  String(month.id),
+
+                description:
+                  `Competência ${competenceMonth} dos custos dos gerentes fechada.`,
+
+                ipAddress:
+                  req.ip,
+
+                metadata:
+                  JSON.stringify({
+                    competenceMonth,
+                    notes,
+                  }),
+              },
+            });
+
+            return month;
+          }
+        );
+
+      return res.json(closed);
+    } catch (error) {
+      console.error(
+        "Erro ao fechar competência de custos:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Erro ao fechar competência.",
+      });
+    }
+  }
+);
+
+app.post(
+  "/finance/manager-expense-months/:competence/reopen",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  async (req: AuthRequest, res) => {
+    try {
+      const competenceMonth =
+        String(
+          req.params.competence || ""
+        ).trim();
+
+      if (
+        !isValidManagerExpenseCompetence(
+          competenceMonth
+        )
+      ) {
+        return res.status(400).json({
+          message:
+            "Competência inválida. Utilize YYYY-MM.",
+        });
+      }
+
+      const reason =
+        String(
+          req.body?.reason || ""
+        ).trim();
+
+      if (reason.length < 5) {
+        return res.status(400).json({
+          message:
+            "Informe uma justificativa para reabrir a competência.",
+        });
+      }
+
+      const existing =
+        await prisma.managerExpenseMonth.findUnique({
+          where: {
+            competenceMonth,
+          },
+        });
+
+      if (!existing) {
+        return res.status(404).json({
+          message:
+            "A competência ainda não possui fechamento registrado.",
+        });
+      }
+
+      if (
+        existing.status !==
+        "FECHADO"
+      ) {
+        return res.status(409).json({
+          message:
+            "A competência já está aberta.",
+        });
+      }
+
+      const reopened =
+        await prisma.$transaction(
+          async (tx) => {
+            const month =
+              await tx.managerExpenseMonth.update({
+                where: {
+                  competenceMonth,
+                },
+
+                data: {
+                  status: "ABERTO",
+                  reopenedAt:
+                    new Date(),
+                  reopenedById:
+                    req.user?.id || null,
+                  notes:
+                    reason,
+                },
+
+                include: {
+                  closedBy: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+
+                  reopenedBy: {
+                    select: {
+                      id: true,
+                      name: true,
+                      email: true,
+                    },
+                  },
+                },
+              });
+
+            await tx.auditLog.create({
+              data: {
+                userId:
+                  req.user?.id || null,
+                userName:
+                  req.user?.name || null,
+                userEmail:
+                  req.user?.email || null,
+                userRole:
+                  req.user?.role || null,
+
+                action:
+                  "REOPEN_MANAGER_EXPENSE_MONTH",
+
+                entity:
+                  "ManagerExpenseMonth",
+
+                entityId:
+                  String(month.id),
+
+                description:
+                  `Competência ${competenceMonth} dos custos dos gerentes reaberta.`,
+
+                ipAddress:
+                  req.ip,
+
+                metadata:
+                  JSON.stringify({
+                    competenceMonth,
+                    reason,
+                  }),
+              },
+            });
+
+            return month;
+          }
+        );
+
+      return res.json(reopened);
+    } catch (error) {
+      console.error(
+        "Erro ao reabrir competência de custos:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Erro ao reabrir competência.",
       });
     }
   }
@@ -22247,9 +26910,148 @@ app.post("/public/proposals/:token/refuse", async (req, res) => {
 // COBRANÇAS / BOLETO PIX / DOCUMENTOS FISCAIS
 // ------------------------------------------------------
 
+/*
+ * Conferência pública de recibo (QR Code do PDF).
+ * Mostra só o necessário para provar a autenticidade;
+ * o documento do pagador aparece mascarado.
+ */
+app.get("/public/receipts/:hash", async (req, res) => {
+  try {
+    const hash = String(req.params.hash || "").trim().toLowerCase();
+
+    if (!/^[a-f0-9]{64}$/.test(hash)) {
+      return res.status(400).json({ message: "Código de verificação inválido." });
+    }
+
+    const charge = await prisma.billingCharge.findFirst({
+      where: { verificationHash: hash },
+      include: {
+        client: { select: { name: true, cpfCnpj: true } },
+        financialTransaction: {
+          select: { id: true, description: true, status: true, amountCents: true, paidAt: true },
+        },
+      },
+    });
+
+    if (!charge || !charge.financialTransaction) {
+      return res.status(404).json({ message: "Recibo não encontrado." });
+    }
+
+    const company = await getCompanySettings();
+    const paid = charge.status === "PAGA" && charge.financialTransaction.status === "PAGO";
+
+    return res.json({
+      valid: paid,
+      status: paid ? "PAGO" : charge.status,
+      receiptNumber: `REC-FIN-${String(charge.financialTransaction.id).padStart(6, "0")}`,
+      verificationCode: shortVerificationCode(hash),
+      description: charge.financialTransaction.description || charge.description,
+      payerName: charge.client?.name || null,
+      payerDocument: maskCpfCnpj(charge.client?.cpfCnpj),
+      amountCents: charge.paidAmountCents ?? charge.financialTransaction.amountCents ?? charge.amountCents,
+      paidAt: charge.paidAt || charge.financialTransaction.paidAt,
+      txid: charge.txid,
+      endToEndId: bbEndToEndIdFromRaw(charge.rawResponse),
+      issuerName: company.companyLegalName || company.companyName,
+      issuerCnpj: formatCpfCnpj(company.companyCnpj),
+    });
+  } catch (error) {
+    console.error("Erro na conferência pública do recibo:", error);
+    return res.status(500).json({ message: "Erro ao conferir o recibo." });
+  }
+});
+
+/*
+ * Situação "ao vivo" da cobrança para a página pública.
+ * Só aceita o token público (nunca o id numérico). Com a página
+ * aberta, consulta o BB no máximo a cada 15 s por cobrança e dá a
+ * baixa automática assim que o Pix for pago.
+ */
+const publicChargeLastBbCheck = new Map<number, number>();
+
+app.get("/public/billing-charges/:token/status", async (req, res) => {
+  try {
+    const token = await expandShortChargeToken(String(req.params.token || "").trim());
+
+    if (!token || /^\d+$/.test(token)) {
+      return res.status(400).json({ message: "Identificador inválido." });
+    }
+
+    let charge = await prisma.billingCharge.findFirst({
+      where: { publicToken: token },
+      select: {
+        id: true,
+        status: true,
+        provider: true,
+        txid: true,
+        financialTransactionId: true,
+        paidAt: true,
+        paidAmountCents: true,
+      },
+    });
+
+    if (!charge) {
+      return res.status(404).json({ message: "Cobrança não encontrada." });
+    }
+
+    const open = ["EMITIDA", "ENVIADA", "VENCIDA"].includes(charge.status);
+    const last = publicChargeLastBbCheck.get(charge.id) || 0;
+
+    if (
+      open &&
+      charge.provider === "BANCO_DO_BRASIL" &&
+      charge.txid &&
+      charge.financialTransactionId &&
+      Date.now() - last > 15000
+    ) {
+      publicChargeLastBbCheck.set(charge.id, Date.now());
+
+      const fake: any = {
+        statusCode: 200,
+        body: null,
+        status(code: number) { this.statusCode = code; return this; },
+        json(payload: any) { this.body = payload; return this; },
+      };
+
+      await reconcileBbBillingChargeHandler(
+        {
+          params: { id: String(charge.id) },
+          user: { id: null, name: "PAGINA_PUBLICA", email: null, role: "SYSTEM" },
+          ip: req.ip,
+        } as any,
+        fake
+      );
+
+      if (fake.body?.reconciled) {
+        charge = await prisma.billingCharge.findUnique({
+          where: { id: charge.id },
+          select: {
+            id: true,
+            status: true,
+            provider: true,
+            txid: true,
+            financialTransactionId: true,
+            paidAt: true,
+            paidAmountCents: true,
+          },
+        });
+      }
+    }
+
+    return res.json({
+      status: charge?.status,
+      paidAt: charge?.paidAt || null,
+      paidAmountCents: charge?.paidAmountCents ?? null,
+    });
+  } catch (error) {
+    console.error("Erro ao consultar situação pública da cobrança:", error);
+    return res.status(500).json({ message: "Erro ao consultar a cobrança." });
+  }
+});
+
 app.get("/public/billing-charges/:identifier", async (req, res) => {
   try {
-    const identifier = String(req.params.identifier || "").trim();
+    const identifier = await expandShortChargeToken(String(req.params.identifier || "").trim());
 
     if (!identifier) {
       return res.status(400).json({
@@ -25570,9 +30372,7 @@ app.post(
                     "Valor da cobrança para e-mail"
                   )
                 )}</p>
-                <p><strong>Vencimento:</strong> ${new Intl.DateTimeFormat("pt-BR", {
-                  timeZone: "America/Belem",
-                }).format(charge.dueDate)}</p>
+                <p><strong>Vencimento:</strong> ${formatDueDateBR(charge.dueDate)}</p>
                 <p><strong>Documento fiscal:</strong> ${fiscalInfo}</p>
               </div>
 
@@ -25899,10 +30699,536 @@ doc
 }
 
 app.post(
-  "/billing-charges/:id/reconcile-bb",
+  "/billing-charges/:id/cancel-bb",
   authMiddleware,
   requireRoles(["GERENTE", "PROGRAMADOR"]),
   async (req: AuthRequest, res) => {
+    try {
+      const id =
+        Number(req.params.id);
+
+      if (
+        !Number.isInteger(id) ||
+        id <= 0
+      ) {
+        return res.status(400).json({
+          code:
+            "INVALID_BILLING_CHARGE_ID",
+          message:
+            "ID da cobrança inválido.",
+        });
+      }
+
+      const reason =
+        typeof req.body?.reason === "string"
+          ? req.body.reason.trim()
+          : "";
+
+      if (!reason) {
+        return res.status(400).json({
+          code:
+            "BB_CHARGE_CANCELLATION_REASON_REQUIRED",
+          message:
+            "Informe o motivo do cancelamento da cobrança.",
+        });
+      }
+
+      const charge =
+        await prisma.billingCharge.findUnique({
+          where: {
+            id,
+          },
+
+          include: {
+            financialTransaction:
+              true,
+          },
+        });
+
+      if (!charge) {
+        return res.status(404).json({
+          code:
+            "BILLING_CHARGE_NOT_FOUND",
+          message:
+            "Cobrança não encontrada.",
+        });
+      }
+
+      /*
+       * Este endpoint pertence ao Financeiro V2.
+       */
+      if (
+        !charge.financialTransactionId ||
+        !charge.financialTransaction
+      ) {
+        return res.status(409).json({
+          code:
+            "FINANCIAL_TRANSACTION_LINK_REQUIRED",
+          message:
+            "Esta cobrança não está vinculada a um lançamento do Financeiro V2.",
+        });
+      }
+
+      if (
+        charge.provider !==
+        "BANCO_DO_BRASIL"
+      ) {
+        return res.status(409).json({
+          code:
+            "BB_CHARGE_PROVIDER_REQUIRED",
+          message:
+            "Esta cobrança não pertence ao Banco do Brasil.",
+        });
+      }
+
+      /*
+       * Idempotência:
+       * se a baixa bancária/local já foi concluída
+       * anteriormente, não incrementamos novamente a revisão.
+       */
+      if (
+        charge.status === "CANCELADA" &&
+        charge.financialTransaction.status ===
+          "PENDENTE"
+      ) {
+        return res.json({
+          cancelled: true,
+          alreadyCancelled: true,
+          bbStatus:
+            charge.financialTransaction
+              .chargeStatus ||
+            "REMOVIDA_PELO_USUARIO_RECEBEDOR",
+          billingCharge:
+            charge,
+          financialTransaction:
+            charge.financialTransaction,
+        });
+      }
+
+      if (
+        charge.status === "PAGA" ||
+        charge.financialTransaction.status ===
+          "PAGO"
+      ) {
+        return res.status(409).json({
+          code:
+            "PAID_CHARGE_CANNOT_BE_CANCELLED",
+          message:
+            "Uma cobrança paga não pode ser cancelada.",
+        });
+      }
+
+      if (
+        charge.financialTransaction.status ===
+        "CANCELADO"
+      ) {
+        return res.status(409).json({
+          code:
+            "FINANCIAL_TRANSACTION_ALREADY_CANCELLED",
+          message:
+            "O lançamento financeiro já está cancelado.",
+        });
+      }
+
+      if (!charge.txid) {
+        return res.status(409).json({
+          code:
+            "BB_TXID_REQUIRED_FOR_CANCELLATION",
+          message:
+            "A cobrança não possui TXID do Banco do Brasil.",
+        });
+      }
+
+      if (
+        charge.pixRevision >= 99
+      ) {
+        return res.status(409).json({
+          code:
+            "BB_PIX_REVISION_LIMIT_REACHED",
+          message:
+            "A cobrança atingiu o limite de revisões Pix permitido.",
+        });
+      }
+
+      /*
+       * 1. Consulta o estado real no Banco do Brasil.
+       */
+      let currentBbCharge: any;
+
+      try {
+        currentBbCharge =
+          await getBbPixDueCharge(
+            charge.txid
+          );
+      } catch (error: any) {
+        console.error(
+          "Erro ao consultar CobV BB antes do cancelamento:",
+          {
+            billingChargeId:
+              charge.id,
+            txid:
+              charge.txid,
+            status:
+              error?.response?.status,
+            data:
+              error?.response?.data,
+          }
+        );
+
+        return res.status(502).json({
+          code:
+            "BB_CHARGE_CANCELLATION_PRECHECK_FAILED",
+          message:
+            "Não foi possível consultar a cobrança no Banco do Brasil. Nenhuma alteração local foi realizada.",
+        });
+      }
+
+      let bbStatus =
+        String(
+          currentBbCharge?.status ||
+          ""
+        ).toUpperCase();
+
+      /*
+       * Se o BB já registrou pagamento,
+       * o cancelamento é proibido.
+       */
+      if (
+        bbStatus ===
+        "CONCLUIDA"
+      ) {
+        return res.status(409).json({
+          code:
+            "BB_CHARGE_ALREADY_PAID",
+          bbStatus,
+          message:
+            "O Banco do Brasil informa esta cobrança como CONCLUIDA. Utilize a conciliação do BB para confirmar o pagamento.",
+        });
+      }
+
+      let bankResponse =
+        currentBbCharge;
+
+      /*
+       * CobV ainda ativa:
+       * remove primeiro no banco.
+       */
+      if (
+        bbStatus ===
+        "ATIVA"
+      ) {
+        try {
+          bankResponse =
+            await removeBbPixDueCharge(
+              charge.txid
+            );
+        } catch (error: any) {
+          console.error(
+            "Erro ao remover CobV BB:",
+            {
+              billingChargeId:
+                charge.id,
+              txid:
+                charge.txid,
+              status:
+                error?.response?.status,
+              data:
+                error?.response?.data,
+            }
+          );
+
+          return res.status(502).json({
+            code:
+              "BB_CHARGE_REMOVAL_FAILED",
+            message:
+              "O Banco do Brasil não confirmou a remoção da cobrança. Nenhuma alteração local foi realizada.",
+          });
+        }
+
+        bbStatus =
+          String(
+            bankResponse?.status ||
+            ""
+          ).toUpperCase();
+      }
+
+      /*
+       * Só aceitamos como removida a situação oficial
+       * retornada pelo BB para remoção pelo recebedor.
+       */
+      if (
+        bbStatus !==
+        "REMOVIDA_PELO_USUARIO_RECEBEDOR"
+      ) {
+        return res.status(409).json({
+          code:
+            "BB_CHARGE_CANCELLATION_STATUS_BLOCKED",
+          bbStatus:
+            bbStatus ||
+            null,
+          message:
+            bbStatus
+              ? `A cobrança está com status ${bbStatus} no Banco do Brasil e não pode ser cancelada administrativamente.`
+              : "O Banco do Brasil não retornou um status válido para a cobrança.",
+        });
+      }
+
+      /*
+       * 2. Somente após confirmação bancária:
+       *    atualiza o estado local atomicamente.
+       */
+      const result =
+        await prisma.$transaction(
+          async (tx) => {
+            const current =
+              await tx.billingCharge.findUnique({
+                where: {
+                  id:
+                    charge.id,
+                },
+
+                include: {
+                  financialTransaction:
+                    true,
+                },
+              });
+
+            if (
+              !current ||
+              !current.financialTransactionId ||
+              !current.financialTransaction
+            ) {
+              throw new Error(
+                "BB_CANCELLATION_LINK_LOST"
+              );
+            }
+
+            /*
+             * Outra requisição pode ter concluído
+             * o pagamento enquanto consultávamos o BB.
+             */
+            if (
+              current.status === "PAGA" ||
+              current.financialTransaction.status ===
+                "PAGO"
+            ) {
+              throw new Error(
+                "BB_CANCELLATION_PAYMENT_STATE_CONFLICT"
+              );
+            }
+
+            /*
+             * Idempotência concorrente.
+             */
+            if (
+              current.status ===
+              "CANCELADA"
+            ) {
+              return {
+                billingCharge:
+                  current,
+                financialTransaction:
+                  current.financialTransaction,
+                alreadyCancelled:
+                  true,
+              };
+            }
+
+            const nextRevision =
+              current.pixRevision + 1;
+
+            const updatedCharge =
+              await tx.billingCharge.update({
+                where: {
+                  id:
+                    current.id,
+                },
+
+                data: {
+                  status:
+                    "CANCELADA",
+
+                  pixRevision:
+                    nextRevision,
+
+                  rawResponse:
+                    safeJson(
+                      bankResponse
+                    ),
+
+                  errorMessage:
+                    null,
+                },
+              });
+
+            const updatedTransaction =
+              await tx.financialTransaction.update({
+                where: {
+                  id:
+                    current.financialTransactionId,
+                },
+
+                data: {
+                  status:
+                    "PENDENTE",
+
+                  paymentProvider:
+                    "BANCO_DO_BRASIL",
+
+                  providerTxId:
+                    null,
+
+                  providerChargeId:
+                    null,
+
+                  chargeStatus:
+                    bbStatus,
+
+                  chargeCreatedAt:
+                    null,
+
+                  chargeExpiresAt:
+                    null,
+                },
+              });
+
+            await tx.auditLog.create({
+              data: {
+                userId:
+                  req.user?.id ||
+                  null,
+
+                userName:
+                  req.user?.name ||
+                  null,
+
+                userEmail:
+                  req.user?.email ||
+                  null,
+
+                userRole:
+                  req.user?.role ||
+                  null,
+
+                action:
+                  "CANCEL_BB_FINANCIAL_CHARGE",
+
+                entity:
+                  "BillingCharge",
+
+                entityId:
+                  String(
+                    updatedCharge.id
+                  ),
+
+                description:
+                  `Cobrança Pix BB do lançamento financeiro ${updatedTransaction.id} cancelada administrativamente.`,
+
+                ipAddress:
+                  req.ip,
+
+                metadata:
+                  JSON.stringify({
+                    billingChargeId:
+                      updatedCharge.id,
+
+                    financialTransactionId:
+                      updatedTransaction.id,
+
+                    cancelledTxid:
+                      current.txid,
+
+                    previousPixRevision:
+                      current.pixRevision,
+
+                    nextPixRevision:
+                      nextRevision,
+
+                    bbStatus,
+
+                    reason,
+                  }),
+              },
+            });
+
+            return {
+              billingCharge:
+                updatedCharge,
+              financialTransaction:
+                updatedTransaction,
+              alreadyCancelled:
+                false,
+            };
+          }
+        );
+
+      return res.json({
+        cancelled: true,
+
+        alreadyCancelled:
+          result.alreadyCancelled,
+
+        bbStatus,
+
+        billingCharge:
+          result.billingCharge,
+
+        financialTransaction:
+          result.financialTransaction,
+      });
+    } catch (error: any) {
+      if (
+        error?.message ===
+        "BB_CANCELLATION_LINK_LOST"
+      ) {
+        return res.status(409).json({
+          code:
+            "BB_CANCELLATION_LINK_LOST",
+          message:
+            "O vínculo entre a cobrança e o lançamento financeiro não está mais disponível.",
+        });
+      }
+
+      if (
+        error?.message ===
+        "BB_CANCELLATION_PAYMENT_STATE_CONFLICT"
+      ) {
+        return res.status(409).json({
+          code:
+            "BB_CANCELLATION_PAYMENT_STATE_CONFLICT",
+          message:
+            "O lançamento foi identificado como pago durante o cancelamento. Nenhuma baixa local de cancelamento foi realizada.",
+        });
+      }
+
+      console.error(
+        "Erro ao cancelar cobrança BB do Financeiro V2:",
+        {
+          message:
+            error?.message,
+          status:
+            error?.response?.status,
+          data:
+            error?.response?.data,
+        }
+      );
+
+      return res.status(500).json({
+        code:
+          "BB_FINANCIAL_CHARGE_CANCELLATION_FAILED",
+        message:
+          error?.message ||
+          "Não foi possível cancelar a cobrança do Banco do Brasil.",
+      });
+    }
+  }
+);
+
+/*
+ * Conciliação de uma cobrança BB do Financeiro V2.
+ * Usada pelo botão "Conciliar BB" e pelo agendador automático.
+ */
+const reconcileBbBillingChargeHandler = async (req: AuthRequest, res: any) => {
     try {
       const id = Number(req.params.id);
 
@@ -26291,7 +31617,19 @@ app.post(
           }
         );
 
-      return res.json({
+      const confirmationEmail =
+          reconciled.alreadyReconciled
+            ? {
+                status: "SKIPPED",
+                reason:
+                  "Pagamento já estava conciliado anteriormente.",
+              }
+            : await sendFinancePaymentConfirmationEmail(
+                reconciled.financialTransaction.id,
+                "BANCO_DO_BRASIL"
+              );
+
+        return res.json({
         reconciled: true,
         alreadyReconciled:
           reconciled.alreadyReconciled,
@@ -26300,7 +31638,8 @@ app.post(
           reconciled.billingCharge,
         financialTransaction:
           reconciled.financialTransaction,
-      });
+        confirmationEmail,
+        });
     } catch (error: any) {
       if (
         error?.message ===
@@ -26345,8 +31684,90 @@ app.post(
           "Não foi possível consultar ou conciliar a cobrança no Banco do Brasil.",
       });
     }
-  }
+};
+
+app.post(
+  "/billing-charges/:id/reconcile-bb",
+  authMiddleware,
+  requireRoles(["GERENTE", "PROGRAMADOR"]),
+  reconcileBbBillingChargeHandler
 );
+
+/*
+ * Baixa automática: consulta no BB as cobranças em aberto
+ * e concilia as que já foram pagas. Roda no agendador
+ * financeiro, no máximo a cada BB_RECONCILE_INTERVAL_MINUTES.
+ */
+let lastFinanceBbReconcileAt = 0;
+
+async function processFinanceBbReconciliation(options: { force?: boolean } = {}) {
+  const intervalMinutes = Math.max(
+    5,
+    Number(process.env.BB_RECONCILE_INTERVAL_MINUTES || 10) || 10
+  );
+  const nowMs = Date.now();
+
+  if (!options.force && nowMs - lastFinanceBbReconcileAt < intervalMinutes * 60 * 1000) {
+    return { executed: false, reason: `Intervalo de ${intervalMinutes} min ainda não passou.` };
+  }
+
+  lastFinanceBbReconcileAt = nowMs;
+
+  const openCharges = await prisma.billingCharge.findMany({
+    where: {
+      provider: "BANCO_DO_BRASIL",
+      status: { in: ["EMITIDA", "ENVIADA", "VENCIDA"] },
+      txid: { not: null },
+      financialTransactionId: { not: null },
+      financialTransaction: { status: "PENDENTE" },
+    },
+    select: { id: true },
+    orderBy: { id: "asc" },
+    take: 200,
+  });
+
+  const summary = {
+    executed: true,
+    checked: 0,
+    paid: 0,
+    pending: 0,
+    errors: 0,
+    paidChargeIds: [] as number[],
+    errorDetails: [] as { id: number; message: string }[],
+  };
+
+  for (const { id } of openCharges) {
+    const fake: any = {
+      statusCode: 200,
+      body: null,
+      status(code: number) { this.statusCode = code; return this; },
+      json(payload: any) { this.body = payload; return this; },
+    };
+
+    await reconcileBbBillingChargeHandler(
+      {
+        params: { id: String(id) },
+        user: { id: null, name: "CRON", email: null, role: "SYSTEM" },
+        ip: "127.0.0.1",
+      } as any,
+      fake
+    );
+
+    summary.checked += 1;
+
+    if (fake.statusCode >= 400) {
+      summary.errors += 1;
+      summary.errorDetails.push({ id, message: String(fake.body?.message || fake.statusCode) });
+    } else if (fake.body?.reconciled && !fake.body?.alreadyReconciled) {
+      summary.paid += 1;
+      summary.paidChargeIds.push(id);
+    } else {
+      summary.pending += 1;
+    }
+  }
+
+  return summary;
+}
 
 app.post(
   "/billing-charges/:id/mark-paid",
@@ -26393,15 +31814,30 @@ app.post(
       }
 
       /*
-       * Cobranças emitidas pelo Banco do Brasil não podem receber
-       * baixa administrativa. A confirmação deve vir da consulta/
-       * conciliação bancária pelo TXID.
+       * Cobranças do Banco do Brasil podem receber baixa por dois caminhos:
+       *
+       * 1. Conciliação bancária pelo TXID, quando o próprio BB confirma
+       *    o pagamento;
+       *
+       * 2. Baixa administrativa manual, quando um GERENTE ou PROGRAMADOR
+       *    possui confirmação externa do recebimento.
+       *
+       * Para cobrança BB, a baixa manual exige justificativa expressa
+       * para preservar a rastreabilidade e a auditoria.
        */
-      if (charge.provider === "BANCO_DO_BRASIL") {
-        return res.status(409).json({
-          code: "BB_PAYMENT_REQUIRES_BANK_RECONCILIATION",
+      const manualReason =
+        typeof req.body?.manualReason === "string"
+          ? req.body.manualReason.trim()
+          : "";
+
+      if (
+        charge.provider === "BANCO_DO_BRASIL" &&
+        !manualReason
+      ) {
+        return res.status(400).json({
+          code: "BB_MANUAL_PAYMENT_REASON_REQUIRED",
           message:
-            "Cobranças do Banco do Brasil devem ser confirmadas pela conciliação bancária.",
+            "Informe o motivo da baixa manual desta cobrança do Banco do Brasil.",
         });
       }
 
@@ -26443,6 +31879,305 @@ app.post(
         paidAmountCents,
         "decimal-reais"
       );
+
+        /*
+         * Financeiro V2: baixa manual atômica.
+         *
+         * Cobranças já vinculadas a FinancialTransaction e sem
+         * protocolo/contrato pertencem ao Financeiro V2.
+         */
+        if (
+          charge.financialTransactionId &&
+          !charge.protocolId &&
+          !charge.contractId
+        ) {
+          let manualBankChargeStatus:
+            string | null =
+            null;
+
+          /*
+           * Se a cobrança pertence ao Banco do Brasil,
+           * a CobV deve deixar de estar pagável ANTES
+           * da baixa administrativa local.
+           */
+          if (
+            charge.provider ===
+            "BANCO_DO_BRASIL"
+          ) {
+            if (!charge.txid) {
+              return res.status(409).json({
+                code:
+                  "BB_TXID_REQUIRED_FOR_MANUAL_PAYMENT",
+                message:
+                  "A cobrança do Banco do Brasil não possui TXID. A baixa manual foi bloqueada.",
+              });
+            }
+
+            let currentBbCharge: any;
+
+            try {
+              currentBbCharge =
+                await getBbPixDueCharge(
+                  charge.txid
+                );
+            } catch (error: any) {
+              console.error(
+                "Erro ao consultar CobV BB antes da baixa manual:",
+                {
+                  billingChargeId:
+                    charge.id,
+                  txid:
+                    charge.txid,
+                  status:
+                    error?.response?.status,
+                  data:
+                    error?.response?.data,
+                }
+              );
+
+              return res.status(502).json({
+                code:
+                  "BB_MANUAL_PAYMENT_PRECHECK_FAILED",
+                message:
+                  "Não foi possível consultar a cobrança no Banco do Brasil. A baixa manual não foi realizada.",
+              });
+            }
+
+            const currentBbStatus =
+              String(
+                currentBbCharge?.status ||
+                ""
+              ).toUpperCase();
+
+            if (
+              currentBbStatus ===
+              "CONCLUIDA"
+            ) {
+              return res.status(409).json({
+                code:
+                  "BB_CHARGE_ALREADY_PAID",
+                bbStatus:
+                  currentBbStatus,
+                message:
+                  "O Banco do Brasil já informa esta cobrança como CONCLUIDA. Utilize a conciliação do BB para confirmar o pagamento.",
+              });
+            }
+
+            if (
+              currentBbStatus ===
+              "REMOVIDA_PELO_USUARIO_RECEBEDOR"
+            ) {
+              manualBankChargeStatus =
+                currentBbStatus;
+            } else if (
+              currentBbStatus ===
+              "ATIVA"
+            ) {
+              let removedBbCharge: any;
+
+              try {
+                removedBbCharge =
+                  await removeBbPixDueCharge(
+                    charge.txid
+                  );
+              } catch (error: any) {
+                console.error(
+                  "Erro ao remover CobV BB antes da baixa manual:",
+                  {
+                    billingChargeId:
+                      charge.id,
+                    txid:
+                      charge.txid,
+                    status:
+                      error?.response?.status,
+                    data:
+                      error?.response?.data,
+                  }
+                );
+
+                return res.status(502).json({
+                  code:
+                    "BB_CHARGE_REMOVAL_FAILED",
+                  message:
+                    "O Banco do Brasil não confirmou a remoção da cobrança. A baixa manual não foi realizada para evitar pagamento duplicado.",
+                });
+              }
+
+              const removedBbStatus =
+                String(
+                  removedBbCharge?.status ||
+                  ""
+                ).toUpperCase();
+
+              if (
+                removedBbStatus !==
+                "REMOVIDA_PELO_USUARIO_RECEBEDOR"
+              ) {
+                return res.status(409).json({
+                  code:
+                    "BB_CHARGE_REMOVAL_NOT_CONFIRMED",
+                  bbStatus:
+                    removedBbStatus ||
+                    null,
+                  message:
+                    "A cobrança não foi confirmada como removida pelo Banco do Brasil. A baixa manual foi bloqueada.",
+                });
+              }
+
+              manualBankChargeStatus =
+                removedBbStatus;
+            } else {
+              return res.status(409).json({
+                code:
+                  "BB_CHARGE_STATUS_BLOCKS_MANUAL_PAYMENT",
+                bbStatus:
+                  currentBbStatus ||
+                  null,
+                message:
+                  currentBbStatus
+                    ? `A cobrança está com status ${currentBbStatus} no Banco do Brasil. A baixa manual foi bloqueada.`
+                    : "O Banco do Brasil não retornou um status válido para a cobrança. A baixa manual foi bloqueada.",
+              });
+            }
+          }
+
+          const consolidated =
+            await prisma.$transaction(
+              async (tx) => {
+                const currentTransaction =
+                  await tx.financialTransaction.findUnique({
+                    where: {
+                      id:
+                        charge.financialTransactionId!,
+                    },
+                  });
+
+                if (!currentTransaction) {
+                  throw new Error(
+                    "FINANCIAL_TRANSACTION_LINK_REQUIRED"
+                  );
+                }
+
+                const updatedCharge =
+                  await tx.billingCharge.update({
+                    where: {
+                      id:
+                        charge.id,
+                    },
+                    data: {
+                      status:
+                        "PAGA",
+                      paidAt,
+                      paidAmount,
+                      paidAmountCents,
+                      rawWebhook:
+                        req.body?.rawWebhook
+                          ? JSON.stringify(
+                              req.body.rawWebhook
+                            )
+                          : charge.rawWebhook,
+                    },
+                  });
+
+                const updatedTransaction =
+                  await tx.financialTransaction.update({
+                    where: {
+                      id:
+                        currentTransaction.id,
+                    },
+                    data: {
+                      status:
+                        "PAGO",
+                      paidAt,
+                      paymentConfirmedAt:
+                        paidAt,
+                      ...(
+                        manualBankChargeStatus
+                          ? {
+                              chargeStatus:
+                                manualBankChargeStatus,
+                            }
+                          : {}
+                      ),
+                    },
+                  });
+
+                await tx.auditLog.create({
+                  data: {
+                    userId:
+                      req.user?.id ||
+                      null,
+                    userName:
+                      req.user?.name ||
+                      null,
+                    userEmail:
+                      req.user?.email ||
+                      null,
+                    userRole:
+                      req.user?.role ||
+                      null,
+                    action:
+                      "MARK_BILLING_CHARGE_PAID",
+                    entity:
+                      "BillingCharge",
+                    entityId:
+                      String(charge.id),
+                    description:
+                      charge.provider ===
+                      "BANCO_DO_BRASIL"
+                        ? `Cobrança #${charge.id} do Banco do Brasil marcada como paga manualmente.`
+                        : `Cobrança #${charge.id} marcada como paga.`,
+                    ipAddress:
+                      req.ip,
+                    metadata:
+                      JSON.stringify({
+                        confirmationSource:
+                          "MANUAL",
+                        billingChargeId:
+                          charge.id,
+                        financialTransactionId:
+                          updatedTransaction.id,
+                        provider:
+                          charge.provider,
+                        txid:
+                          charge.txid ||
+                          null,
+                        manualReason:
+                          charge.provider ===
+                          "BANCO_DO_BRASIL"
+                            ? manualReason
+                            : null,
+                        bankChargeStatusAfterManualRemoval:
+                          manualBankChargeStatus,
+                        paidAt:
+                          paidAt.toISOString(),
+                        paidAmountCents,
+                      }),
+                  },
+                });
+
+                return {
+                  billingCharge:
+                    updatedCharge,
+                  financialTransaction:
+                    updatedTransaction,
+                };
+              }
+            );
+
+          const confirmationEmail =
+            await sendFinancePaymentConfirmationEmail(
+              consolidated.financialTransaction.id,
+              "MANUAL"
+            );
+
+          return res.json({
+            ...consolidated.billingCharge,
+            financialTransaction:
+              consolidated.financialTransaction,
+            confirmationEmail,
+          });
+        }
 
       const paidCharge = await prisma.billingCharge.update({
         where: { id: charge.id },
@@ -26535,6 +32270,50 @@ app.post(
               id: "asc",
             },
           });
+      }
+
+      /*
+       * Lançamento já feito pela tela de Lançamentos (secretária)
+       * para esta mesma etapa da proposta: vincula em vez de duplicar.
+       */
+      if (
+        !linkedFinancialTransaction &&
+        charge.contract?.proposalId &&
+        (charge.chargeType === "ENTRADA" ||
+          charge.chargeType === "PARCELA")
+      ) {
+        const proposalEntry =
+          await prisma.financialTransaction.findFirst({
+            where: {
+              proposalId: charge.contract.proposalId,
+              type: charge.chargeType,
+              installmentNumber:
+                charge.chargeType === "ENTRADA"
+                  ? 0
+                  : charge.installmentNumber ?? -1,
+              status: {
+                not: "CANCELADO",
+              },
+              billingCharge: null,
+            },
+            orderBy: {
+              id: "asc",
+            },
+          });
+
+        if (proposalEntry) {
+          linkedFinancialTransaction =
+            await prisma.financialTransaction.update({
+              where: {
+                id: proposalEntry.id,
+              },
+              data: {
+                status: "PAGO",
+                paidAt,
+                paymentConfirmedAt: paidAt,
+              },
+            });
+        }
       }
 
       if (!linkedFinancialTransaction) {
@@ -26849,8 +32628,25 @@ app.post(
           action: "MARK_BILLING_CHARGE_PAID",
           entity: "BillingCharge",
           entityId: String(charge.id),
-          description: `Cobrança #${charge.id} marcada como paga.`,
+          description:
+            charge.provider === "BANCO_DO_BRASIL"
+              ? `Cobrança #${charge.id} do Banco do Brasil marcada como paga manualmente.`
+              : `Cobrança #${charge.id} marcada como paga.`,
           ipAddress: req.ip,
+          metadata: JSON.stringify({
+            confirmationSource:
+              charge.provider === "BANCO_DO_BRASIL"
+                ? "MANUAL"
+                : "ADMINISTRATIVE",
+            provider: charge.provider,
+            txid: charge.txid || null,
+            manualReason:
+              charge.provider === "BANCO_DO_BRASIL"
+                ? manualReason
+                : null,
+            paidAt: paidAt.toISOString(),
+            paidAmountCents,
+          }),
         },
       });
 
@@ -27061,6 +32857,20 @@ app.post(
 );
 
 
+// Diagnóstico do Pix BB (sem expor segredos): config, certificado, OAuth e consulta /cob.
+app.get(
+  "/bb-pix/connection-check",
+  authMiddleware,
+  requireRoles(["PROGRAMADOR"]),
+  async (_req, res) => {
+    try {
+      return res.json(await checkBbPixConnection());
+    } catch (error: any) {
+      return res.status(500).json({ message: error?.message || "Falha no diagnóstico do Pix BB." });
+    }
+  }
+);
+
 //#__________________________________#rota temporaria
 
 app.post(
@@ -27079,7 +32889,7 @@ app.post(
         amountInCents: 100, // R$ 1,00
         debtorName: "Plinio Marcos Bahia Potyguara",
         debtorCpfCnpj: "73268070272",
-        description: "Teste de cobrança PIX BB Sandbox",
+        description: "Teste de cobrança PIX BB",
       });
 
       return res.json({
@@ -27199,6 +33009,13 @@ registerFieldScheduleRoutes({
   createTransporterFromSettings,
   getSmtpSettings,
   getEmailImageAttachments,
+});
+
+registerDemandRoutes({
+  app,
+  prisma,
+  authMiddleware,
+  requireRoles,
 });
 
 app.get("/health", (_req, res) => {

@@ -367,7 +367,8 @@ export function registerCatalogRoutes({
   app.get(
     "/catalog/services",
     authMiddleware,
-    requireRoles(ADMIN_ROLES),
+    // Secretária lê a lista para o cadastro de lançamentos.
+    requireRoles([...ADMIN_ROLES, "SECRETARIA"]),
     async (req, res) => {
       try {
         const includeInactive =

@@ -75,3 +75,8 @@ uploads/documents/**
 *.bak
 backend/prisma/dev.db.before-*
 backend/prisma/*.db.before-*
+
+# Documentos privados (comprovantes etc.) nunca vão para o git
+backend/private-storage/
+*.bak
+*.bak-*

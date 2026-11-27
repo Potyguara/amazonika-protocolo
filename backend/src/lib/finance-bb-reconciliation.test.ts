@@ -156,6 +156,11 @@ function baseContext(
     prisma,
     getBbPixDueCharge,
 
+      sendFinancePaymentConfirmationEmail:
+        async () => ({
+          status: "SENT",
+        }),
+
     legacyReaisFromCents: (
       cents: number,
       _classification: string

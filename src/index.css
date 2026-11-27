@@ -1900,3 +1900,49 @@ th {
     display: none;
   }
 }
+/* Botões ocultos por perfil (ex.: Secretária) */
+button[hidden],
+option[hidden] {
+  display: none !important;
+}
+
+.public-payment-confirmed {
+  text-align: center;
+  padding: 32px 20px;
+  border-radius: 20px;
+  background: #ecfdf3;
+  border: 1px solid #a7e3c1;
+  color: #14532d;
+  margin-top: 16px;
+}
+.public-payment-confirmed-icon {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 12px;
+  border-radius: 50%;
+  background: #16a34a;
+  color: #fff;
+  font-size: 34px;
+  line-height: 64px;
+  font-weight: 700;
+}
+.public-payment-confirmed h3 { margin: 0 0 8px; font-size: 1.5rem; }
+.public-payment-confirmed p { margin: 6px 0; }
+
+.public-receipt-rows {
+  display: grid;
+  gap: 0;
+  margin: 20px 0 0;
+}
+.public-receipt-rows > div {
+  display: grid;
+  grid-template-columns: minmax(140px, 220px) 1fr;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #e5ece8;
+}
+.public-receipt-rows dt { color: #5b6b63; font-size: 0.9rem; }
+.public-receipt-rows dd { margin: 0; font-weight: 600; word-break: break-all; }
+@media (max-width: 560px) {
+  .public-receipt-rows > div { grid-template-columns: 1fr; gap: 2px; }
+}

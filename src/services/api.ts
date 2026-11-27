@@ -24,7 +24,7 @@ export type LoginResponse = {
     id: number;
     name: string;
     email: string;
-    role: "CLIENTE" | "ATENDENTE" | "GERENTE" | "PROGRAMADOR";
+    role: "CLIENTE" | "ATENDENTE" | "GERENTE" | "PROGRAMADOR" | "SECRETARIA";
     lastLoginAt?: string | null;
   };
 };
@@ -811,6 +811,12 @@ reprogramFinanceTransactionDueDate(
   );
 },
 
+resendFinanceTransactionReceipt(id: number) {
+  return request(`/finance/transactions/${id}/resend-receipt`, {
+    method: "POST",
+  });
+},
+
 updateFinanceTransactionNotificationPreferences(
   id: number,
   data: {
@@ -915,6 +921,293 @@ cancelFinanceTransaction(id: number) {
   });
 },
 
+// ================================
+// CUSTOS DOS SÓCIOS / GERENTES
+// ================================
+
+financeManagerExpenses(
+  competenceMonth: string
+) {
+  return request(
+    `/finance/manager-expenses?competenceMonth=${encodeURIComponent(
+      competenceMonth
+    )}`
+  );
+},
+
+financeManagerExpenseManagers() {
+  return request(
+    "/finance/manager-expenses/managers"
+  );
+},
+
+createFinanceManagerExpense(data: {
+  managerUserId: number;
+  competenceMonth: string;
+  expenseDate: string;
+  description: string;
+  amount: number | string;
+  notes?: string | null;
+  file: File;
+}) {
+  const formData = new FormData();
+
+  formData.append(
+    "managerUserId",
+    String(data.managerUserId)
+  );
+
+  formData.append(
+    "competenceMonth",
+    data.competenceMonth
+  );
+
+  formData.append(
+    "expenseDate",
+    data.expenseDate
+  );
+
+  formData.append(
+    "description",
+    data.description
+  );
+
+  formData.append(
+    "amount",
+    String(data.amount)
+  );
+
+  if (data.notes) {
+    formData.append(
+      "notes",
+      data.notes
+    );
+  }
+
+  formData.append(
+    "file",
+    data.file
+  );
+
+  return request(
+    "/finance/manager-expenses",
+    {
+      method: "POST",
+      body: formData,
+    }
+  );
+},
+
+updateFinanceManagerExpense(
+  id: number,
+  data: {
+    managerUserId?: number;
+    competenceMonth?: string;
+    expenseDate?: string;
+    description?: string;
+    amount?: number | string;
+    notes?: string | null;
+  }
+) {
+  return request(
+    `/finance/manager-expenses/${id}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }
+  );
+},
+
+deleteFinanceManagerExpense(
+  id: number
+) {
+  return request(
+    `/finance/manager-expenses/${id}`,
+    {
+      method: "DELETE",
+    }
+  );
+},
+
+cancelFinanceManagerExpense(
+  id: number,
+  reason: string
+) {
+  return request(
+    `/finance/manager-expenses/${id}/cancel`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        reason,
+      }),
+    }
+  );
+},
+
+reimburseFinanceManagerExpense(
+  id: number,
+  data?: {
+    reimbursedAt?: string;
+    notes?: string | null;
+  }
+) {
+  return request(
+    `/finance/manager-expenses/${id}/reimburse`,
+    {
+      method: "POST",
+      body: JSON.stringify(
+        data || {}
+      ),
+    }
+  );
+},
+
+closeFinanceManagerExpenseMonth(
+  competenceMonth: string,
+  notes?: string | null
+) {
+  return request(
+    `/finance/manager-expense-months/${encodeURIComponent(
+      competenceMonth
+    )}/close`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        notes: notes || null,
+      }),
+    }
+  );
+},
+
+reopenFinanceManagerExpenseMonth(
+  competenceMonth: string,
+  reason: string
+) {
+  return request(
+    `/finance/manager-expense-months/${encodeURIComponent(
+      competenceMonth
+    )}/reopen`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        reason,
+      }),
+    }
+  );
+},
+
+async financeManagerExpenseReceipt(
+  id: number
+) {
+  const token = getToken();
+
+  const response = await fetch(
+    `${API_URL}/finance/manager-expenses/${id}/receipt`,
+    {
+      method: "GET",
+      headers: {
+        "ngrok-skip-browser-warning":
+          "true",
+
+        ...(token
+          ? {
+              Authorization:
+                `Bearer ${token}`,
+            }
+          : {}),
+      },
+    }
+  );
+
+  if (!response.ok) {
+    const contentType =
+      response.headers.get(
+        "content-type"
+      ) || "";
+
+    let message =
+      "Erro ao consultar comprovante.";
+
+    try {
+      if (
+        contentType.includes(
+          "application/json"
+        )
+      ) {
+        const body =
+          await response.json();
+
+        message =
+          body?.message ||
+          body?.error ||
+          message;
+      } else {
+        const body =
+          await response.text();
+
+        if (body) {
+          message = body;
+        }
+      }
+    } catch {
+      // Mantém mensagem padrão.
+    }
+
+    throw new Error(message);
+  }
+
+  const blob =
+    await response.blob();
+
+  const contentType =
+    response.headers.get(
+      "content-type"
+    ) ||
+    blob.type ||
+    "application/octet-stream";
+
+  const disposition =
+    response.headers.get(
+      "content-disposition"
+    ) || "";
+
+  let fileName =
+    `comprovante-${id}`;
+
+  const utf8Match =
+    disposition.match(
+      /filename\*=UTF-8''([^;]+)/i
+    );
+
+  const simpleMatch =
+    disposition.match(
+      /filename="?([^";]+)"?/i
+    );
+
+  if (utf8Match?.[1]) {
+    try {
+      fileName =
+        decodeURIComponent(
+          utf8Match[1]
+        );
+    } catch {
+      fileName =
+        utf8Match[1];
+    }
+  } else if (
+    simpleMatch?.[1]
+  ) {
+    fileName =
+      simpleMatch[1];
+  }
+
+  return {
+    blob,
+    fileName,
+    contentType,
+  };
+},
+
 financeFixedCosts() {
   return request("/finance/fixed-costs");
 },
@@ -1010,9 +1303,17 @@ searchClients(search: string) {
   return request(`/clients/search?q=${encodeURIComponent(search)}`);
 },
 
-deleteFinancialTransaction(id: number) {
+deleteFinancialTransaction(
+  id: number,
+  reason?: string
+) {
   return request(`/finance/transactions/${id}`, {
     method: "DELETE",
+    body: JSON.stringify({
+      reason:
+        reason?.trim() ||
+        undefined,
+    }),
   });
 },
 
@@ -1722,13 +2023,26 @@ reconcileBbBillingCharge(id: number) {
   });
 },
 
-markBillingChargePaid(
+cancelBbBillingCharge(
+    id: number,
+    data: {
+      reason: string;
+    }
+  ) {
+    return request(`/billing-charges/${id}/cancel-bb`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+
+  markBillingChargePaid(
   id: number,
   data?: {
     paidAt?: string;
     paidAmount?: number;
     paidAmountCents?: number;
     notes?: string;
+    manualReason?: string;
   }
 ) {
   return request(`/billing-charges/${id}/mark-paid`, {
@@ -1739,6 +2053,14 @@ markBillingChargePaid(
 
 publicBillingCharge(identifier: string | number) {
   return request(`/public/billing-charges/${identifier}`);
+},
+
+publicReceipt(hash: string) {
+  return request(`/public/receipts/${hash}`);
+},
+
+publicBillingChargeStatus(token: string) {
+  return request(`/public/billing-charges/${token}/status`);
 },
 
 issueBbPixPayment(paymentId: number) {
@@ -2244,6 +2566,79 @@ updateCatalogPackageItems(
   return request(`/catalog/packages/${id}/items`, {
     method: "PUT",
     body: JSON.stringify({ items }),
+  });
+},
+
+
+demands(params?: { assigneeId?: string; status?: string; type?: string }) {
+  const query = new URLSearchParams();
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value) query.set(key, value);
+  });
+  const suffix = query.toString() ? `?${query}` : "";
+  return request(`/demands${suffix}`);
+},
+
+demandPeople() {
+  return request("/demands/people");
+},
+
+createDemand(data: Record<string, unknown>) {
+  return request("/demands", { method: "POST", body: JSON.stringify(data) });
+},
+
+updateDemand(id: number, data: Record<string, unknown>) {
+  return request(`/demands/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+},
+
+deleteDemand(id: number) {
+  return request(`/demands/${id}`, { method: "DELETE" });
+},
+
+reorderDemands(ids: number[]) {
+  return request("/demands/reorder", { method: "POST", body: JSON.stringify({ ids }) });
+},
+
+myWhatsapp() {
+  return request("/me/whatsapp");
+},
+
+saveMyWhatsapp(data: { whatsappPhone: string; whatsappAlertsEnabled: boolean }) {
+  return request("/me/whatsapp", { method: "PUT", body: JSON.stringify(data) });
+},
+
+savePersonWhatsapp(id: number, data: { whatsappPhone: string; whatsappAlertsEnabled?: boolean }) {
+  return request(`/demands/people/${id}/whatsapp`, { method: "PUT", body: JSON.stringify(data) });
+},
+
+whatsappStatus() {
+  return request("/whatsapp/status");
+},
+
+whatsappConnect() {
+  return request("/whatsapp/connect", { method: "POST" });
+},
+
+whatsappQr() {
+  return request("/whatsapp/qr");
+},
+
+whatsappLogout() {
+  return request("/whatsapp/logout", { method: "POST" });
+},
+
+sendWhatsappTest() {
+  return request("/whatsapp/test", { method: "POST" });
+},
+
+demandSettings() {
+  return request("/demands/settings");
+},
+
+saveDemandSettings(data: Record<string, unknown>) {
+  return request("/demands/settings", {
+    method: "PUT",
+    body: JSON.stringify(data),
   });
 },
 

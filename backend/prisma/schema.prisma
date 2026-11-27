@@ -12,6 +12,8 @@ enum UserRole {
   ATENDENTE
   GERENTE
   PROGRAMADOR
+  // Lança receitas/despesas sem acesso a resumos, lucro ou valores dos gestores.
+  SECRETARIA
 }
 
 enum ProtocolStatus {
@@ -287,6 +289,13 @@ model User {
   lastLoginAt DateTime?
   lastLoginIp String?
 
+  // WhatsApp para alertas internos (Demandas). Só dígitos, com DDI: 5596991234567.
+  whatsappPhone         String?
+  whatsappAlertsEnabled Boolean @default(true)
+
+  demandsAssigned Demand[] @relation("DemandAssignee")
+  demandsCreated  Demand[] @relation("DemandCreatedBy")
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -301,11 +310,18 @@ model User {
   managementCashSettingsCreated ManagementCashSetting[] @relation("ManagementCashSettingCreatedBy")
   proLaboreAdvancesCreated      ProLaboreAdvance[]      @relation("ProLaboreAdvanceCreatedBy")
   managerProLaboreAdvances      ProLaboreAdvance[]      @relation("ManagerProLaboreAdvances")
-  proposalsCreated              Proposal[]              @relation("ProposalCreatedBy")
-  contractsCreated              Contract[]              @relation("ContractCreatedBy")
-  billingChargesCreated         BillingCharge[]         @relation("BillingChargeCreatedBy")
-  fiscalDocumentsCreated        FiscalDocument[]        @relation("FiscalDocumentCreatedBy")
-  standaloneProposalsCreated    StandaloneProposal[]    @relation("StandaloneProposalCreatedBy")
+
+  managerExpensesPaid    ManagerExpense[] @relation("ManagerExpenseManager")
+  managerExpensesCreated ManagerExpense[] @relation("ManagerExpenseCreatedBy")
+  managerExpensesUpdated ManagerExpense[] @relation("ManagerExpenseUpdatedBy")
+
+  managerExpenseMonthsClosed   ManagerExpenseMonth[] @relation("ManagerExpenseMonthClosedBy")
+  managerExpenseMonthsReopened ManagerExpenseMonth[] @relation("ManagerExpenseMonthReopenedBy")
+  proposalsCreated             Proposal[]            @relation("ProposalCreatedBy")
+  contractsCreated             Contract[]            @relation("ContractCreatedBy")
+  billingChargesCreated        BillingCharge[]       @relation("BillingChargeCreatedBy")
+  fiscalDocumentsCreated       FiscalDocument[]      @relation("FiscalDocumentCreatedBy")
+  standaloneProposalsCreated   StandaloneProposal[]  @relation("StandaloneProposalCreatedBy")
 
   paymentDueDateExtensionsCreated   PaymentDueDateExtension[] @relation("PaymentDueDateExtensionCreatedBy")
   paymentDueDateExtensionsCancelled PaymentDueDateExtension[] @relation("PaymentDueDateExtensionCancelledBy")
@@ -885,6 +901,10 @@ model BillingCharge {
   // Impede que a mesma transação gere duas BillingCharge.
   financialTransactionId Int? @unique
 
+  // Financeiro V2: revisão da emissão Pix.
+  // 0 = cobrança original; 1, 2, 3... = reemissões após cancelamento.
+  pixRevision Int @default(0)
+
   provider   BillingProvider   @default(BANCO_DO_BRASIL)
   status     BillingStatus     @default(AGUARDANDO_DOCUMENTO_FISCAL)
   chargeType BillingChargeType @default(ENTRADA)
@@ -1200,6 +1220,10 @@ model FinancialTransaction {
   catalogServiceId Int?
   catalogService   CatalogService? @relation(fields: [catalogServiceId], references: [id], onDelete: SetNull)
 
+  // Proposta (fluxo de protocolo) cujo cronograma financeiro aprovado originou o lançamento.
+  proposalId Int?
+  proposal   Proposal? @relation(fields: [proposalId], references: [id], onDelete: SetNull)
+
   // =====================================================
   // PARCELAMENTO
   // =====================================================
@@ -1258,6 +1282,8 @@ model FinancialTransaction {
   emailNotificationEnabled Boolean   @default(true)
   lastNotificationAt       DateTime?
   notificationCount        Int       @default(0)
+  // Avisos de atraso enviados desde o último vencimento (zera ao reprogramar).
+  overdueNotificationCount Int       @default(0)
 
   // Último webhook válido recebido.
   webhookLastReceivedAt DateTime?
@@ -1265,6 +1291,7 @@ model FinancialTransaction {
   @@index([clientId])
   @@index([catalogServiceId])
   @@index([installmentGroupId])
+  @@index([proposalId])
 }
 
 model EmployeeSalary {
@@ -1417,6 +1444,103 @@ model FinanceAutoChargeSettings {
   updatedAt DateTime @updatedAt
 }
 
+enum ManagerExpenseStatus {
+  PENDENTE_RESTITUICAO
+  RESTITUIDO
+  CANCELADO
+}
+
+enum ManagerExpenseMonthStatus {
+  ABERTO
+  FECHADO
+}
+
+model ManagerExpense {
+  id Int @id @default(autoincrement())
+
+  // Gerente/sócio que efetivamente suportou o custo.
+  managerUserId Int
+
+  // Competência no formato YYYY-MM.
+  competenceMonth String
+
+  // Data em que a despesa foi efetivamente paga/assumida.
+  expenseDate DateTime
+
+  description String
+
+  // Valor canônico sempre em centavos.
+  amountCents Int
+
+  notes String?
+
+  // =====================================================
+  // COMPROVANTE
+  // =====================================================
+
+  receiptOriginalName String?
+  receiptStoredName   String?
+  receiptMimeType     String?
+  receiptSize         Int?
+  receiptPath         String?
+
+  // =====================================================
+  // RESTITUIÇÃO
+  // =====================================================
+
+  status ManagerExpenseStatus @default(PENDENTE_RESTITUICAO)
+
+  reimbursedAt       DateTime?
+  reimbursementNotes String?
+
+  // =====================================================
+  // AUDITORIA DE AUTORIA
+  // =====================================================
+
+  createdById Int?
+  updatedById Int?
+
+  manager User @relation("ManagerExpenseManager", fields: [managerUserId], references: [id], onDelete: Restrict)
+
+  createdBy User? @relation("ManagerExpenseCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  updatedBy User? @relation("ManagerExpenseUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([managerUserId])
+  @@index([competenceMonth])
+  @@index([expenseDate])
+  @@index([status])
+}
+
+model ManagerExpenseMonth {
+  id Int @id @default(autoincrement())
+
+  // Uma linha de controle por competência.
+  competenceMonth String @unique
+
+  status ManagerExpenseMonthStatus @default(ABERTO)
+
+  closedAt   DateTime?
+  closedById Int?
+
+  reopenedAt   DateTime?
+  reopenedById Int?
+
+  notes String?
+
+  closedBy User? @relation("ManagerExpenseMonthClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+
+  reopenedBy User? @relation("ManagerExpenseMonthReopenedBy", fields: [reopenedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+}
+
 model ProLaboreAdvance {
   // Etapa 2A: centavos opcionais; null = ausente/não convertido, nunca zero.
   // Campos legados preservados; sem leitura/escrita operacional nesta etapa.
@@ -1566,6 +1690,8 @@ model Proposal {
   items           ProposalItem[]
   paymentSchedule ProposalPaymentSchedule[]
   contracts       Contract[]
+
+  financialTransactions FinancialTransaction[]
 }
 
 model ProposalPaymentSchedule {
@@ -2141,4 +2267,132 @@ model FieldScheduleNotification {
   @@index([scheduledFor])
   @@index([status])
   @@index([scheduleId])
+}
+
+/**
+ * ======================================================
+ * DEMANDAS (agenda interna com alertas por WhatsApp)
+ * ======================================================
+ */
+
+enum DemandType {
+  TRABALHO
+  VIAGEM
+  PAGAMENTO
+  LEMBRETE
+  OUTRO
+}
+
+enum DemandStatus {
+  A_FAZER
+  EM_ANDAMENTO
+  CONCLUIDA
+  CANCELADA
+}
+
+enum DemandPriority {
+  BAIXA
+  NORMAL
+  ALTA
+  URGENTE
+}
+
+model Demand {
+  id Int @id @default(autoincrement())
+
+  title       String
+  description String?
+
+  type     DemandType     @default(TRABALHO)
+  status   DemandStatus   @default(A_FAZER)
+  priority DemandPriority @default(NORMAL)
+
+  // Prazo (data e hora). Sem prazo, entra só no resumo diário.
+  dueAt DateTime?
+
+  // Antecedência do lembrete antes do prazo, em minutos (0 = sem lembrete).
+  remindBeforeMinutes Int @default(1440)
+
+  // Ordem de execução na fila do responsável (menor primeiro).
+  sortOrder Int @default(0)
+
+  assigneeId Int?
+  assignee   User? @relation("DemandAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  createdById Int?
+  createdBy   User? @relation("DemandCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  protocolId Int?
+  clientId   Int?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  notifications DemandNotification[]
+
+  @@index([assigneeId, status])
+  @@index([dueAt])
+  @@index([status])
+}
+
+model DemandNotification {
+  id Int @id @default(autoincrement())
+
+  demandId Int?
+  demand   Demand? @relation(fields: [demandId], references: [id], onDelete: Cascade)
+
+  userId Int
+
+  // ASSIGNED, DUE_SOON, OVERDUE, DAILY_DIGEST, TEST
+  kind String
+
+  // Evita disparo duplicado: ex. "DUE_SOON:12:2026-11-27T10:00".
+  dedupeKey String @unique
+
+  phone String
+
+  // SENT, FAILED, SKIPPED
+  status String
+
+  errorText String?
+  messageId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([demandId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+/**
+ * Avisos de cobrança enviados ao cliente por WhatsApp (OpenWA).
+ */
+model ClientWhatsAppNotification {
+  id Int @id @default(autoincrement())
+
+  clientId        Int?
+  transactionId   Int?
+  billingChargeId Int?
+
+  // NEW_CHARGE, NOTICE_<tipo>, PAYMENT_CONFIRMED
+  kind String
+
+  dedupeKey String @unique
+
+  phone String
+
+  // SENT, FAILED, SKIPPED
+  status String
+
+  errorText String?
+  messageId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([clientId])
+  @@index([transactionId])
+  @@index([createdAt])
 }
